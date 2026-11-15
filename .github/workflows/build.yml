@@ -1,0 +1,19 @@
+name: Build AniHady2D
+on: [push]
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+      - name: Build Release EXE
+        run: cargo build --release
+      - name: Upload AniHady2D.exe
+        uses: actions/upload-artifact@v4
+        with:
+          name: AniHady2D-Windows
+          path: |
+            target/release/AniHady2D.exe
+            assets/
