@@ -423,7 +423,7 @@ impl eframe::App for AniHadyApp {
                             }
                         }
                         ToolType::VectorPen | ToolType::Brush if response.dragged() => {
-                            let pressure = if self.pen_pressure_enabled { ctx.input(|i| i.pointer.pressure().unwrap_or(1.0)) } else { 1.0 };
+                            let pressure = if self.pen_pressure_enabled { ctx.input(|i| i.events.iter().find_map(|e| if let egui::Event::Touch { force: Some(f), .. } = e { Some(*f) } else { None }).unwrap_or_else(|| (1.0 - (response.drag_delta().length() * 0.015)).clamp(0.3, 1.0))) } else { 1.0 };
                             let point = StrokePoint { x: stage_pos.x, y: stage_pos.y, pressure };
                             if let Some(stroke) = &mut self.current_stroke { stroke.points.push(point); }
                             else {
