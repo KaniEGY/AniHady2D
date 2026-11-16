@@ -727,14 +727,21 @@ fn draw_stroke_scaled<F: Fn(egui::Pos2) -> egui::Pos2>(
 }
 
 fn main() -> eframe::Result<()> {
-    eframe::run_native(
-        "AniHady2D",
-        eframe::NativeOptions {
-            viewport: egui::ViewportBuilder::default()
-                .with_title("AniHady2D")
-                .with_inner_size([1280.0, 720.0]),
+    let options = eframe::NativeOptions {
+        viewport: egui::ViewportBuilder::default()
+            .with_title("AniHady2D")
+            .with_inner_size([1280.0, 720.0]),
+        renderer: eframe::Renderer::Wgpu,
+        wgpu_options: eframe::egui_wgpu::WgpuConfiguration {
+            power_preference: eframe::wgpu::PowerPreference::HighPerformance,
             ..Default::default()
         },
+        ..Default::default()
+    };
+
+    eframe::run_native(
+        "AniHady2D",
+        options,
         Box::new(|cc| Ok(Box::new(AniHadyApp::new(cc)))),
     )
 }
