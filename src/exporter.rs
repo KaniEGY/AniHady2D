@@ -140,7 +140,6 @@ pub fn ensure_ffmpeg_installed(target_dir: &Path) -> Result<PathBuf, String> {
     Err("لم يتم العثور على ffmpeg.exe داخل الحزمة المحملة.".to_string())
 }
 
-/// مصير فيكتور سريع (Analytic Anti-Aliasing) يعتمد على معمارية Time is a Function
 pub fn render_frame_pixmap(project: &AniProject, frame_idx: usize, transparent_bg: bool, bg_rgba: [u8; 4]) -> Pixmap {
     let w = project.width.max(1);
     let h = project.height.max(1);
@@ -151,7 +150,8 @@ pub fn render_frame_pixmap(project: &AniProject, frame_idx: usize, transparent_b
     }
 
     for layer in project.layers.iter().rev() {
-        if !layer.visible {
+        // تجاهل الطبقات المخفية أو طبقات السكتش الإرشادية (Guide Layers) عند التصدير
+        if !layer.visible || layer.is_guide {
             continue;
         }
         let fd = project.evaluate_layer_at_frame(layer, frame_idx);
@@ -203,8 +203,9 @@ fn draw_skia_stroke(pixmap: &mut Pixmap, s: &crate::project::Stroke, ts: Transfo
     if s.points.is_empty() {
         return;
     }
+    let alpha = ((s.color[3] as f32) * s.opacity.clamp(0.05, 1.0)) as u8;
     let mut paint = Paint::default();
-    paint.set_color_rgba8(s.color[0], s.color[1], s.color[2], s.color[3]);
+    paint.set_color_rgba8(s.color[0], s.color[1], s.color[2], alpha);
     paint.anti_alias = true;
 
     if s.points.len() == 1 {
@@ -288,7 +289,6 @@ pub fn export_single_image_format(
     }
 }
 
-/// تصدير متسلسل فائق السرعة بالتوازي (Rayon Parallel Rendering)
 pub fn export_transparent_png_sequence(project: &AniProject, folder: &Path) -> Result<usize, String> {
     fs::create_dir_all(folder).map_err(|e| format!("Failed to create folder: {}", e))?;
     let total = project.total_frames.max(1);
@@ -303,7 +303,6 @@ pub fn export_transparent_png_sequence(project: &AniProject, folder: &Path) -> R
     Ok(total)
 }
 
-/// تصدير Sprite Sheet أفقي احترافي لمطوري الألعاب (Unity / Godot / GameMaker)
 pub fn export_sprite_sheet(project: &AniProject, out_path: &Path) -> Result<usize, String> {
     let total = project.total_frames.max(1);
     let fw = project.width.max(1);
@@ -325,14 +324,13 @@ pub fn export_sprite_sheet(project: &AniProject, out_path: &Path) -> Result<usiz
     Ok(total)
 }
 
-/// تصدير Lottie JSON للويب وتطبيقات الموبايل (Bodymovin Standard)
 pub fn export_lottie_json(project: &AniProject, out_path: &Path) -> Result<(), String> {
     let total = project.total_frames.max(1);
     let fps = project.fps.max(1);
     let mut layers_json = Vec::new();
 
     for (l_idx, layer) in project.layers.iter().enumerate() {
-        if !layer.visible {
+        if !layer.visible || layer.is_guide {
             continue;
         }
         let fd = project.evaluate_layer_at_frame(layer, 1);
@@ -408,7 +406,6 @@ pub fn export_lottie_json(project: &AniProject, out_path: &Path) -> Result<(), S
     fs::write(out_path, serialized).map_err(|e| e.to_string())
 }
 
-/// تصدير GIF متحرك مدمج وفوري بدون الحاجة لأي برامج خارجية (0 ثانية انتظار)
 pub fn export_instant_gif(project: &AniProject, out_path: &Path, bg_rgba: [u8; 4]) -> Result<(), String> {
     let total = project.total_frames.max(1);
     let fps = project.fps.max(1);
@@ -457,7 +454,6 @@ pub fn export_video_multi_format(
     let total = project.total_frames.max(1);
     let is_transparent = format == VideoExportFormat::Webm;
 
-    // تصدير الفريمات بالتوازي فائق السرعة عبر جميع أنوية المعالج
     let indices: Vec<usize> = (1..=total).collect();
     indices.par_iter().try_for_each(|&f| {
         let pixmap = render_frame_pixmap(project, f, is_transparent, bg_rgba);
