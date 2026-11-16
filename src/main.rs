@@ -9,8 +9,8 @@ use eframe::egui;
 use exporter::{ImageExportFormat, VideoExportFormat};
 use profile::UserProfile;
 use project::{
-    AniProject, AudioSyncMode, AudioTrack, EasingCurve, FrameData, Layer, MediaItem, MediaType, Stroke, StrokePoint,
-    Symbol, SymbolInstance, TextItem, ToolType, TweenMode,
+    AniProject, AudioSyncMode, AudioTrack, EasingCurve, FrameData, KritaBrushPreset, Layer, MediaItem, MediaType,
+    Stroke, StrokePoint, Symbol, SymbolInstance, TextItem, TweenMode,
 };
 use rodio::source::{SineWave, TakeDuration};
 use rodio::{Decoder, OutputStream, Sink, Source};
@@ -23,7 +23,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use unicode_bidi::BidiInfo;
 
-const FALLBACK_VERSION: &str = "3.0.0";
+const FALLBACK_VERSION: &str = "4.0.0";
 const GITHUB_REPO: &str = "KaniEGY/AniHady2D";
 const YOUTUBE_CHANNEL_URL: &str = "https://www.youtube.com/@%D8%A7%D8%A8%D9%84%D9%83%D8%A7%D8%B4-%D8%A7%D9%86%D9%85%D9%8A%D8%B4%D9%86/videos";
 
@@ -118,7 +118,7 @@ fn play_sfx_async(enabled: bool, sfx: SfxType, wait_finish: bool) {
                         sink.append(SineWave::new(810.0).take_duration(Duration::from_millis(45)).amplify(0.14));
                     }
                     SfxType::ZoomStep => {
-                        sink.append(SineWave::new(660.0).take_duration(Duration::from_millis(25)).amplify(0.10));
+                        sink.append(SineWave::new(660.0).take_duration(Duration::from_millis(22)).amplify(0.09));
                     }
                     SfxType::ExportSuccess => {
                         sink.append(SineWave::new(523.25).take_duration(Duration::from_millis(110)).amplify(0.20));
@@ -313,9 +313,9 @@ struct AppConfig {
 
 fn default_true_val() -> bool { true }
 fn default_grid_size() -> f32 { 40.0 }
-fn default_tl_bg() -> [u8; 4] { [32, 32, 36, 255] }
-fn default_tl_cell() -> [u8; 4] { [42, 42, 46, 255] }
-fn default_tl_head() -> [u8; 4] { [210, 50, 50, 255] }
+fn default_tl_bg() -> [u8; 4] { [28, 29, 34, 255] }
+fn default_tl_cell() -> [u8; 4] { [40, 42, 48, 255] }
+fn default_tl_head() -> [u8; 4] { [225, 55, 55, 255] }
 fn default_lasso_key() -> String { "L".to_string() }
 fn default_free_tr_key() -> String { "Q".to_string() }
 fn default_vec_sel_key() -> String { "G".to_string() }
@@ -438,13 +438,13 @@ fn setup_custom_fonts(ctx: &egui::Context) {
 fn apply_stick_theme(ctx: &egui::Context) {
     let mut style = (*ctx.style()).clone();
     style.visuals = egui::Visuals::dark();
-    style.visuals.panel_fill = egui::Color32::from_rgb(32, 32, 36);
-    style.visuals.window_fill = egui::Color32::from_rgb(38, 38, 43);
+    style.visuals.panel_fill = egui::Color32::from_rgb(30, 31, 36);
+    style.visuals.window_fill = egui::Color32::from_rgb(36, 37, 43);
     style.visuals.extreme_bg_color = egui::Color32::from_rgb(18, 18, 21);
     style.visuals.selection.bg_fill = egui::Color32::from_rgb(0, 122, 204);
     style.visuals.selection.stroke = egui::Stroke::new(1.0, egui::Color32::WHITE);
-    style.visuals.widgets.inactive.bg_fill = egui::Color32::from_rgb(48, 48, 53);
-    style.visuals.widgets.hovered.bg_fill = egui::Color32::from_rgb(65, 65, 72);
+    style.visuals.widgets.inactive.bg_fill = egui::Color32::from_rgb(46, 48, 55);
+    style.visuals.widgets.hovered.bg_fill = egui::Color32::from_rgb(64, 66, 75);
     style.spacing.item_spacing = egui::vec2(5.0, 5.0);
     style.spacing.button_padding = egui::vec2(7.0, 4.0);
     ctx.set_style(style);
@@ -630,44 +630,51 @@ fn draw_gear_icon(painter: &egui::Painter, rect: egui::Rect, scale: f32) {
     }
 }
 
-fn draw_timeline_frame_shape(painter: &egui::Painter, rect: egui::Rect, kind: u8, tween_mode: TweenMode) {
+/// رسم خلية الفريم على طراز AniCraft (Keyframe ممتلئ / مفرغ / Span ممتد / سهم Tween)
+fn draw_anicraft_timeline_cell(
+    painter: &egui::Painter,
+    rect: egui::Rect,
+    is_keyframe: bool,
+    has_content: bool,
+    tween_mode: TweenMode,
+) {
     let c = rect.center();
     match tween_mode {
         TweenMode::Classic => {
-            painter.rect_filled(rect.shrink(1.5), 2.0, egui::Color32::from_rgba_unmultiplied(139, 92, 246, 135));
+            painter.rect_filled(rect.shrink(1.0), 2.0, egui::Color32::from_rgba_unmultiplied(124, 58, 237, 150));
+            painter.line_segment(
+                [egui::pos2(rect.left() + 2.0, c.y), egui::pos2(rect.right() - 2.0, c.y)],
+                egui::Stroke::new(1.5, egui::Color32::from_rgb(221, 214, 254)),
+            );
         }
         TweenMode::Shape => {
-            painter.rect_filled(rect.shrink(1.5), 2.0, egui::Color32::from_rgba_unmultiplied(16, 185, 129, 135));
+            painter.rect_filled(rect.shrink(1.0), 2.0, egui::Color32::from_rgba_unmultiplied(5, 150, 105, 150));
+            painter.line_segment(
+                [egui::pos2(rect.left() + 2.0, c.y), egui::pos2(rect.right() - 2.0, c.y)],
+                egui::Stroke::new(1.5, egui::Color32::from_rgb(167, 243, 208)),
+            );
         }
         TweenMode::None => {}
     }
-    match kind {
-        1 => {
-            painter.circle_filled(c, 4.8, egui::Color32::from_rgb(239, 68, 68));
+
+    if is_keyframe {
+        if has_content {
+            // Keyframe ممتلئ: دائرة سوداء بإطار أبيض مثل AniCraft و Adobe Animate
+            painter.circle_filled(c, 4.5, egui::Color32::from_rgb(15, 15, 20));
+            painter.circle_stroke(c, 4.8, egui::Stroke::new(1.1, egui::Color32::WHITE));
+        } else {
+            // Blank Keyframe: دائرة بيضاء مفرغة
+            painter.circle_stroke(c, 4.4, egui::Stroke::new(1.3, egui::Color32::from_gray(225)));
         }
-        2 => {
-            let sq = egui::Rect::from_center_size(c, egui::vec2(8.5, 8.5));
-            painter.rect_filled(sq, 1.0, egui::Color32::from_rgb(15, 15, 18));
-            painter.rect_stroke(sq, 1.0, egui::Stroke::new(1.0, egui::Color32::from_gray(160)));
-        }
-        3 => {
-            let r = 5.5;
-            let mut pts = Vec::with_capacity(5);
-            for i in 0..5 {
-                let ang = -std::f32::consts::FRAC_PI_2 + (i as f32) * (std::f32::consts::TAU / 5.0);
-                pts.push(c + egui::vec2(ang.cos() * r, ang.sin() * r));
-            }
-            painter.add(egui::Shape::convex_polygon(
-                pts,
-                egui::Color32::from_rgb(34, 197, 94),
-                egui::Stroke::NONE,
-            ));
-        }
-        _ => {}
+    } else if has_content && tween_mode == TweenMode::None {
+        // Span ممتد: خط أفقي خفيف يدل على استمرار الكي فريم السابق
+        painter.line_segment(
+            [egui::pos2(rect.left() + 2.0, c.y), egui::pos2(rect.right() - 2.0, c.y)],
+            egui::Stroke::new(1.0, egui::Color32::from_gray(130)),
+        );
     }
 }
 
-/// نظام Undo/Redo موفر للذاكرة يعتمد على Arc Structural Sharing (من معمارية AniCraft)
 #[derive(Clone)]
 struct HistorySnapshot {
     project: Arc<AniProject>,
@@ -717,6 +724,8 @@ fn erase_partial_from_strokes(strokes: &mut Vec<Stroke>, center: egui::Pos2, rad
                     fill_color: None,
                     base_width: s.base_width,
                     is_vector: s.is_vector,
+                    brush_preset: s.brush_preset,
+                    opacity: s.opacity,
                     brush_texture_id: s.brush_texture_id.clone(),
                 });
             } else {
@@ -730,6 +739,8 @@ fn erase_partial_from_strokes(strokes: &mut Vec<Stroke>, center: egui::Pos2, rad
                 fill_color: None,
                 base_width: s.base_width,
                 is_vector: s.is_vector,
+                brush_preset: s.brush_preset,
+                opacity: s.opacity,
                 brush_texture_id: s.brush_texture_id,
             });
         }
@@ -753,7 +764,7 @@ fn build_geometric_stroke(
         GeometricShapeKind::Circle => {
             let center = p0.lerp(p1, 0.5);
             let r = (p1 - p0).length() * 0.5;
-            let segments = 32;
+            let segments = 36;
             for i in 0..=segments {
                 let ang = (i as f32 / segments as f32) * std::f32::consts::TAU;
                 pts.push(StrokePoint {
@@ -799,6 +810,8 @@ fn build_geometric_stroke(
         fill_color: None,
         base_width: width,
         is_vector: true,
+        brush_preset: KritaBrushPreset::GPenInk,
+        opacity: 1.0,
         brush_texture_id: None,
     }
 }
@@ -810,15 +823,20 @@ struct StickApp {
     project: AniProject,
     timeline_length: usize,
     timeline_cell_width: f32,
+    loop_enabled: bool,
+    loop_start_frame: usize,
+    loop_end_frame: usize,
     undo_stack: Vec<HistorySnapshot>,
     redo_stack: Vec<HistorySnapshot>,
     clipboard_frame: Option<FrameData>,
     current_frame: usize,
     last_scrubbed_frame: usize,
     active_layer_idx: usize,
-    editing_symbol_name: Option<String>, // Nested Timeline editing state
+    editing_symbol_name: Option<String>,
     selected_audio_idx: Option<usize>,
     active_tool_ui: ActiveToolUI,
+    active_krita_brush: KritaBrushPreset,
+    brush_opacity: f32,
     selected_shape_kind: GeometricShapeKind,
     symmetry_mode: SymmetryMode,
     stabilizer_strength: f32,
@@ -856,7 +874,7 @@ struct StickApp {
     show_symbol_dialog: bool,
     show_text_dialog: bool,
     show_export_studio: bool,
-    export_studio_tab: usize, // 0: Video, 1: Images, 2: Game Dev (Sprite Sheet), 3: Web (Lottie)
+    export_studio_tab: usize,
     show_command_palette: bool,
     command_search_query: String,
     show_timeline_settings: bool,
@@ -885,11 +903,11 @@ struct StickApp {
     allow_close: bool,
     current_stroke: Option<Stroke>,
     texture_cache: HashMap<String, egui::TextureHandle>,
-    imported_brushes: Vec<String>,
     saved_path: Option<PathBuf>,
     status_message: String,
     audio_sink: Option<(OutputStream, Sink)>,
     last_pointer_pos: Option<egui::Pos2>,
+    last_stage_cursor: egui::Pos2,
     right_tab: usize,
 }
 
@@ -928,7 +946,10 @@ impl StickApp {
             install_status_text: String::new(),
             project: proj,
             timeline_length: 1,
-            timeline_cell_width: 28.0,
+            timeline_cell_width: 24.0,
+            loop_enabled: false,
+            loop_start_frame: 1,
+            loop_end_frame: 12,
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
             clipboard_frame: None,
@@ -938,9 +959,11 @@ impl StickApp {
             editing_symbol_name: None,
             selected_audio_idx: None,
             active_tool_ui: ActiveToolUI::Brush,
+            active_krita_brush: KritaBrushPreset::GPenInk,
+            brush_opacity: 1.0,
             selected_shape_kind: GeometricShapeKind::StraightLine,
             symmetry_mode: SymmetryMode::Off,
-            stabilizer_strength: 0.35,
+            stabilizer_strength: 0.40,
             shape_drag_start: None,
             shape_drag_current: None,
             editing_vector_node: None,
@@ -955,10 +978,10 @@ impl StickApp {
             is_rotating_selection: false,
             brush_color: [0, 0, 0, 255],
             stage_bg_color: [255, 255, 255, 255],
-            brush_size: 6.0,
+            brush_size: 7.0,
             pen_pressure_enabled: true,
             pressure_sensitivity: 1.0,
-            zoom_level: 1.0,
+            zoom_level: 0.75,
             pan_offset: egui::Vec2::ZERO,
             canvas_rotation_deg: 0.0,
             canvas_flip_h: false,
@@ -979,7 +1002,7 @@ impl StickApp {
             show_command_palette: false,
             command_search_query: String::new(),
             show_timeline_settings: false,
-            selected_export_format: VideoExportFormat::Mp4,
+            selected_export_format: VideoExportFormat::GifInstant,
             selected_image_format: ImageExportFormat::PngTransparent,
             export_task_state: Arc::new(Mutex::new(ExportTaskState::Idle)),
             text_input_buf: String::new(),
@@ -1004,11 +1027,11 @@ impl StickApp {
             allow_close: false,
             current_stroke: None,
             texture_cache: HashMap::new(),
-            imported_brushes: Vec::new(),
             saved_path: None,
             status_message: "Stick Studio Ready".to_string(),
             audio_sink: None,
             last_pointer_pos: None,
+            last_stage_cursor: egui::Pos2::ZERO,
             right_tab: 0,
         }
     }
@@ -1201,7 +1224,6 @@ impl StickApp {
         }
     }
 
-    /// تحويل الحر (Free Transform): تكبير وتصغير وتدوير العناصر حول نقطة الارتكاز القابلة للسحب (Anchor Point)
     fn transform_selected_items(&mut self, scale_factor: f32, delta_angle_deg: f32, flip_h: bool, flip_v: bool) {
         self.ensure_editable_keyframe();
         if let Some(layer) = self.project.layers.get_mut(self.active_layer_idx) {
@@ -1499,6 +1521,7 @@ impl StickApp {
                     name: format!("Img_{}", img_name),
                     visible: true,
                     locked: false,
+                    is_guide: false,
                     keyframes: kf,
                 },
             );
@@ -1587,6 +1610,7 @@ impl StickApp {
                             name: format!("Vid_{}", vid_name),
                             visible: true,
                             locked: false,
+                            is_guide: false,
                             keyframes: kf,
                         },
                     );
@@ -1816,23 +1840,44 @@ impl StickApp {
                 }
             }
             ActiveToolUI::VectorPen => {
-                ui.strong(tr(lang, "Vector Pen (P)", "قلم الفيكتور الذكي"));
+                ui.strong(tr(lang, "Vector Pen (Cubic Bezier)", "قلم الفيكتور الناعم (P)"));
                 ui.add_space(4.0);
                 ui.horizontal(|ui| {
                     ui.label(tr(lang, "Stroke Width:", "سُمك الخط:"));
                     ui.add(egui::DragValue::new(&mut self.brush_size).range(1.0..=100.0));
                 });
                 ui.add(egui::Slider::new(&mut self.brush_size, 1.0..=100.0).show_value(false));
-                ui.small(tr(lang, "Use Vector Select (G) to edit vector points.", "استخدم أداة نقاط الفيكتور (G) لتعديل انحناء الخطوط."));
+                ui.small(tr(lang, "Draws silky Cubic Bezier curves. Press G to edit control nodes.", "يرسم منحنيات بيزيه فائقة النعومة. اضغط G لتعديل النقاط."));
             }
             ActiveToolUI::Brush => {
-                ui.strong(tr(lang, "Brush Properties (B)", "خصائص الفرشاة"));
+                ui.strong(tr(lang, "Krita Brush Engine (B)", "محرك فرش الرسم الاحترافي"));
+                ui.add_space(4.0);
+                let presets = [
+                    KritaBrushPreset::GPenInk,
+                    KritaBrushPreset::SoftAirbrush,
+                    KritaBrushPreset::Watercolor,
+                    KritaBrushPreset::ChiselMarker,
+                    KritaBrushPreset::SketchPencil,
+                ];
+                egui::ComboBox::from_id_salt("krita_brush_combo")
+                    .selected_text(fix_ar(self.active_krita_brush.label()))
+                    .show_ui(ui, |ui| {
+                        for p in presets {
+                            if ui.selectable_value(&mut self.active_krita_brush, p, fix_ar(p.label())).clicked() {
+                                self.brush_opacity = p.default_opacity();
+                            }
+                        }
+                    });
                 ui.add_space(4.0);
                 ui.horizontal(|ui| {
                     ui.label(tr(lang, "Size:", "الحجم:"));
-                    ui.add(egui::DragValue::new(&mut self.brush_size).range(1.0..=100.0));
+                    ui.add(egui::DragValue::new(&mut self.brush_size).range(1.0..=120.0));
                 });
-                ui.add(egui::Slider::new(&mut self.brush_size, 1.0..=100.0).show_value(false));
+                ui.add(egui::Slider::new(&mut self.brush_size, 1.0..=120.0).show_value(false));
+                ui.horizontal(|ui| {
+                    ui.label(tr(lang, "Opacity:", "الشفافية:"));
+                    ui.add(egui::Slider::new(&mut self.brush_opacity, 0.05..=1.0));
+                });
                 ui.checkbox(&mut self.pen_pressure_enabled, tr(lang, "Pen Pressure Sensitivity", "حساسية ضغط القلم"));
                 if self.pen_pressure_enabled {
                     ui.horizontal(|ui| {
@@ -2166,14 +2211,15 @@ impl eframe::App for StickApp {
                 captured_key = Some("Shift".to_string());
             }
 
-            let z_in = (i.modifiers.ctrl && i.key_pressed(egui::Key::ArrowUp))
-                || (!i.modifiers.ctrl && !i.modifiers.alt && i.key_pressed(egui::Key::W));
-            let z_out = (i.modifiers.ctrl && i.key_pressed(egui::Key::ArrowDown))
-                || (!i.modifiers.ctrl && !i.modifiers.alt && i.key_pressed(egui::Key::S));
-            let p_right = (i.modifiers.ctrl && i.key_pressed(egui::Key::ArrowRight))
-                || (!i.modifiers.ctrl && !i.modifiers.alt && i.key_pressed(egui::Key::D));
-            let p_left = (i.modifiers.ctrl && i.key_pressed(egui::Key::ArrowLeft))
-                || (!i.modifiers.ctrl && !i.modifiers.alt && i.key_pressed(egui::Key::A));
+            // استجابة فورية وسريعة لأسهم الزوم والتحريك (حتى مع الضغط المستمر key_down)
+            let z_in = (i.modifiers.ctrl && i.key_down(egui::Key::ArrowUp))
+                || (!i.modifiers.ctrl && !i.modifiers.alt && i.key_down(egui::Key::W));
+            let z_out = (i.modifiers.ctrl && i.key_down(egui::Key::ArrowDown))
+                || (!i.modifiers.ctrl && !i.modifiers.alt && i.key_down(egui::Key::S));
+            let p_right = (i.modifiers.ctrl && i.key_down(egui::Key::ArrowRight))
+                || (!i.modifiers.ctrl && !i.modifiers.alt && i.key_down(egui::Key::D));
+            let p_left = (i.modifiers.ctrl && i.key_down(egui::Key::ArrowLeft))
+                || (!i.modifiers.ctrl && !i.modifiers.alt && i.key_down(egui::Key::A));
 
             (
                 i.time,
@@ -2289,21 +2335,22 @@ impl eframe::App for StickApp {
             if ctrl_c { self.copy_frame(self.active_layer_idx, self.current_frame); }
             if ctrl_v { self.paste_frame(self.active_layer_idx, self.current_frame); }
 
+            // تسريع الزوم والتحريك الأسّي السلس (Smooth Exponential Zoom & Pan)
             if zoom_in_nav {
-                self.zoom_level = (self.zoom_level + 0.05).clamp(0.1, 4.0);
-                self.play_sfx(SfxType::ZoomStep);
+                self.zoom_level = (self.zoom_level * 1.045).clamp(0.1, 6.0);
+                ctx.request_repaint();
             }
             if zoom_out_nav {
-                self.zoom_level = (self.zoom_level - 0.05).clamp(0.1, 4.0);
-                self.play_sfx(SfxType::ZoomStep);
+                self.zoom_level = (self.zoom_level / 1.045).clamp(0.1, 6.0);
+                ctx.request_repaint();
             }
             if pan_right_nav {
-                self.pan_offset.x += (self.project.width as f32) * 0.05 * self.zoom_level;
-                self.play_sfx(SfxType::ZoomStep);
+                self.pan_offset.x += 18.0;
+                ctx.request_repaint();
             }
             if pan_left_nav {
-                self.pan_offset.x -= (self.project.width as f32) * 0.05 * self.zoom_level;
-                self.play_sfx(SfxType::ZoomStep);
+                self.pan_offset.x -= 18.0;
+                ctx.request_repaint();
             }
 
             if self.workspace_mode == WorkspaceMode::AnimationStudio {
@@ -2325,12 +2372,12 @@ impl eframe::App for StickApp {
 
             if sc_reset_canvas {
                 self.pan_offset = egui::Vec2::ZERO;
-                self.zoom_level = 1.0;
+                self.zoom_level = 0.75;
                 self.canvas_rotation_deg = 0.0;
                 self.canvas_flip_h = false;
                 self.canvas_flip_v = false;
                 self.play_sfx(SfxType::ZoomStep);
-                self.status_message = tr(lang, "Canvas Reset (100%)", "تم إعادة ضبط الكانفا");
+                self.status_message = tr(lang, "Canvas Reset", "تم إعادة ضبط الكانفا");
             }
             if sc_select {
                 self.active_tool_ui = ActiveToolUI::SelectNormal;
@@ -2385,7 +2432,7 @@ impl eframe::App for StickApp {
                 self.play_sfx(SfxType::UiClick);
             }
             if sc_smaller { self.brush_size = (self.brush_size - 2.0).max(1.0); }
-            if sc_larger { self.brush_size = (self.brush_size + 2.0).min(100.0); }
+            if sc_larger { self.brush_size = (self.brush_size + 2.0).min(120.0); }
 
             if del_pressed {
                 if let Some(t_idx) = self.selected_text_idx.take() {
@@ -2436,11 +2483,22 @@ impl eframe::App for StickApp {
             }
         }
 
+        // محرك التشغيل مع دعم Loop Range (من AniCraft)
         if self.is_playing && self.workspace_mode == WorkspaceMode::AnimationStudio {
             if now - self.last_frame_time >= 1.0 / (self.project.fps.max(1) as f64) {
                 self.current_frame += 1;
-                if self.current_frame > self.timeline_length {
-                    self.current_frame = 1;
+                let max_bound = if self.loop_enabled {
+                    self.loop_end_frame.clamp(1, self.timeline_length)
+                } else {
+                    self.timeline_length
+                };
+                let min_bound = if self.loop_enabled {
+                    self.loop_start_frame.clamp(1, max_bound)
+                } else {
+                    1
+                };
+                if self.current_frame > max_bound {
+                    self.current_frame = min_bound;
                     self.stop_audio_playback();
                     self.start_audio_playback();
                 }
@@ -2449,7 +2507,6 @@ impl eframe::App for StickApp {
             ctx.request_repaint();
         }
 
-        // لوحة الأوامر السريعة (Command Palette - Ctrl+K) مستوحاة من AniCraft
         if self.show_command_palette {
             egui::Window::new(tr(lang, "Command Palette (Ctrl+K)", "لوحة الأوامر السريعة (Ctrl+K)"))
                 .collapsible(false)
@@ -2524,7 +2581,6 @@ impl eframe::App for StickApp {
                 });
         }
 
-        // استوديو التصدير الشامل المستقل (Export Studio Window)
         if self.show_export_studio {
             let task_st = self.export_task_state.lock().unwrap().clone();
             egui::Window::new(tr(lang, "Stick Export Studio", "استوديو التصدير الاحترافي"))
@@ -3369,7 +3425,6 @@ impl eframe::App for StickApp {
                 }
                 if ui.button(tr(lang, "Updates", "تحديثات")).clicked() { self.check_for_updates(ctx.clone()); }
 
-                // شريط الخروج من التايم لاين الداخلي للرمز (Nested Timeline Breadcrumb)
                 if let Some(ref sym_name) = self.editing_symbol_name.clone() {
                     ui.separator();
                     ui.colored_label(egui::Color32::from_rgb(250, 204, 21), format!("[Symbol: {}]", sym_name));
@@ -3390,17 +3445,17 @@ impl eframe::App for StickApp {
                     }
 
                     ui.separator();
-                    if ui.small_button("+5%").clicked() {
-                        self.zoom_level = (self.zoom_level + 0.05).clamp(0.1, 4.0);
+                    if ui.small_button("+15%").clicked() {
+                        self.zoom_level = (self.zoom_level * 1.15).clamp(0.1, 6.0);
                         self.play_sfx(SfxType::ZoomStep);
                     }
                     ui.label(format!("{:.0}%", self.zoom_level * 100.0));
-                    if ui.small_button("-5%").clicked() {
-                        self.zoom_level = (self.zoom_level - 0.05).clamp(0.1, 4.0);
+                    if ui.small_button("-15%").clicked() {
+                        self.zoom_level = (self.zoom_level / 1.15).clamp(0.1, 6.0);
                         self.play_sfx(SfxType::ZoomStep);
                     }
                     if ui.small_button(format!("{} ({})", tr(lang, "Center", "توسيط"), self.config.reset_canvas)).clicked() {
-                        self.zoom_level = 1.0;
+                        self.zoom_level = 0.75;
                         self.pan_offset = egui::Vec2::ZERO;
                         self.canvas_rotation_deg = 0.0;
                         self.canvas_flip_h = false;
@@ -3604,11 +3659,11 @@ impl eframe::App for StickApp {
         // اللوحة اليمنى
         egui::SidePanel::right("right_panel")
             .resizable(true)
-            .default_width(260.0)
-            .width_range(185.0..=480.0)
+            .default_width(265.0)
+            .width_range(190.0..=480.0)
             .show(ctx, |ui| {
                 if self.workspace_mode == WorkspaceMode::DrawingOnly {
-                    ui.strong(tr(lang, "🎨 Drawing Studio Tools", "🎨 استوديو الرسم الاحترافي"));
+                    ui.strong(tr(lang, "🎨 Krita Drawing Studio", "🎨 استوديو الرسم (محرك Krita)"));
                     ui.separator();
                     self.render_tool_properties_ui(ui, lang);
 
@@ -3659,6 +3714,7 @@ impl eframe::App for StickApp {
                                 name: format!("Layer_{}", count),
                                 visible: true,
                                 locked: false,
+                                is_guide: false,
                                 keyframes: kf,
                             });
                             self.play_sfx(SfxType::NewFrame);
@@ -3703,7 +3759,6 @@ impl eframe::App for StickApp {
                     if self.right_tab == 0 {
                         self.render_tool_properties_ui(ui, lang);
 
-                        // إعدادات Tweens و Easing للفريم الحالي (Classic Tween & Shape Tween)
                         if let Some(layer) = self.project.layers.get_mut(self.active_layer_idx) {
                             if let Some(fd) = layer.keyframes.get_mut(&self.current_frame) {
                                 ui.add_space(8.0);
@@ -3752,7 +3807,7 @@ impl eframe::App for StickApp {
 
                         ui.add_space(12.0);
                         ui.separator();
-                        ui.strong(tr(lang, "Stage / Document", "إعدادات المسرح"));
+                        ui.strong(tr(lang, "Document", "إعدادات المسرح"));
                         ui.add_space(4.0);
                         ui.horizontal(|ui| {
                             ui.label("W:");
@@ -3832,7 +3887,25 @@ impl eframe::App for StickApp {
                 }
             });
 
-        // التايم لاين السفلي
+        // شريط Telemetry السفلي على طراز AniCraft
+        egui::TopBottomPanel::bottom("telemetry_footer")
+            .exact_height(22.0)
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    ui.colored_label(egui::Color32::from_rgb(34, 197, 94), "● Ready");
+                    ui.separator();
+                    ui.small(format!("X: {:.0}  Y: {:.0}", self.last_stage_cursor.x, self.last_stage_cursor.y));
+                    ui.separator();
+                    ui.small(format!("Stage: {}x{} @ {}fps", self.project.width, self.project.height, self.project.fps));
+                    ui.separator();
+                    ui.small(format!("Undo History: {}", self.undo_stack.len()));
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.small(format!("Zoom: {:.0}%", self.zoom_level * 100.0));
+                    });
+                });
+            });
+
+        // التايم لاين السفلي بميكانيك AniCraft الكامل (Ruler Scrubbing + Playhead Line + Loop Range + Keyframe Spans)
         if self.workspace_mode == WorkspaceMode::AnimationStudio {
             let tl_bg = self.config.timeline_bg_color;
             let tl_cell_col = self.config.timeline_cell_color;
@@ -3841,7 +3914,7 @@ impl eframe::App for StickApp {
             egui::TopBottomPanel::bottom("timeline_panel")
                 .resizable(true)
                 .default_height(225.0)
-                .height_range(110.0..=520.0)
+                .height_range(115.0..=520.0)
                 .frame(egui::Frame::none().fill(egui::Color32::from_rgba_unmultiplied(tl_bg[0], tl_bg[1], tl_bg[2], 255)).inner_margin(6.0))
                 .show(ctx, |ui| {
                     let tl_rect = ui.available_rect_before_wrap();
@@ -3863,20 +3936,29 @@ impl eframe::App for StickApp {
                         if ui.button(">|").clicked() { self.current_frame = self.timeline_length; }
 
                         ui.separator();
+                        // التحكم في Loop Range (ميزة أساسية في AniCraft)
+                        ui.toggle_value(&mut self.loop_enabled, "🔁 Loop");
+                        if self.loop_enabled {
+                            ui.add(egui::DragValue::new(&mut self.loop_start_frame).range(1..=self.timeline_length));
+                            ui.label("-");
+                            ui.add(egui::DragValue::new(&mut self.loop_end_frame).range(self.loop_start_frame..=self.timeline_length.max(self.loop_start_frame)));
+                        }
+
+                        ui.separator();
                         ui.colored_label(
                             egui::Color32::from_rgba_unmultiplied(tl_head_col[0], tl_head_col[1], tl_head_col[2], 255),
                             format!("{}f", self.current_frame),
                         );
-                        ui.label(format!("/ {}f ({:.1}s)", self.timeline_length, self.current_frame as f32 / self.project.fps.max(1) as f32));
+                        ui.label(format!("{} fps  {:.2}s", self.project.fps, self.current_frame as f32 / self.project.fps.max(1) as f32));
 
                         ui.separator();
-                        if ui.button(format!("{} ({})", tr(lang, "+ Frame", "+ تمديد"), self.config.insert_frame)).clicked() {
+                        if ui.button(format!("{} ({})", tr(lang, "Frame", "تمديد"), self.config.insert_frame)).clicked() {
                             self.action_insert_frame_f5();
                         }
-                        if ui.button(format!("{} ({})", tr(lang, "+ Keyframe", "+ فريم منسوخ"), self.config.insert_keyframe)).clicked() {
+                        if ui.button(format!("{} ({})", tr(lang, "Keyframe", "فريم منسوخ"), self.config.insert_keyframe)).clicked() {
                             self.action_insert_keyframe_f6(now_time);
                         }
-                        if ui.button(format!("{} ({})", tr(lang, "+ Blank KF", "+ فريم فارغ"), self.config.insert_blank_kf)).clicked() {
+                        if ui.button(format!("{} ({})", tr(lang, "Blank", "فريم فارغ"), self.config.insert_blank_kf)).clicked() {
                             self.action_insert_blank_keyframe_f7(now_time);
                         }
 
@@ -3899,6 +3981,7 @@ impl eframe::App for StickApp {
                                 name: format!("Layer_{}", count),
                                 visible: true,
                                 locked: false,
+                                is_guide: false,
                                 keyframes: kf,
                             });
                             self.play_sfx(SfxType::NewFrame);
@@ -3931,26 +4014,59 @@ impl eframe::App for StickApp {
                     let mut remove_audio_idx: Option<usize> = None;
 
                     let cell_w = self.timeline_cell_width;
+                    let display_cols = self.timeline_length.max(30);
+                    let mut playhead_x_pos: Option<f32> = None;
+                    let mut ruler_top_y = 0.0f32;
+                    let mut tracks_bottom_y = 0.0f32;
 
                     egui::ScrollArea::both().show(ui, |ui| {
+                        // مسطرة الفريمات التفاعلية (AniCraft Ruler with Continuous Scrubbing)
                         ui.horizontal(|ui| {
                             ui.allocate_ui(egui::vec2(150.0, 20.0), |ui| {
                                 ui.strong(tr(lang, "Layers", "الطبقات"));
                             });
-                            for f in 1..=self.timeline_length {
+                            for f in 1..=display_cols {
                                 let is_curr = self.current_frame == f;
-                                let btn = egui::Button::new(format!("{}", f))
-                                    .min_size(egui::vec2(cell_w, 18.0))
-                                    .fill(if is_curr {
-                                        egui::Color32::from_rgba_unmultiplied(tl_head_col[0], tl_head_col[1], tl_head_col[2], 255)
-                                    } else {
-                                        egui::Color32::from_rgba_unmultiplied(tl_cell_col[0], tl_cell_col[1], tl_cell_col[2], 255)
-                                    });
-                                if ui.add(btn).clicked() {
+                                let (r_rect, r_resp) = ui.allocate_exact_size(egui::vec2(cell_w, 20.0), egui::Sense::click_and_drag());
+                                if f == 1 {
+                                    ruler_top_y = r_rect.top();
+                                }
+                                if is_curr {
+                                    playhead_x_pos = Some(r_rect.center().x);
+                                    ui.painter().rect_filled(
+                                        r_rect,
+                                        3.0,
+                                        egui::Color32::from_rgba_unmultiplied(tl_head_col[0], tl_head_col[1], tl_head_col[2], 255),
+                                    );
+                                } else if self.loop_enabled && f >= self.loop_start_frame && f <= self.loop_end_frame {
+                                    ui.painter().rect_filled(r_rect, 2.0, egui::Color32::from_rgba_unmultiplied(56, 189, 248, 45));
+                                }
+
+                                if is_curr || f == 1 || f % 5 == 0 {
+                                    ui.painter().text(
+                                        r_rect.center(),
+                                        egui::Align2::CENTER_CENTER,
+                                        format!("{}", f),
+                                        egui::FontId::proportional(11.0),
+                                        if is_curr { egui::Color32::WHITE } else { egui::Color32::from_gray(170) },
+                                    );
+                                } else {
+                                    ui.painter().line_segment(
+                                        [egui::pos2(r_rect.center().x, r_rect.bottom() - 4.0), egui::pos2(r_rect.center().x, r_rect.bottom())],
+                                        egui::Stroke::new(1.0, egui::Color32::from_gray(95)),
+                                    );
+                                }
+
+                                // السحب المستمر للمؤشر الأحمر فوق المسطرة (Scrubbing)
+                                if r_resp.clicked() || (pointer_down && r_resp.hovered()) {
+                                    if f > self.timeline_length {
+                                        self.timeline_length = f;
+                                        self.project.total_frames = f;
+                                    }
                                     self.current_frame = f;
                                 }
                             }
-                            if ui.add(egui::Button::new("+").min_size(egui::vec2(24.0, 18.0))).clicked() {
+                            if ui.add(egui::Button::new("+").min_size(egui::vec2(24.0, 20.0))).clicked() {
                                 self.action_insert_frame_f5();
                             }
                         });
@@ -3958,12 +4074,13 @@ impl eframe::App for StickApp {
                         let layers_len = self.project.layers.len();
                         let has_clip = self.clipboard_frame.is_some();
                         let lbl_rename = tr(lang, "Rename Layer", "إعادة تسمية الطبقة");
+                        let lbl_guide = tr(lang, "Toggle Guide Layer (Sketch Only)", "تحويل لطبقة سكتش إرشادية (Guide)");
                         let lbl_copy = tr(lang, "Copy Frame (Ctrl+C)", "نسخ الفريم (Copy)");
                         let lbl_paste = tr(lang, "Paste Frame (Ctrl+V)", "لصق الفريم (Paste)");
-                        let lbl_clear_frame = tr(lang, "Clear Frame (Make White/Blank)", "مسح المحتوى (Clear - فريم أبيض)");
+                        let lbl_clear_frame = tr(lang, "Clear Frame (Make Blank)", "مسح المحتوى (Clear)");
                         let lbl_remove_frame = format!(
                             "{} ({})",
-                            tr(lang, "Delete Frame (Remove & Shift)", "حذف الفريم تماماً وإرجاع الترقيم"),
+                            tr(lang, "Delete Frame (Remove & Shift)", "حذف الفريم تماماً"),
                             self.config.delete_frame_key
                         );
                         let lbl_dup_layer = tr(lang, "Duplicate Layer", "تكرار الطبقة");
@@ -3975,7 +4092,12 @@ impl eframe::App for StickApp {
                                     ui.horizontal(|ui| {
                                         ui.checkbox(&mut layer.visible, "");
                                         let is_active_l = self.active_layer_idx == l_idx;
-                                        let layer_btn = egui::Button::new(&layer.name)
+                                        let disp_name = if layer.is_guide {
+                                            format!("📐 {}", layer.name)
+                                        } else {
+                                            layer.name.clone()
+                                        };
+                                        let layer_btn = egui::Button::new(disp_name)
                                             .selected(is_active_l)
                                             .sense(egui::Sense::click_and_drag());
                                         let layer_resp = ui.add(layer_btn);
@@ -3998,6 +4120,9 @@ impl eframe::App for StickApp {
                                                 self.rename_layer_buf = layer.name.clone();
                                                 ui.close_menu();
                                             }
+                                            if ui.checkbox(&mut layer.is_guide, &lbl_guide).clicked() {
+                                                ui.close_menu();
+                                            }
                                             if ui.button(&lbl_dup_layer).clicked() {
                                                 pending_dup_layer = Some(l_idx);
                                                 ui.close_menu();
@@ -4013,9 +4138,10 @@ impl eframe::App for StickApp {
                                     });
                                 });
 
-                                for f in 1..=self.timeline_length {
-                                    let is_keyframe = layer.keyframes.contains_key(&f);
-                                    let eff_fd = Self::get_effective_frame_data(layer, f);
+                                for f in 1..=display_cols {
+                                    let is_beyond = f > self.timeline_length;
+                                    let is_keyframe = !is_beyond && layer.keyframes.contains_key(&f);
+                                    let eff_fd = if is_beyond { None } else { Self::get_effective_frame_data(layer, f) };
                                     let has_drawings = eff_fd.map_or(false, |fd| {
                                         !fd.strokes.is_empty()
                                             || !fd.media_items.is_empty()
@@ -4025,18 +4151,13 @@ impl eframe::App for StickApp {
                                     let tw_mode = eff_fd.map(|fd| fd.tween_mode).unwrap_or(TweenMode::None);
 
                                     let is_selected = self.active_layer_idx == l_idx && self.current_frame == f;
-                                    let shape_kind = if is_keyframe {
-                                        if has_drawings { 1 } else { 2 }
-                                    } else if has_drawings {
-                                        3
-                                    } else {
-                                        0
-                                    };
 
                                     let fill = if is_selected {
                                         egui::Color32::from_rgb(0, 122, 204)
+                                    } else if is_beyond {
+                                        egui::Color32::from_rgb(24, 25, 29)
                                     } else if has_drawings {
-                                        egui::Color32::from_rgb(65, 65, 72)
+                                        egui::Color32::from_rgb(65, 68, 76)
                                     } else {
                                         egui::Color32::from_rgba_unmultiplied(tl_cell_col[0], tl_cell_col[1], tl_cell_col[2], 255)
                                     };
@@ -4045,17 +4166,24 @@ impl eframe::App for StickApp {
                                         egui::vec2(cell_w, 22.0),
                                         egui::Sense::click_and_drag(),
                                     );
-                                    ui.painter().rect_filled(cell_rect, 3.0, fill);
-                                    draw_timeline_frame_shape(ui.painter(), cell_rect, shape_kind, tw_mode);
+                                    tracks_bottom_y = tracks_bottom_y.max(cell_rect.bottom());
+                                    ui.painter().rect_filled(cell_rect, 2.0, fill);
+                                    if !is_beyond {
+                                        draw_anicraft_timeline_cell(ui.painter(), cell_rect, is_keyframe, has_drawings, tw_mode);
+                                    }
 
                                     if cell_resp.clicked() {
+                                        if is_beyond {
+                                            self.timeline_length = f;
+                                            self.project.total_frames = f;
+                                        }
                                         self.active_layer_idx = l_idx;
                                         self.current_frame = f;
                                     }
-                                    if cell_resp.drag_started() {
+                                    if !is_beyond && cell_resp.drag_started() {
                                         self.dragged_frame = Some((l_idx, f));
                                     }
-                                    if pointer_released && cell_resp.hovered() {
+                                    if !is_beyond && pointer_released && cell_resp.hovered() {
                                         if let Some(src) = self.dragged_frame.take() {
                                             if src != (l_idx, f) {
                                                 move_frame_op = Some((src, (l_idx, f)));
@@ -4119,12 +4247,13 @@ impl eframe::App for StickApp {
                                     });
                                 });
 
-                                for f in 1..=self.timeline_length {
+                                for f in 1..=display_cols {
                                     let active = f >= track.start_frame && f <= track.end_frame;
                                     let (w_rect, w_resp) = ui.allocate_exact_size(
                                         egui::vec2(cell_w, 28.0),
                                         egui::Sense::click(),
                                     );
+                                    tracks_bottom_y = tracks_bottom_y.max(w_rect.bottom());
                                     if active {
                                         ui.painter().rect_filled(w_rect, 2.0, egui::Color32::from_rgb(130, 30, 85));
                                         let peak_idx = (f - track.start_frame) % track.waveform_peaks.len().max(1);
@@ -4136,7 +4265,7 @@ impl eframe::App for StickApp {
                                         );
                                         ui.painter().rect_filled(bar_rect, 1.0, egui::Color32::from_rgb(255, 110, 195));
                                     } else {
-                                        ui.painter().rect_filled(w_rect, 2.0, egui::Color32::from_rgb(30, 30, 33));
+                                        ui.painter().rect_filled(w_rect, 2.0, egui::Color32::from_rgb(24, 25, 29));
                                     }
 
                                     if w_resp.clicked() {
@@ -4155,6 +4284,17 @@ impl eframe::App for StickApp {
                                     });
                                 }
                             });
+                        }
+
+                        // رسم الخط الرأسي الأحمر المتصل للمؤشر (Playhead Line) عبر جميع الطبقات مثل AniCraft
+                        if let Some(px) = playhead_x_pos {
+                            if tracks_bottom_y > ruler_top_y {
+                                let head_c = egui::Color32::from_rgba_unmultiplied(tl_head_col[0], tl_head_col[1], tl_head_col[2], 220);
+                                ui.painter().line_segment(
+                                    [egui::pos2(px, ruler_top_y + 18.0), egui::pos2(px, tracks_bottom_y)],
+                                    egui::Stroke::new(1.6, head_c),
+                                );
+                            }
                         }
                     });
 
@@ -4250,8 +4390,10 @@ impl eframe::App for StickApp {
             }
 
             let is_over_canvas = pointer_pos.map_or(false, |p| canvas_rect.contains(p));
+            // تسريع الزوم بعجلة الماوس ليكون سلساً وفورياً
             if scroll_y != 0.0 && is_over_canvas && !any_modal_open {
-                self.zoom_level = (self.zoom_level + scroll_y * 0.001).clamp(0.1, 4.0);
+                let zoom_factor = (1.0 + scroll_y * 0.0022).clamp(0.75, 1.35);
+                self.zoom_level = (self.zoom_level * zoom_factor).clamp(0.1, 6.0);
             }
 
             if alt_down && pointer_down && is_over_canvas && !any_modal_open {
@@ -4301,6 +4443,10 @@ impl eframe::App for StickApp {
                 if flip_v { ny = -ny; }
                 egui::pos2(nx + stage_w * 0.5, ny + stage_h * 0.5)
             };
+
+            if let Some(p) = pointer_pos {
+                self.last_stage_cursor = to_stage(p);
+            }
 
             if self.config.show_grid {
                 let step = self.config.grid_size.max(8.0);
@@ -4610,7 +4756,7 @@ impl eframe::App for StickApp {
                             if let Some(stroke) = &mut self.current_stroke {
                                 if let Some(last) = stroke.points.last() {
                                     let dist = ((last.x - stage_pos.x).powi(2) + (last.y - stage_pos.y).powi(2)).sqrt();
-                                    if dist >= 4.0 {
+                                    if dist >= 5.0 {
                                         stroke.points.push(StrokePoint { x: stage_pos.x, y: stage_pos.y, pressure: 1.0 });
                                         if now - self.last_sfx_time > 0.08 {
                                             self.play_sfx(SfxType::VectorPenTick);
@@ -4626,6 +4772,8 @@ impl eframe::App for StickApp {
                                     fill_color: None,
                                     base_width: self.brush_size,
                                     is_vector: true,
+                                    brush_preset: KritaBrushPreset::GPenInk,
+                                    opacity: 1.0,
                                     brush_texture_id: None,
                                 });
                             }
@@ -4661,6 +4809,8 @@ impl eframe::App for StickApp {
                                     fill_color: None,
                                     base_width: self.brush_size,
                                     is_vector: false,
+                                    brush_preset: self.active_krita_brush,
+                                    opacity: self.brush_opacity,
                                     brush_texture_id: None,
                                 });
                             }
@@ -4709,11 +4859,11 @@ impl eframe::App for StickApp {
 
                 if let Some(mut stroke) = self.current_stroke.take() {
                     if stroke.is_vector {
-                        stroke.simplify_vector_nodes(3.5);
-                        stroke.smooth_brush();
-                        stroke.simplify_vector_nodes(2.2);
+                        // تبسيط النقاط الزائدة ثم تمريرها بمنحنى Cubic Bezier للحصول على خط فيكتور حريري ناعم
+                        stroke.simplify_vector_nodes(4.0);
+                        stroke.fit_cubic_bezier_spline(5);
                     } else {
-                        stroke.smooth_brush();
+                        stroke.fit_cubic_bezier_spline(3);
                     }
                     self.commit_stroke_with_symmetry(stroke, now_time);
                 }
@@ -4721,7 +4871,6 @@ impl eframe::App for StickApp {
 
             self.last_pointer_pos = if pointer_down { pointer_pos } else { None };
 
-            // إذا كان المستخدم داخل Nested Timeline لرمز معين، يتم عرض الرمز فقط
             if let Some(ref sym_name) = self.editing_symbol_name {
                 if let Some(sym) = self.project.library_symbols.get(sym_name) {
                     let sym_strokes = self.project.evaluate_symbol_strokes(sym, self.current_frame);
@@ -4767,7 +4916,8 @@ impl eframe::App for StickApp {
                         for s in &fd.strokes {
                             draw_stroke_pro(&painter, s, None, scale, 0.0, 0.0, &to_screen);
                             if l_idx == self.active_layer_idx && self.active_tool_ui == ActiveToolUI::VectorDirectSelect && s.is_vector {
-                                for p in &s.points {
+                                // إظهار نقاط التحكم الرئيسية فقط كل 4 نقاط لسهولة التعديل
+                                for p in s.points.iter().step_by(4) {
                                     let sp = to_screen(egui::pos2(p.x, p.y));
                                     painter.circle_filled(sp, 4.2, egui::Color32::from_rgb(192, 132, 252));
                                     painter.circle_stroke(sp, 5.0, egui::Stroke::new(1.2, egui::Color32::BLACK));
@@ -4808,11 +4958,9 @@ impl eframe::App for StickApp {
                                 };
                                 painter.rect_stroke(sel_rect, 2.0, egui::Stroke::new(1.5, box_col));
 
-                                // مقبض التكبير والتصغير (الزاوية السفلية اليمنى)
                                 let handle_rect = egui::Rect::from_center_size(sel_rect.right_bottom(), egui::vec2(13.0, 13.0));
                                 painter.rect_filled(handle_rect, 2.0, box_col);
 
-                                // مقبض التدوير ونقطة الارتكاز البيضاء عند اختيار Free Transform (Q)
                                 if self.active_tool_ui == ActiveToolUI::FreeTransform {
                                     let rot_pos = egui::pos2(sel_rect.max.x, sel_rect.min.y);
                                     painter.circle_filled(rot_pos, 6.5, egui::Color32::from_rgb(34, 197, 94));
@@ -4880,6 +5028,7 @@ impl eframe::App for StickApp {
     }
 }
 
+/// مصيّر الخطوط المتقدم: يدعم خصائص فرش Krita (Airbrush, Watercolor, G-Pen, Pencil) ومنحنيات Cubic Bezier الناعمة
 fn draw_stroke_pro<F: Fn(egui::Pos2) -> egui::Pos2>(
     painter: &egui::Painter,
     stroke: &Stroke,
@@ -4894,7 +5043,8 @@ fn draw_stroke_pro<F: Fn(egui::Pos2) -> egui::Pos2>(
     }
 
     let c = override_color.unwrap_or(stroke.color);
-    let color = egui::Color32::from_rgba_unmultiplied(c[0], c[1], c[2], c[3]);
+    let eff_alpha = ((c[3] as f32) * stroke.opacity.clamp(0.05, 1.0)) as u8;
+    let color = egui::Color32::from_rgba_unmultiplied(c[0], c[1], c[2], eff_alpha);
 
     if stroke.points.len() == 1 {
         let p = to_screen(egui::pos2(stroke.points[0].x + ox, stroke.points[0].y + oy));
@@ -4926,10 +5076,10 @@ fn draw_stroke_pro<F: Fn(egui::Pos2) -> egui::Pos2>(
             1.0
         } else {
             let progress = idx as f32 / total as f32;
-            if progress < 0.12 {
-                (progress / 0.12).max(0.25)
-            } else if progress > 0.88 {
-                ((1.0 - progress) / 0.12).max(0.25)
+            if progress < 0.10 {
+                (progress / 0.10).max(0.22)
+            } else if progress > 0.90 {
+                ((1.0 - progress) / 0.10).max(0.22)
             } else {
                 1.0
             }
@@ -4938,9 +5088,25 @@ fn draw_stroke_pro<F: Fn(egui::Pos2) -> egui::Pos2>(
         let avg_pressure = ((w[0].pressure + w[1].pressure) * 0.5) * taper;
         let width = (stroke.base_width * avg_pressure * scale).max(1.0);
 
-        painter.circle_filled(p0, width * 0.5, color);
-        painter.line_segment([p0, p1], egui::Stroke::new(width, color));
-        painter.circle_filled(p1, width * 0.5, color);
+        match stroke.brush_preset {
+            KritaBrushPreset::SoftAirbrush => {
+                // هالة بخاخ ناعمة متعددة الطبقات
+                let halo = egui::Color32::from_rgba_unmultiplied(c[0], c[1], c[2], (eff_alpha / 3).max(8));
+                painter.circle_filled(p0, width * 0.85, halo);
+                painter.circle_filled(p0, width * 0.45, color);
+                painter.line_segment([p0, p1], egui::Stroke::new(width * 0.9, color));
+            }
+            KritaBrushPreset::Watercolor => {
+                let edge_col = egui::Color32::from_rgba_unmultiplied(c[0], c[1], c[2], (eff_alpha / 2).max(12));
+                painter.line_segment([p0, p1], egui::Stroke::new(width * 1.15, edge_col));
+                painter.line_segment([p0, p1], egui::Stroke::new(width * 0.85, color));
+            }
+            _ => {
+                painter.circle_filled(p0, width * 0.5, color);
+                painter.line_segment([p0, p1], egui::Stroke::new(width, color));
+                painter.circle_filled(p1, width * 0.5, color);
+            }
+        }
     }
 }
 
