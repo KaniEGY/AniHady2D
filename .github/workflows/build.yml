@@ -1,5 +1,10 @@
-name: Build AniHady2D
-on: [push]
+name: Build and Release AniHady2D
+on:
+  push:
+    branches: [ main ]
+
+permissions:
+  contents: write
 
 jobs:
   build:
@@ -10,10 +15,16 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
       - name: Build Release EXE
         run: cargo build --release
-      - name: Upload AniHady2D.exe
+      - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
           name: AniHady2D-Windows
           path: |
             target/release/AniHady2D.exe
             assets/
+      - name: Publish Direct Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v1.0.${{ github.run_number }}
+          name: AniHady2D v1.0.${{ github.run_number }}
+          files: target/release/AniHady2D.exe
