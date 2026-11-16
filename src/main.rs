@@ -26,7 +26,7 @@ use std::time::Duration;
 use unicode_bidi::BidiInfo;
 
 const FALLBACK_VERSION: &str = "4.0.0";
-const GITHUB_REPO: &str = "KaniEGY/AniHady2D";
+const GITHUB_REPO: &str = "KaniEGY/Stick";
 const YOUTUBE_CHANNEL_URL: &str = "https://www.youtube.com/@%D8%A7%D8%A8%D9%84%D9%83%D8%A7%D8%B4-%D8%A7%D9%86%D9%85%D9%8A%D8%B4%D9%86/videos";
 
 #[derive(Clone, Copy, PartialEq)]
