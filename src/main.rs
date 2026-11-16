@@ -1,10 +1,12 @@
 #![windows_subsystem = "windows"]
 
+mod brushes;
 mod exporter;
 mod profile;
 mod project;
 
 use arabic_reshaper::arabic_reshape;
+use brushes::{draw_brush_preset_icon, draw_stroke_pro};
 use eframe::egui;
 use exporter::{ImageExportFormat, VideoExportFormat};
 use profile::UserProfile;
@@ -97,29 +99,19 @@ fn play_sfx_async(enabled: bool, sfx: SfxType, wait_finish: bool) {
         if let Ok((_stream, stream_handle)) = OutputStream::try_default() {
             if let Ok(sink) = Sink::try_new(&stream_handle) {
                 match sfx {
-                    SfxType::UiClick => {
-                        sink.append(SineWave::new(740.0).take_duration(Duration::from_millis(28)).amplify(0.12));
-                    }
+                    SfxType::UiClick => sink.append(SineWave::new(740.0).take_duration(Duration::from_millis(28)).amplify(0.12)),
                     SfxType::NewFrame => {
                         sink.append(SineWave::new(620.0).take_duration(Duration::from_millis(50)).amplify(0.18));
                         sink.append(SineWave::new(920.0).take_duration(Duration::from_millis(55)).amplify(0.18));
                     }
-                    SfxType::VectorPenTick => {
-                        sink.append(SineWave::new(1180.0).take_duration(Duration::from_millis(22)).amplify(0.09));
-                    }
-                    SfxType::BrushScratch => {
-                        sink.append(SineWave::new(290.0).take_duration(Duration::from_millis(32)).amplify(0.09));
-                    }
-                    SfxType::EraserRub => {
-                        sink.append(SineWave::new(175.0).take_duration(Duration::from_millis(45)).amplify(0.13));
-                    }
+                    SfxType::VectorPenTick => sink.append(SineWave::new(1180.0).take_duration(Duration::from_millis(22)).amplify(0.09)),
+                    SfxType::BrushScratch => sink.append(SineWave::new(290.0).take_duration(Duration::from_millis(32)).amplify(0.09)),
+                    SfxType::EraserRub => sink.append(SineWave::new(175.0).take_duration(Duration::from_millis(45)).amplify(0.13)),
                     SfxType::LassoSelect => {
                         sink.append(SineWave::new(540.0).take_duration(Duration::from_millis(35)).amplify(0.14));
                         sink.append(SineWave::new(810.0).take_duration(Duration::from_millis(45)).amplify(0.14));
                     }
-                    SfxType::ZoomStep => {
-                        sink.append(SineWave::new(660.0).take_duration(Duration::from_millis(22)).amplify(0.09));
-                    }
+                    SfxType::ZoomStep => sink.append(SineWave::new(660.0).take_duration(Duration::from_millis(22)).amplify(0.09)),
                     SfxType::ExportSuccess => {
                         sink.append(SineWave::new(523.25).take_duration(Duration::from_millis(110)).amplify(0.20));
                         sink.append(SineWave::new(659.25).take_duration(Duration::from_millis(110)).amplify(0.20));
@@ -170,12 +162,8 @@ enum AppLang {
     Arabic,
 }
 
-fn contains_arabic(s: &str) -> bool {
-    s.chars().any(|c| ('\u{0600}'..='\u{06FF}').contains(&c))
-}
-
 fn fix_ar(text: &str) -> String {
-    if !contains_arabic(text) {
+    if !text.chars().any(|c| ('\u{0600}'..='\u{06FF}').contains(&c)) {
         return text.to_string();
     }
     let reshaped = arabic_reshape(text);
@@ -184,8 +172,7 @@ fn fix_ar(text: &str) -> String {
         return reshaped;
     }
     let para = &bidi_info.paragraphs[0];
-    let line = para.range.clone();
-    bidi_info.reorder_line(para, line).into_owned()
+    bidi_info.reorder_line(para, para.range.clone()).into_owned()
 }
 
 fn tr(lang: AppLang, en: &str, ar: &str) -> String {
@@ -197,11 +184,10 @@ fn tr(lang: AppLang, en: &str, ar: &str) -> String {
 
 fn get_installed_version() -> String {
     if let Ok(exe) = std::env::current_exe() {
-        let ver_path = exe.with_file_name("version.txt");
-        if let Ok(v) = std::fs::read_to_string(ver_path) {
-            let trimmed = v.trim().trim_start_matches('v').to_string();
-            if !trimmed.is_empty() {
-                return trimmed;
+        if let Ok(v) = std::fs::read_to_string(exe.with_file_name("version.txt")) {
+            let t = v.trim().trim_start_matches('v').to_string();
+            if !t.is_empty() {
+                return t;
             }
         }
     }
@@ -210,20 +196,15 @@ fn get_installed_version() -> String {
 
 fn save_installed_version(ver: &str) {
     if let Ok(exe) = std::env::current_exe() {
-        let ver_path = exe.with_file_name("version.txt");
-        let _ = std::fs::write(ver_path, ver.trim().trim_start_matches('v'));
+        let _ = std::fs::write(exe.with_file_name("version.txt"), ver.trim().trim_start_matches('v'));
     }
 }
 
 fn is_running_from_installed_dir() -> bool {
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            if dir.join("stick_installed.marker").exists() {
-                return true;
-            }
-        }
-    }
-    false
+    std::env::current_exe()
+        .ok()
+        .and_then(|e| e.parent().map(|d| d.join("stick_installed.marker").exists()))
+        .unwrap_or(false)
 }
 
 fn create_desktop_shortcut(target_exe: &Path) -> Result<(), String> {
@@ -234,7 +215,7 @@ fn create_desktop_shortcut(target_exe: &Path) -> Result<(), String> {
          $Shortcut.TargetPath = '{}'; \
          $Shortcut.WorkingDirectory = '{}'; \
          $Shortcut.IconLocation = '{},0'; \
-         $Shortcut.Description = 'Stick 2D Animation & Drawing Studio'; \
+         $Shortcut.Description = 'Stick Studio'; \
          $Shortcut.Save()",
         target_exe.display().to_string().replace('\'', "''"),
         target_exe.parent().unwrap_or(Path::new(".")).display().to_string().replace('\'', "''"),
@@ -244,11 +225,7 @@ fn create_desktop_shortcut(target_exe: &Path) -> Result<(), String> {
         .args(["-NoProfile", "-WindowStyle", "Hidden", "-Command", &ps_cmd])
         .status()
         .map_err(|e| e.to_string())?;
-    if status.success() {
-        Ok(())
-    } else {
-        Err("فشل إنشاء اختصار سطح المكتب.".to_string())
-    }
+    if status.success() { Ok(()) } else { Err("Shortcut error".to_string()) }
 }
 
 #[derive(Clone, PartialEq)]
@@ -366,8 +343,7 @@ impl Default for AppConfig {
 impl AppConfig {
     fn load() -> Self {
         if let Ok(exe) = std::env::current_exe() {
-            let path = exe.with_file_name("stick_config.json");
-            if let Ok(data) = std::fs::read_to_string(path) {
+            if let Ok(data) = std::fs::read_to_string(exe.with_file_name("stick_config.json")) {
                 if let Ok(parsed) = serde_json::from_str(&data) {
                     return parsed;
                 }
@@ -375,21 +351,17 @@ impl AppConfig {
         }
         Self::default()
     }
-
     fn save(&self) {
         if let Ok(exe) = std::env::current_exe() {
-            let path = exe.with_file_name("stick_config.json");
             if let Ok(json) = serde_json::to_string_pretty(self) {
-                let _ = std::fs::write(path, json);
+                let _ = std::fs::write(exe.with_file_name("stick_config.json"), json);
             }
         }
     }
 }
 
 fn is_shortcut_pressed(i: &egui::InputState, key_name: &str) -> bool {
-    if key_name.is_empty() {
-        return false;
-    }
+    if key_name.is_empty() { return false; }
     if key_name.eq_ignore_ascii_case("Shift") {
         return i.modifiers.shift && !i.modifiers.ctrl && !i.modifiers.alt && i.events.iter().any(|e| matches!(e, egui::Event::Key { pressed: true, .. }));
     }
@@ -409,13 +381,8 @@ fn generate_stick_window_icon() -> egui::IconData {
             let fy = y as f32 - 32.0;
             let u = (fx + fy) * 0.7071;
             let v = (-fx + fy) * 0.7071;
-
-            let half_len = 26.0;
-            let half_thick = 5.0;
-            let border = 1.6;
-
-            if u.abs() <= half_len && v.abs() <= half_thick {
-                if u.abs() >= (half_len - border) || v.abs() >= (half_thick - border) {
+            if u.abs() <= 26.0 && v.abs() <= 5.0 {
+                if u.abs() >= 24.4 || v.abs() >= 3.4 {
                     rgba[idx..idx + 4].copy_from_slice(&[15, 15, 18, 255]);
                 } else {
                     rgba[idx..idx + 4].copy_from_slice(&[255, 215, 25, 255]);
@@ -452,11 +419,7 @@ fn apply_stick_theme(ctx: &egui::Context) {
 
 fn draw_red_heart_icon(painter: &egui::Painter, rect: egui::Rect, hovered: bool) {
     let c = rect.center();
-    let red = if hovered {
-        egui::Color32::from_rgb(255, 75, 95)
-    } else {
-        egui::Color32::from_rgb(235, 35, 55)
-    };
+    let red = if hovered { egui::Color32::from_rgb(255, 75, 95) } else { egui::Color32::from_rgb(235, 35, 55) };
     let mut pts = Vec::with_capacity(40);
     for i in 0..40 {
         let t = (i as f32 / 40.0) * std::f32::consts::TAU;
@@ -469,14 +432,9 @@ fn draw_red_heart_icon(painter: &egui::Painter, rect: egui::Rect, hovered: bool)
 
 fn draw_undo_redo_arrow(painter: &egui::Painter, rect: egui::Rect, is_undo: bool, enabled: bool) {
     let c = rect.center();
-    let base_col = if is_undo {
-        egui::Color32::from_rgb(239, 68, 68)
-    } else {
-        egui::Color32::from_rgb(234, 179, 8)
-    };
+    let base_col = if is_undo { egui::Color32::from_rgb(239, 68, 68) } else { egui::Color32::from_rgb(234, 179, 8) };
     let col = if enabled { base_col } else { egui::Color32::from_gray(95) };
     let stroke = egui::Stroke::new(2.3, col);
-
     if is_undo {
         painter.line_segment([c + egui::vec2(-6.0, 0.0), c + egui::vec2(6.0, 0.0)], stroke);
         painter.line_segment([c + egui::vec2(-6.0, 0.0), c + egui::vec2(-1.0, -5.0)], stroke);
@@ -507,20 +465,13 @@ fn get_tool_ui_color(tool: ActiveToolUI) -> egui::Color32 {
 
 fn draw_tool_ui_icon(painter: &egui::Painter, rect: egui::Rect, tool: ActiveToolUI, active: bool) {
     let c = rect.center();
-    let accent = get_tool_ui_color(tool);
-    let main_color = if active { egui::Color32::WHITE } else { accent };
+    let main_color = if active { egui::Color32::WHITE } else { get_tool_ui_color(tool) };
     let stroke = egui::Stroke::new(2.0, main_color);
-
     match tool {
         ActiveToolUI::SelectNormal => {
             let pts = vec![
-                c + egui::vec2(-5.5, -8.5),
-                c + egui::vec2(-5.5, 7.5),
-                c + egui::vec2(-1.2, 3.8),
-                c + egui::vec2(2.5, 9.5),
-                c + egui::vec2(5.2, 8.0),
-                c + egui::vec2(1.5, 2.2),
-                c + egui::vec2(7.0, 2.2),
+                c + egui::vec2(-5.5, -8.5), c + egui::vec2(-5.5, 7.5), c + egui::vec2(-1.2, 3.8),
+                c + egui::vec2(2.5, 9.5), c + egui::vec2(5.2, 8.0), c + egui::vec2(1.5, 2.2), c + egui::vec2(7.0, 2.2),
             ];
             painter.add(egui::Shape::convex_polygon(pts, main_color, egui::Stroke::NONE));
         }
@@ -532,65 +483,30 @@ fn draw_tool_ui_icon(painter: &egui::Painter, rect: egui::Rect, tool: ActiveTool
             let sq = egui::Rect::from_center_size(c, egui::vec2(13.0, 13.0));
             painter.rect_stroke(sq, 1.0, stroke);
             painter.circle_filled(c, 2.2, main_color);
-            for corner in [sq.min, sq.max, egui::pos2(sq.max.x, sq.min.y), egui::pos2(sq.min.x, sq.max.y)] {
-                painter.rect_filled(egui::Rect::from_center_size(corner, egui::vec2(3.6, 3.6)), 0.0, main_color);
-            }
         }
         ActiveToolUI::VectorDirectSelect => {
-            let pts = vec![
-                c + egui::vec2(-4.5, -8.5),
-                c + egui::vec2(-4.5, 6.5),
-                c + egui::vec2(0.0, 3.0),
-                c + egui::vec2(5.5, 3.0),
-            ];
+            let pts = vec![c + egui::vec2(-4.5, -8.5), c + egui::vec2(-4.5, 6.5), c + egui::vec2(0.0, 3.0), c + egui::vec2(5.5, 3.0)];
             painter.add(egui::Shape::closed_line(pts, stroke));
             painter.circle_filled(c + egui::vec2(6.0, -5.0), 2.5, main_color);
         }
         ActiveToolUI::VectorPen => {
-            let pts = vec![
-                c + egui::vec2(0.0, -9.5),
-                c + egui::vec2(6.5, 1.0),
-                c + egui::vec2(3.5, 8.5),
-                c + egui::vec2(-3.5, 8.5),
-                c + egui::vec2(-6.5, 1.0),
-            ];
+            let pts = vec![c + egui::vec2(0.0, -9.5), c + egui::vec2(6.5, 1.0), c + egui::vec2(3.5, 8.5), c + egui::vec2(-3.5, 8.5), c + egui::vec2(-6.5, 1.0)];
             painter.add(egui::Shape::closed_line(pts, stroke));
             painter.circle_filled(c + egui::vec2(0.0, -0.5), 2.0, main_color);
-            painter.line_segment([c + egui::vec2(0.0, -9.5), c + egui::vec2(0.0, -2.5)], stroke);
         }
         ActiveToolUI::Brush => {
             painter.line_segment([c + egui::vec2(-1.5, 1.5), c + egui::vec2(7.5, -7.5)], egui::Stroke::new(3.2, main_color));
-            let tip = vec![
-                c + egui::vec2(-2.0, 2.0),
-                c + egui::vec2(-7.5, 3.5),
-                c + egui::vec2(-8.5, 8.5),
-                c + egui::vec2(-3.5, 7.5),
-            ];
+            let tip = vec![c + egui::vec2(-2.0, 2.0), c + egui::vec2(-7.5, 3.5), c + egui::vec2(-8.5, 8.5), c + egui::vec2(-3.5, 7.5)];
             painter.add(egui::Shape::convex_polygon(tip, main_color, egui::Stroke::NONE));
         }
         ActiveToolUI::EraserRed | ActiveToolUI::EraserGreen => {
-            let pts = vec![
-                c + egui::vec2(-7.5, 2.0),
-                c + egui::vec2(1.0, -6.5),
-                c + egui::vec2(7.5, 0.0),
-                c + egui::vec2(-1.0, 8.5),
-            ];
+            let pts = vec![c + egui::vec2(-7.5, 2.0), c + egui::vec2(1.0, -6.5), c + egui::vec2(7.5, 0.0), c + egui::vec2(-1.0, 8.5)];
             painter.add(egui::Shape::closed_line(pts, stroke));
-            let half = vec![
-                c + egui::vec2(-7.5, 2.0),
-                c + egui::vec2(-3.2, -2.2),
-                c + egui::vec2(3.2, 4.2),
-                c + egui::vec2(-1.0, 8.5),
-            ];
+            let half = vec![c + egui::vec2(-7.5, 2.0), c + egui::vec2(-3.2, -2.2), c + egui::vec2(3.2, 4.2), c + egui::vec2(-1.0, 8.5)];
             painter.add(egui::Shape::convex_polygon(half, main_color, egui::Stroke::NONE));
         }
         ActiveToolUI::Bucket => {
-            let pts = vec![
-                c + egui::vec2(-6.5, 0.0),
-                c + egui::vec2(0.0, -6.5),
-                c + egui::vec2(6.5, 0.0),
-                c + egui::vec2(0.0, 6.5),
-            ];
+            let pts = vec![c + egui::vec2(-6.5, 0.0), c + egui::vec2(0.0, -6.5), c + egui::vec2(6.5, 0.0), c + egui::vec2(0.0, 6.5)];
             painter.add(egui::Shape::closed_line(pts, stroke));
             painter.circle_filled(c + egui::vec2(7.5, 4.5), 2.6, main_color);
         }
@@ -612,7 +528,6 @@ fn draw_tool_ui_icon(painter: &egui::Painter, rect: egui::Rect, tool: ActiveTool
             for dx in [-4.0, -1.3, 1.3, 4.0] {
                 painter.line_segment([c + egui::vec2(dx, -1.0), c + egui::vec2(dx, -7.5)], egui::Stroke::new(2.0, main_color));
             }
-            painter.line_segment([c + egui::vec2(-5.0, 2.0), c + egui::vec2(-8.0, -1.0)], egui::Stroke::new(2.0, main_color));
         }
     }
 }
@@ -624,54 +539,35 @@ fn draw_gear_icon(painter: &egui::Painter, rect: egui::Rect, scale: f32) {
     painter.circle_filled(c, 2.0 * scale, color);
     for i in 0..8 {
         let angle = (i as f32) * std::f32::consts::FRAC_PI_4;
-        let p1 = c + egui::vec2(angle.cos() * 5.5 * scale, angle.sin() * 5.5 * scale);
-        let p2 = c + egui::vec2(angle.cos() * 8.2 * scale, angle.sin() * 8.2 * scale);
-        painter.line_segment([p1, p2], egui::Stroke::new(2.0 * scale, color));
+        painter.line_segment(
+            [c + egui::vec2(angle.cos() * 5.5 * scale, angle.sin() * 5.5 * scale), c + egui::vec2(angle.cos() * 8.2 * scale, angle.sin() * 8.2 * scale)],
+            egui::Stroke::new(2.0 * scale, color),
+        );
     }
 }
 
-/// رسم خلية الفريم على طراز AniCraft (Keyframe ممتلئ / مفرغ / Span ممتد / سهم Tween)
-fn draw_anicraft_timeline_cell(
-    painter: &egui::Painter,
-    rect: egui::Rect,
-    is_keyframe: bool,
-    has_content: bool,
-    tween_mode: TweenMode,
-) {
+fn draw_anicraft_timeline_cell(painter: &egui::Painter, rect: egui::Rect, is_keyframe: bool, has_content: bool, tween_mode: TweenMode) {
     let c = rect.center();
     match tween_mode {
         TweenMode::Classic => {
             painter.rect_filled(rect.shrink(1.0), 2.0, egui::Color32::from_rgba_unmultiplied(124, 58, 237, 150));
-            painter.line_segment(
-                [egui::pos2(rect.left() + 2.0, c.y), egui::pos2(rect.right() - 2.0, c.y)],
-                egui::Stroke::new(1.5, egui::Color32::from_rgb(221, 214, 254)),
-            );
+            painter.line_segment([egui::pos2(rect.left() + 2.0, c.y), egui::pos2(rect.right() - 2.0, c.y)], egui::Stroke::new(1.5, egui::Color32::from_rgb(221, 214, 254)));
         }
         TweenMode::Shape => {
             painter.rect_filled(rect.shrink(1.0), 2.0, egui::Color32::from_rgba_unmultiplied(5, 150, 105, 150));
-            painter.line_segment(
-                [egui::pos2(rect.left() + 2.0, c.y), egui::pos2(rect.right() - 2.0, c.y)],
-                egui::Stroke::new(1.5, egui::Color32::from_rgb(167, 243, 208)),
-            );
+            painter.line_segment([egui::pos2(rect.left() + 2.0, c.y), egui::pos2(rect.right() - 2.0, c.y)], egui::Stroke::new(1.5, egui::Color32::from_rgb(167, 243, 208)));
         }
         TweenMode::None => {}
     }
-
     if is_keyframe {
         if has_content {
-            // Keyframe ممتلئ: دائرة سوداء بإطار أبيض مثل AniCraft و Adobe Animate
             painter.circle_filled(c, 4.5, egui::Color32::from_rgb(15, 15, 20));
             painter.circle_stroke(c, 4.8, egui::Stroke::new(1.1, egui::Color32::WHITE));
         } else {
-            // Blank Keyframe: دائرة بيضاء مفرغة
             painter.circle_stroke(c, 4.4, egui::Stroke::new(1.3, egui::Color32::from_gray(225)));
         }
     } else if has_content && tween_mode == TweenMode::None {
-        // Span ممتد: خط أفقي خفيف يدل على استمرار الكي فريم السابق
-        painter.line_segment(
-            [egui::pos2(rect.left() + 2.0, c.y), egui::pos2(rect.right() - 2.0, c.y)],
-            egui::Stroke::new(1.0, egui::Color32::from_gray(130)),
-        );
+        painter.line_segment([egui::pos2(rect.left() + 2.0, c.y), egui::pos2(rect.right() - 2.0, c.y)], egui::Stroke::new(1.0, egui::Color32::from_gray(130)));
     }
 }
 
@@ -684,17 +580,12 @@ struct HistorySnapshot {
 }
 
 fn point_in_polygon(pt: egui::Pos2, poly: &[egui::Pos2]) -> bool {
-    if poly.len() < 3 {
-        return false;
-    }
+    if poly.len() < 3 { return false; }
     let mut inside = false;
     let mut j = poly.len() - 1;
     for i in 0..poly.len() {
-        let pi = poly[i];
-        let pj = poly[j];
-        if ((pi.y > pt.y) != (pj.y > pt.y))
-            && (pt.x < (pj.x - pi.x) * (pt.y - pi.y) / ((pj.y - pi.y) + 1e-6) + pi.x)
-        {
+        let (pi, pj) = (poly[i], poly[j]);
+        if ((pi.y > pt.y) != (pj.y > pt.y)) && (pt.x < (pj.x - pi.x) * (pt.y - pi.y) / ((pj.y - pi.y) + 1e-6) + pi.x) {
             inside = !inside;
         }
         j = i;
@@ -706,16 +597,14 @@ fn erase_partial_from_strokes(strokes: &mut Vec<Stroke>, center: egui::Pos2, rad
     let mut new_strokes = Vec::with_capacity(strokes.len());
     for s in strokes.drain(..) {
         if s.points.len() == 1 {
-            let p = &s.points[0];
-            if ((p.x - center.x).powi(2) + (p.y - center.y).powi(2)).sqrt() >= radius {
+            if ((s.points[0].x - center.x).powi(2) + (s.points[0].y - center.y).powi(2)).sqrt() >= radius {
                 new_strokes.push(s);
             }
             continue;
         }
         let mut current_seg: Vec<StrokePoint> = Vec::new();
         for p in s.points {
-            let dist = ((p.x - center.x).powi(2) + (p.y - center.y).powi(2)).sqrt();
-            if dist >= radius {
+            if ((p.x - center.x).powi(2) + (p.y - center.y).powi(2)).sqrt() >= radius {
                 current_seg.push(p);
             } else if current_seg.len() >= 2 {
                 new_strokes.push(Stroke {
@@ -748,13 +637,7 @@ fn erase_partial_from_strokes(strokes: &mut Vec<Stroke>, center: egui::Pos2, rad
     *strokes = new_strokes;
 }
 
-fn build_geometric_stroke(
-    kind: GeometricShapeKind,
-    p0: egui::Pos2,
-    p1: egui::Pos2,
-    color: [u8; 4],
-    width: f32,
-) -> Stroke {
+fn build_geometric_stroke(kind: GeometricShapeKind, p0: egui::Pos2, p1: egui::Pos2, color: [u8; 4], width: f32) -> Stroke {
     let mut pts = Vec::new();
     match kind {
         GeometricShapeKind::StraightLine => {
@@ -764,42 +647,21 @@ fn build_geometric_stroke(
         GeometricShapeKind::Circle => {
             let center = p0.lerp(p1, 0.5);
             let r = (p1 - p0).length() * 0.5;
-            let segments = 36;
-            for i in 0..=segments {
-                let ang = (i as f32 / segments as f32) * std::f32::consts::TAU;
-                pts.push(StrokePoint {
-                    x: center.x + ang.cos() * r,
-                    y: center.y + ang.sin() * r,
-                    pressure: 1.0,
-                });
+            for i in 0..=36 {
+                let ang = (i as f32 / 36.0) * std::f32::consts::TAU;
+                pts.push(StrokePoint { x: center.x + ang.cos() * r, y: center.y + ang.sin() * r, pressure: 1.0 });
             }
         }
         GeometricShapeKind::Square => {
-            let dx = p1.x - p0.x;
-            let dy = p1.y - p0.y;
+            let (dx, dy) = (p1.x - p0.x, p1.y - p0.y);
             let side = dx.abs().max(dy.abs());
-            let sx = p0.x + side * dx.signum();
-            let sy = p0.y + side * dy.signum();
-            let corners = [
-                egui::pos2(p0.x, p0.y),
-                egui::pos2(sx, p0.y),
-                egui::pos2(sx, sy),
-                egui::pos2(p0.x, sy),
-                egui::pos2(p0.x, p0.y),
-            ];
-            for c in corners {
+            let (sx, sy) = (p0.x + side * dx.signum(), p0.y + side * dy.signum());
+            for c in [egui::pos2(p0.x, p0.y), egui::pos2(sx, p0.y), egui::pos2(sx, sy), egui::pos2(p0.x, sy), egui::pos2(p0.x, p0.y)] {
                 pts.push(StrokePoint { x: c.x, y: c.y, pressure: 1.0 });
             }
         }
         GeometricShapeKind::Rectangle => {
-            let corners = [
-                egui::pos2(p0.x, p0.y),
-                egui::pos2(p1.x, p0.y),
-                egui::pos2(p1.x, p1.y),
-                egui::pos2(p0.x, p1.y),
-                egui::pos2(p0.x, p0.y),
-            ];
-            for c in corners {
+            for c in [egui::pos2(p0.x, p0.y), egui::pos2(p1.x, p0.y), egui::pos2(p1.x, p1.y), egui::pos2(p0.x, p1.y), egui::pos2(p0.x, p0.y)] {
                 pts.push(StrokePoint { x: c.x, y: c.y, pressure: 1.0 });
             }
         }
@@ -840,6 +702,7 @@ struct StickApp {
     selected_shape_kind: GeometricShapeKind,
     symmetry_mode: SymmetryMode,
     stabilizer_strength: f32,
+    stabilized_cursor: Option<egui::Pos2>,
     shape_drag_start: Option<egui::Pos2>,
     shape_drag_current: Option<egui::Pos2>,
     editing_vector_node: Option<(usize, usize)>,
@@ -903,7 +766,6 @@ struct StickApp {
     allow_close: bool,
     current_stroke: Option<Stroke>,
     texture_cache: HashMap<String, egui::TextureHandle>,
-    saved_path: Option<PathBuf>,
     status_message: String,
     audio_sink: Option<(OutputStream, Sink)>,
     last_pointer_pos: Option<egui::Pos2>,
@@ -922,23 +784,12 @@ impl StickApp {
         if let Some(ref path) = profile.avatar_path {
             if let Ok(img) = image::open(path) {
                 let rgba = img.to_rgba8();
-                let color_image = egui::ColorImage::from_rgba_unmultiplied(
-                    [rgba.width() as usize, rgba.height() as usize],
-                    rgba.as_raw(),
-                );
+                let color_image = egui::ColorImage::from_rgba_unmultiplied([rgba.width() as usize, rgba.height() as usize], rgba.as_raw());
                 avatar_tex = Some(cc.egui_ctx.load_texture("user_avatar", color_image, egui::TextureOptions::LINEAR));
             }
         }
-
-        let default_install_path = std::env::var("LOCALAPPDATA")
-            .map(|p| format!("{}\\StickStudio", p))
-            .unwrap_or_else(|_| "C:\\StickStudio".to_string());
-
-        let initial_mode = if is_running_from_installed_dir() {
-            WorkspaceMode::Launcher
-        } else {
-            WorkspaceMode::InstallerSetup
-        };
+        let default_install_path = std::env::var("LOCALAPPDATA").map(|p| format!("{}\\StickStudio", p)).unwrap_or_else(|_| "C:\\StickStudio".to_string());
+        let initial_mode = if is_running_from_installed_dir() { WorkspaceMode::Launcher } else { WorkspaceMode::InstallerSetup };
 
         Self {
             workspace_mode: initial_mode,
@@ -963,7 +814,8 @@ impl StickApp {
             brush_opacity: 1.0,
             selected_shape_kind: GeometricShapeKind::StraightLine,
             symmetry_mode: SymmetryMode::Off,
-            stabilizer_strength: 0.40,
+            stabilizer_strength: 0.30,
+            stabilized_cursor: None,
             shape_drag_start: None,
             shape_drag_current: None,
             editing_vector_node: None,
@@ -1027,13 +879,16 @@ impl StickApp {
             allow_close: false,
             current_stroke: None,
             texture_cache: HashMap::new(),
-            saved_path: None,
             status_message: "Stick Studio Ready".to_string(),
             audio_sink: None,
             last_pointer_pos: None,
             last_stage_cursor: egui::Pos2::ZERO,
             right_tab: 0,
         }
+    }
+
+    fn is_active_layer_locked(&self) -> bool {
+        self.project.layers.get(self.active_layer_idx).map(|l| l.locked).unwrap_or(false)
     }
 
     fn perform_full_installation(&mut self) {
@@ -1054,7 +909,6 @@ impl StickApp {
         let _ = std::fs::write(target_dir.join("stick_installed.marker"), "installed");
         let _ = std::fs::write(target_dir.join("version.txt"), FALLBACK_VERSION);
         let _ = create_desktop_shortcut(&target_exe);
-
         self.play_sfx(SfxType::LevelUpFanfare);
         self.workspace_mode = WorkspaceMode::Launcher;
         self.status_message = "تم التسطيب وإنشاء اختصار Stick على سطح المكتب!".to_string();
@@ -1067,10 +921,7 @@ impl StickApp {
         let bg = self.stage_bg_color;
         let sfx_ok = self.config.sound_effects_enabled;
         let state_arc = Arc::clone(&self.export_task_state);
-
-        *state_arc.lock().unwrap() = ExportTaskState::Running(
-            "جاري تصدير الفريمات بالتوازي فائق السرعة...".to_string(),
-        );
+        *state_arc.lock().unwrap() = ExportTaskState::Running("جاري تصدير الفريمات بالتوازي فائق السرعة...".to_string());
 
         std::thread::spawn(move || {
             let res = exporter::export_video_multi_format(&proj_clone, &output_path, fmt, bg);
@@ -1078,22 +929,15 @@ impl StickApp {
             match res {
                 Ok(_) => {
                     play_sfx_async(sfx_ok, SfxType::ExportSuccess, false);
-                    *st = ExportTaskState::Done(format!(
-                        "تم التصدير بنجاح بصيغة .{}!",
-                        fmt.ext().to_uppercase()
-                    ));
+                    *st = ExportTaskState::Done(format!("تم التصدير بنجاح بصيغة .{}!", fmt.ext().to_uppercase()));
                 }
-                Err(err) => {
-                    *st = ExportTaskState::Failed(err);
-                }
+                Err(err) => *st = ExportTaskState::Failed(err),
             }
             ctx.request_repaint();
         });
     }
 
-    fn play_sfx(&self, sfx: SfxType) {
-        play_sfx_async(self.config.sound_effects_enabled, sfx, false);
-    }
+    fn play_sfx(&self, sfx: SfxType) { play_sfx_async(self.config.sound_effects_enabled, sfx, false); }
 
     fn grant_xp(&mut self, amount: u64, now_time: f64) {
         if self.user_profile.add_xp_check_levelup(amount) {
@@ -1135,9 +979,7 @@ impl StickApp {
     }
 
     fn save_undo_state(&mut self) {
-        if self.undo_stack.len() > 60 {
-            self.undo_stack.remove(0);
-        }
+        if self.undo_stack.len() > 60 { self.undo_stack.remove(0); }
         self.undo_stack.push(self.take_snapshot());
         self.redo_stack.clear();
     }
@@ -1184,41 +1026,30 @@ impl StickApp {
             if let Some(sym) = self.project.library_symbols.get_mut(sym_name) {
                 let kf_strokes = sym.nested_keyframes.entry(self.current_frame).or_insert_with(|| sym.strokes.clone());
                 kf_strokes.push(stroke.clone());
-                if self.current_frame == 1 {
-                    sym.strokes = kf_strokes.clone();
-                }
+                if self.current_frame == 1 { sym.strokes = kf_strokes.clone(); }
                 self.has_unsaved_changes = true;
                 self.record_frame_drawn_activity(now_time);
                 return;
             }
         }
-
-        let stage_w = self.project.width as f32;
-        let stage_h = self.project.height as f32;
+        let (stage_w, stage_h) = (self.project.width as f32, self.project.height as f32);
         let mut strokes_to_add = vec![stroke.clone()];
-
         match self.symmetry_mode {
             SymmetryMode::Horizontal => {
-                let mut mirrored = stroke;
-                for p in &mut mirrored.points {
-                    p.x = stage_w - p.x;
-                }
-                strokes_to_add.push(mirrored);
+                let mut m = stroke;
+                for p in &mut m.points { p.x = stage_w - p.x; }
+                strokes_to_add.push(m);
             }
             SymmetryMode::Vertical => {
-                let mut mirrored = stroke;
-                for p in &mut mirrored.points {
-                    p.y = stage_h - p.y;
-                }
-                strokes_to_add.push(mirrored);
+                let mut m = stroke;
+                for p in &mut m.points { p.y = stage_h - p.y; }
+                strokes_to_add.push(m);
             }
             SymmetryMode::Off => {}
         }
-
         self.ensure_editable_keyframe();
         if let Some(layer) = self.project.layers.get_mut(self.active_layer_idx) {
-            let fd = layer.keyframes.entry(self.current_frame).or_default();
-            fd.strokes.extend(strokes_to_add);
+            layer.keyframes.entry(self.current_frame).or_default().strokes.extend(strokes_to_add);
             self.has_unsaved_changes = true;
             self.record_frame_drawn_activity(now_time);
         }
@@ -1231,7 +1062,6 @@ impl StickApp {
                 let mut min_p = egui::pos2(f32::MAX, f32::MAX);
                 let mut max_p = egui::pos2(f32::MIN, f32::MIN);
                 let mut has_any = false;
-
                 for &idx in &self.selected_stroke_indices {
                     if let Some(s) = frame.strokes.get(idx) {
                         for p in &s.points {
@@ -1241,28 +1071,9 @@ impl StickApp {
                         }
                     }
                 }
-                if let Some(t_idx) = self.selected_text_idx {
-                    if let Some(txt) = frame.text_items.get(t_idx) {
-                        min_p = min_p.min(egui::pos2(txt.x, txt.y));
-                        max_p = max_p.max(egui::pos2(txt.x + 80.0, txt.y + txt.font_size));
-                        has_any = true;
-                    }
-                }
-                if let Some(s_idx) = self.selected_symbol_inst_idx {
-                    if let Some(inst) = frame.symbol_instances.get(s_idx) {
-                        min_p = min_p.min(egui::pos2(inst.x, inst.y));
-                        max_p = max_p.max(egui::pos2(inst.x + 50.0, inst.y + 50.0));
-                        has_any = true;
-                    }
-                }
-                if !has_any {
-                    return;
-                }
-
+                if !has_any { return; }
                 let pivot = min_p.lerp(max_p, 0.5) + self.custom_anchor_offset;
-                let rad = delta_angle_deg.to_radians();
-                let (sin_a, cos_a) = rad.sin_cos();
-
+                let (sin_a, cos_a) = delta_angle_deg.to_radians().sin_cos();
                 for &idx in &self.selected_stroke_indices {
                     if let Some(s) = frame.strokes.get_mut(idx) {
                         for p in &mut s.points {
@@ -1270,28 +1081,9 @@ impl StickApp {
                             let mut dy = (p.y - pivot.y) * scale_factor;
                             if flip_h { dx = -dx; }
                             if flip_v { dy = -dy; }
-                            let rx = dx * cos_a - dy * sin_a;
-                            let ry = dx * sin_a + dy * cos_a;
-                            p.x = pivot.x + rx;
-                            p.y = pivot.y + ry;
+                            p.x = pivot.x + (dx * cos_a - dy * sin_a);
+                            p.y = pivot.y + (dx * sin_a + dy * cos_a);
                         }
-                    }
-                }
-                if let Some(t_idx) = self.selected_text_idx {
-                    if let Some(txt) = frame.text_items.get_mut(t_idx) {
-                        let dx = (txt.x - pivot.x) * scale_factor;
-                        let dy = (txt.y - pivot.y) * scale_factor;
-                        txt.x = pivot.x + dx;
-                        txt.y = pivot.y + dy;
-                        txt.font_size = (txt.font_size * scale_factor).clamp(8.0, 260.0);
-                    }
-                }
-                if let Some(s_idx) = self.selected_symbol_inst_idx {
-                    if let Some(inst) = frame.symbol_instances.get_mut(s_idx) {
-                        inst.scale = (inst.scale * scale_factor).clamp(0.1, 10.0);
-                        inst.rotation_deg = (inst.rotation_deg + delta_angle_deg) % 360.0;
-                        inst.anchor_offset_x = self.custom_anchor_offset.x;
-                        inst.anchor_offset_y = self.custom_anchor_offset.y;
                     }
                 }
                 self.has_unsaved_changes = true;
@@ -1306,7 +1098,6 @@ impl StickApp {
         self.current_frame = self.timeline_length;
         self.has_unsaved_changes = true;
         self.play_sfx(SfxType::NewFrame);
-        self.status_message = format!("{} -> {}f", tr(self.config.lang, "Frame Extended", "تم تمديد الفريم"), self.timeline_length);
     }
 
     fn action_insert_keyframe_f6(&mut self, now_time: f64) {
@@ -1326,7 +1117,6 @@ impl StickApp {
         self.has_unsaved_changes = true;
         self.play_sfx(SfxType::NewFrame);
         self.record_frame_drawn_activity(now_time);
-        self.status_message = format!("{} ({})", tr(self.config.lang, "Keyframe Copied", "تم نسخ الفريم"), next_f);
     }
 
     fn action_insert_blank_keyframe_f7(&mut self, now_time: f64) {
@@ -1343,15 +1133,12 @@ impl StickApp {
         self.has_unsaved_changes = true;
         self.play_sfx(SfxType::NewFrame);
         self.record_frame_drawn_activity(now_time);
-        self.status_message = format!("{} ({})", tr(self.config.lang, "New Blank Keyframe", "فريم فارغ جديد"), next_f);
     }
 
     fn copy_frame(&mut self, layer_idx: usize, frame_idx: usize) {
         if let Some(layer) = self.project.layers.get(layer_idx) {
-            let data = Self::get_effective_frame_data(layer, frame_idx).cloned().unwrap_or_default();
-            self.clipboard_frame = Some(data);
+            self.clipboard_frame = Some(Self::get_effective_frame_data(layer, frame_idx).cloned().unwrap_or_default());
             self.play_sfx(SfxType::UiClick);
-            self.status_message = format!("{} ({})", tr(self.config.lang, "Copied Frame", "تم نسخ الفريم"), frame_idx);
         }
     }
 
@@ -1362,7 +1149,6 @@ impl StickApp {
                 layer.keyframes.insert(frame_idx, clip);
                 self.has_unsaved_changes = true;
                 self.play_sfx(SfxType::NewFrame);
-                self.status_message = format!("{} ({})", tr(self.config.lang, "Pasted to Frame", "تم اللصق في الفريم"), frame_idx);
             }
         }
     }
@@ -1373,7 +1159,6 @@ impl StickApp {
             layer.keyframes.insert(frame_idx, FrameData::default());
             self.has_unsaved_changes = true;
             self.play_sfx(SfxType::EraserRub);
-            self.status_message = format!("{} ({})", tr(self.config.lang, "Frame Cleared", "تم تفريغ الفريم"), frame_idx);
         }
     }
 
@@ -1382,54 +1167,35 @@ impl StickApp {
         if let Some(layer) = self.project.layers.get_mut(layer_idx) {
             let mut updated = HashMap::new();
             for (&k, v) in &layer.keyframes {
-                if k < frame_idx {
-                    updated.insert(k, v.clone());
-                } else if k > frame_idx {
-                    updated.insert(k - 1, v.clone());
-                }
+                if k < frame_idx { updated.insert(k, v.clone()); }
+                else if k > frame_idx { updated.insert(k - 1, v.clone()); }
             }
-            if updated.is_empty() {
-                updated.insert(1, FrameData::default());
-            }
+            if updated.is_empty() { updated.insert(1, FrameData::default()); }
             layer.keyframes = updated;
         }
-
         if self.timeline_length > 1 {
             self.timeline_length -= 1;
             self.project.total_frames = self.timeline_length;
         }
-        if self.current_frame > self.timeline_length {
-            self.current_frame = self.timeline_length;
-        }
-
+        if self.current_frame > self.timeline_length { self.current_frame = self.timeline_length; }
         self.has_unsaved_changes = true;
         self.play_sfx(SfxType::EraserRub);
-        self.status_message = format!("{} ({})", tr(self.config.lang, "Frame Deleted", "تم حذف الفريم نهائياً"), frame_idx);
     }
 
     fn trigger_audio_stream_scrub(&mut self) {
-        if self.is_playing {
-            return;
-        }
+        if self.is_playing { return; }
         let fps = self.project.fps.max(1) as f64;
         for track in &self.project.audio_tracks {
-            if track.sync_mode == AudioSyncMode::Stream
-                && self.current_frame >= track.start_frame
-                && self.current_frame <= track.end_frame
-            {
-                let offset_frames = (self.current_frame - track.start_frame) as f64;
-                let seek_secs = offset_frames / fps;
+            if track.sync_mode == AudioSyncMode::Stream && self.current_frame >= track.start_frame && self.current_frame <= track.end_frame {
+                let seek_secs = (self.current_frame - track.start_frame) as f64 / fps;
                 let path = track.file_path.clone();
                 let frame_dur_ms = (1000.0 / fps).clamp(40.0, 120.0) as u64;
                 std::thread::spawn(move || {
-                    if let Ok((_stream, handle)) = OutputStream::try_default() {
-                        if let Ok(sink) = Sink::try_new(&handle) {
+                    if let Ok((_s, h)) = OutputStream::try_default() {
+                        if let Ok(sink) = Sink::try_new(&h) {
                             if let Ok(file) = File::open(&path) {
-                                if let Ok(source) = Decoder::new(BufReader::new(file)) {
-                                    let skipped = source
-                                        .skip_duration(Duration::from_secs_f64(seek_secs))
-                                        .take_duration(Duration::from_millis(frame_dur_ms));
-                                    sink.append(skipped);
+                                if let Ok(src) = Decoder::new(BufReader::new(file)) {
+                                    sink.append(src.skip_duration(Duration::from_secs_f64(seek_secs)).take_duration(Duration::from_millis(frame_dur_ms)));
                                     sink.sleep_until_end();
                                 }
                             }
@@ -1443,20 +1209,15 @@ impl StickApp {
 
     fn start_audio_playback(&mut self) {
         if let Some(track) = self.project.audio_tracks.first() {
-            if self.current_frame > track.end_frame {
-                return;
-            }
+            if self.current_frame > track.end_frame { return; }
             let fps = self.project.fps.max(1) as f64;
             let start_offset = self.current_frame.saturating_sub(track.start_frame) as f64 / fps;
             let max_dur = (track.end_frame.saturating_sub(self.current_frame) + 1) as f64 / fps;
             if let Ok((stream, handle)) = OutputStream::try_default() {
                 if let Ok(sink) = Sink::try_new(&handle) {
                     if let Ok(file) = File::open(&track.file_path) {
-                        if let Ok(source) = Decoder::new(BufReader::new(file)) {
-                            let clipped = source
-                                .skip_duration(Duration::from_secs_f64(start_offset))
-                                .take_duration(Duration::from_secs_f64(max_dur.max(0.1)));
-                            sink.append(clipped);
+                        if let Ok(src) = Decoder::new(BufReader::new(file)) {
+                            sink.append(src.skip_duration(Duration::from_secs_f64(start_offset)).take_duration(Duration::from_secs_f64(max_dur.max(0.1))));
                             self.audio_sink = Some((stream, sink));
                         }
                     }
@@ -1466,189 +1227,101 @@ impl StickApp {
     }
 
     fn stop_audio_playback(&mut self) {
-        if let Some((_, sink)) = self.audio_sink.take() {
-            sink.stop();
-        }
+        if let Some((_, sink)) = self.audio_sink.take() { sink.stop(); }
     }
 
     fn trigger_save(&mut self) -> bool {
         self.project.total_frames = self.timeline_length;
-        if let Some(mut path) = rfd::FileDialog::new()
-            .add_filter("Stick Project", &["stick", "ah2d"])
-            .set_file_name("project.stick")
-            .save_file()
-        {
-            if path.extension().is_none() {
-                path.set_extension("stick");
-            }
-            match self.project.save_to_file(&path) {
-                Ok(_) => {
-                    self.saved_path = Some(path);
-                    self.has_unsaved_changes = false;
-                    self.play_sfx(SfxType::NewFrame);
-                    self.status_message = tr(self.config.lang, "Project Saved!", "تم حفظ المشروع بالكامل!");
-                    return true;
-                }
-                Err(e) => {
-                    self.status_message = e;
-                }
+        if let Some(mut path) = rfd::FileDialog::new().add_filter("Stick Project", &["stick", "ah2d"]).set_file_name("project.stick").save_file() {
+            if path.extension().is_none() { path.set_extension("stick"); }
+            if self.project.save_to_file(&path).is_ok() {
+                self.saved_path = Some(path);
+                self.has_unsaved_changes = false;
+                self.play_sfx(SfxType::NewFrame);
+                self.status_message = tr(self.config.lang, "Project Saved!", "تم حفظ المشروع بالكامل!");
+                return true;
             }
         }
         false
     }
 
     fn import_image_dialog(&mut self) {
-        if let Some(path) = rfd::FileDialog::new()
-            .add_filter("Images", &["png", "jpg", "jpeg", "webp", "bmp", "tiff"])
-            .pick_file()
-        {
+        if let Some(path) = rfd::FileDialog::new().add_filter("Images", &["png", "jpg", "jpeg", "webp", "bmp"]).pick_file() {
             self.save_undo_state();
             let img_name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
             let mut kf = HashMap::new();
             let mut fd = FrameData::default();
-            fd.media_items.push(MediaItem {
-                path: path.to_string_lossy().to_string(),
-                media_type: MediaType::Image,
-                x: 100.0,
-                y: 50.0,
-                width: 400.0,
-                height: 300.0,
-            });
+            fd.media_items.push(MediaItem { path: path.to_string_lossy().to_string(), media_type: MediaType::Image, x: 100.0, y: 50.0, width: 400.0, height: 300.0 });
             kf.insert(self.current_frame, fd);
-            self.project.layers.insert(
-                0,
-                Layer {
-                    name: format!("Img_{}", img_name),
-                    visible: true,
-                    locked: false,
-                    is_guide: false,
-                    keyframes: kf,
-                },
-            );
+            self.project.layers.insert(0, Layer { name: format!("Img_{}", img_name), visible: true, locked: false, is_guide: false, opacity: 1.0, keyframes: kf });
             self.active_layer_idx = 0;
             self.has_unsaved_changes = true;
             self.play_sfx(SfxType::NewFrame);
-            self.status_message = tr(self.config.lang, "Image Layer Added", "تم إضافة طبقة للصورة");
         }
     }
 
     fn import_svg_dialog(&mut self) {
-        if let Some(path) = rfd::FileDialog::new()
-            .add_filter("SVG Vector Graphic", &["svg"])
-            .pick_file()
-        {
-            match project::parse_svg_to_strokes(&path) {
-                Ok(strokes) => {
-                    self.save_undo_state();
-                    self.ensure_editable_keyframe();
-                    let count = strokes.len();
-                    if let Some(layer) = self.project.layers.get_mut(self.active_layer_idx) {
-                        layer.keyframes.entry(self.current_frame).or_default().strokes.extend(strokes);
-                        self.has_unsaved_changes = true;
-                        self.play_sfx(SfxType::NewFrame);
-                        self.status_message = format!("SVG Imported: {} vector paths", count);
-                    }
+        if let Some(path) = rfd::FileDialog::new().add_filter("SVG", &["svg"]).pick_file() {
+            if let Ok(strokes) = project::parse_svg_to_strokes(&path) {
+                self.save_undo_state();
+                self.ensure_editable_keyframe();
+                if let Some(layer) = self.project.layers.get_mut(self.active_layer_idx) {
+                    layer.keyframes.entry(self.current_frame).or_default().strokes.extend(strokes);
+                    self.has_unsaved_changes = true;
+                    self.play_sfx(SfxType::NewFrame);
                 }
-                Err(e) => self.status_message = e,
             }
         }
     }
 
     fn import_animate_dialog(&mut self) {
-        if let Some(path) = rfd::FileDialog::new()
-            .add_filter("Adobe Animate Project", &["xfl", "fla"])
-            .pick_file()
-        {
-            match project::import_adobe_animate_project(&path) {
-                Ok(proj) => {
-                    self.save_undo_state();
-                    self.timeline_length = proj.total_frames.max(1);
-                    self.current_frame = 1;
-                    self.active_layer_idx = 0;
-                    self.project = proj;
-                    self.has_unsaved_changes = true;
-                    self.play_sfx(SfxType::NewFrame);
-                    self.status_message = tr(self.config.lang, "Adobe Animate Imported!", "تم استيراد مشروع Adobe Animate!");
-                }
-                Err(e) => self.status_message = e,
+        if let Some(path) = rfd::FileDialog::new().add_filter("Adobe Animate", &["xfl", "fla"]).pick_file() {
+            if let Ok(proj) = project::import_adobe_animate_project(&path) {
+                self.save_undo_state();
+                self.timeline_length = proj.total_frames.max(1);
+                self.current_frame = 1;
+                self.active_layer_idx = 0;
+                self.project = proj;
+                self.has_unsaved_changes = true;
+                self.play_sfx(SfxType::NewFrame);
             }
         }
     }
 
     fn import_video_dialog(&mut self) {
-        if let Some(path) = rfd::FileDialog::new()
-            .add_filter("Videos", &["mp4", "mov", "avi", "mkv", "webm"])
-            .pick_file()
-        {
-            self.status_message = tr(self.config.lang, "Extracting video frames...", "جاري استخراج فريمات الفيديو...");
-            match exporter::extract_video_frames(&path, self.project.fps) {
-                Ok(frames) => {
-                    self.save_undo_state();
-                    let needed_len = self.current_frame + frames.len().saturating_sub(1);
-                    if needed_len > self.timeline_length {
-                        self.timeline_length = needed_len;
-                        self.project.total_frames = needed_len;
-                    }
-                    let vid_name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
-                    let mut kf = HashMap::new();
-                    for (i, f_path) in frames.iter().enumerate() {
-                        let f_idx = self.current_frame + i;
-                        let mut fd = FrameData::default();
-                        fd.media_items.push(MediaItem {
-                            path: f_path.to_string_lossy().to_string(),
-                            media_type: MediaType::VideoFrame,
-                            x: 0.0,
-                            y: 0.0,
-                            width: self.project.width as f32,
-                            height: self.project.height as f32,
-                        });
-                        kf.insert(f_idx, fd);
-                    }
-                    self.project.layers.insert(
-                        0,
-                        Layer {
-                            name: format!("Vid_{}", vid_name),
-                            visible: true,
-                            locked: false,
-                            is_guide: false,
-                            keyframes: kf,
-                        },
-                    );
-                    self.active_layer_idx = 0;
-                    self.has_unsaved_changes = true;
-                    self.play_sfx(SfxType::NewFrame);
-                    self.status_message = format!("Video Layer: {} frames", frames.len());
+        if let Some(path) = rfd::FileDialog::new().add_filter("Videos", &["mp4", "mov", "avi", "mkv", "webm"]).pick_file() {
+            if let Ok(frames) = exporter::extract_video_frames(&path, self.project.fps) {
+                self.save_undo_state();
+                let needed_len = self.current_frame + frames.len().saturating_sub(1);
+                if needed_len > self.timeline_length {
+                    self.timeline_length = needed_len;
+                    self.project.total_frames = needed_len;
                 }
-                Err(e) => self.status_message = e,
+                let mut kf = HashMap::new();
+                for (i, f_path) in frames.iter().enumerate() {
+                    let mut fd = FrameData::default();
+                    fd.media_items.push(MediaItem { path: f_path.to_string_lossy().to_string(), media_type: MediaType::VideoFrame, x: 0.0, y: 0.0, width: self.project.width as f32, height: self.project.height as f32 });
+                    kf.insert(self.current_frame + i, fd);
+                }
+                self.project.layers.insert(0, Layer { name: "Video_Layer".to_string(), visible: true, locked: false, is_guide: false, opacity: 1.0, keyframes: kf });
+                self.active_layer_idx = 0;
+                self.has_unsaved_changes = true;
+                self.play_sfx(SfxType::NewFrame);
             }
         }
     }
 
     fn import_audio_dialog(&mut self) {
-        if let Some(path) = rfd::FileDialog::new()
-            .add_filter("Audio", &["mp3", "wav"])
-            .pick_file()
-        {
+        if let Some(path) = rfd::FileDialog::new().add_filter("Audio", &["mp3", "wav"]).pick_file() {
             let name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
             let p_str = path.to_string_lossy().to_string();
             let peaks = extract_audio_waveform(&p_str, 120);
             self.save_undo_state();
-            if self.timeline_length < 24 {
-                self.timeline_length = 24;
-                self.project.total_frames = 24;
-            }
-            self.project.audio_tracks.push(AudioTrack {
-                name: name.clone(),
-                file_path: p_str,
-                start_frame: self.current_frame,
-                end_frame: self.timeline_length,
-                sync_mode: AudioSyncMode::Stream,
-                waveform_peaks: peaks,
-            });
+            if self.timeline_length < 24 { self.timeline_length = 24; self.project.total_frames = 24; }
+            self.project.audio_tracks.push(AudioTrack { name, file_path: p_str, start_frame: self.current_frame, end_frame: self.timeline_length, sync_mode: AudioSyncMode::Stream, waveform_peaks: peaks });
             self.selected_audio_idx = Some(self.project.audio_tracks.len() - 1);
             self.has_unsaved_changes = true;
             self.play_sfx(SfxType::NewFrame);
-            self.status_message = format!("Audio Layer: {}", name);
         }
     }
 
@@ -1657,38 +1330,28 @@ impl StickApp {
         *self.update_state.lock().unwrap() = UpdateState::Checking;
         let state_clone = Arc::clone(&self.update_state);
         let current_ver = self.installed_version.clone();
-
         std::thread::spawn(move || {
             let api_url = format!("https://api.github.com/repos/{}/releases?per_page=1", GITHUB_REPO);
-            match ureq::get(&api_url).set("User-Agent", "Stick-Updater").call() {
-                Ok(response) => {
-                    if let Ok(json) = response.into_json::<serde_json::Value>() {
-                        if let Some(latest) = json.as_array().and_then(|arr| arr.first()) {
-                            let tag = latest["tag_name"].as_str().unwrap_or("").trim_start_matches('v').to_string();
-                            let mut exe_url = String::new();
-                            if let Some(assets) = latest["assets"].as_array() {
-                                for asset in assets {
-                                    if asset["name"].as_str().unwrap_or("").ends_with(".exe") {
-                                        exe_url = asset["browser_download_url"].as_str().unwrap_or("").to_string();
-                                        break;
-                                    }
+            if let Ok(resp) = ureq::get(&api_url).set("User-Agent", "Stick-Updater").call() {
+                if let Ok(json) = resp.into_json::<serde_json::Value>() {
+                    if let Some(latest) = json.as_array().and_then(|arr| arr.first()) {
+                        let tag = latest["tag_name"].as_str().unwrap_or("").trim_start_matches('v').to_string();
+                        let mut exe_url = String::new();
+                        if let Some(assets) = latest["assets"].as_array() {
+                            for asset in assets {
+                                if asset["name"].as_str().unwrap_or("").ends_with(".exe") {
+                                    exe_url = asset["browser_download_url"].as_str().unwrap_or("").to_string();
+                                    break;
                                 }
                             }
-                            let mut st = state_clone.lock().unwrap();
-                            if !tag.is_empty() && tag != current_ver && !exe_url.is_empty() {
-                                *st = UpdateState::UpdateAvailable { version: tag, download_url: exe_url };
-                            } else {
-                                *st = UpdateState::UpToDate;
-                            }
-                        } else {
-                            *state_clone.lock().unwrap() = UpdateState::UpToDate;
                         }
-                    } else {
-                        *state_clone.lock().unwrap() = UpdateState::Error("Failed to parse release data.".to_string());
+                        let mut st = state_clone.lock().unwrap();
+                        if !tag.is_empty() && tag != current_ver && !exe_url.is_empty() {
+                            *st = UpdateState::UpdateAvailable { version: tag, download_url: exe_url };
+                        } else {
+                            *st = UpdateState::UpToDate;
+                        }
                     }
-                }
-                Err(e) => {
-                    *state_clone.lock().unwrap() = UpdateState::Error(format!("Network error: {}", e));
                 }
             }
             ctx.request_repaint();
@@ -1698,46 +1361,32 @@ impl StickApp {
     fn download_and_apply_update(&mut self, version: String, download_url: String, ctx: egui::Context) {
         *self.update_state.lock().unwrap() = UpdateState::Downloading(format!("Downloading v{}...", version));
         let state_clone = Arc::clone(&self.update_state);
-
         std::thread::spawn(move || {
-            match ureq::get(&download_url).set("User-Agent", "Stick-Updater").call() {
-                Ok(response) => {
-                    let mut bytes = Vec::new();
-                    if response.into_reader().read_to_end(&mut bytes).is_ok() {
-                        if let Ok(current_exe) = std::env::current_exe() {
-                            let new_exe = current_exe.with_file_name("Stick_new.exe");
-                            if let Ok(mut file) = File::create(&new_exe) {
-                                if file.write_all(&bytes).is_ok() {
-                                    save_installed_version(&version);
-                                    *state_clone.lock().unwrap() = UpdateState::ReadyToRestart;
-                                    ctx.request_repaint();
-                                    return;
-                                }
+            if let Ok(resp) = ureq::get(&download_url).set("User-Agent", "Stick-Updater").call() {
+                let mut bytes = Vec::new();
+                if resp.into_reader().read_to_end(&mut bytes).is_ok() {
+                    if let Ok(curr) = std::env::current_exe() {
+                        if let Ok(mut file) = File::create(curr.with_file_name("Stick_new.exe")) {
+                            if file.write_all(&bytes).is_ok() {
+                                save_installed_version(&version);
+                                *state_clone.lock().unwrap() = UpdateState::ReadyToRestart;
+                                ctx.request_repaint();
+                                return;
                             }
                         }
                     }
-                    *state_clone.lock().unwrap() = UpdateState::Error("Failed to save update.".to_string());
-                }
-                Err(e) => {
-                    *state_clone.lock().unwrap() = UpdateState::Error(format!("Download failed: {}", e));
                 }
             }
+            *state_clone.lock().unwrap() = UpdateState::Error("Download failed.".to_string());
             ctx.request_repaint();
         });
     }
 
     fn restart_with_new_exe(&mut self) {
-        if let Ok(current_exe) = std::env::current_exe() {
-            let new_exe = current_exe.with_file_name("Stick_new.exe");
-            let ps_script = format!(
-                "Start-Sleep -Seconds 2; Move-Item -LiteralPath '{}' -Destination '{}' -Force; Start-Process -FilePath '{}'",
-                new_exe.display().to_string().replace('\'', "''"),
-                current_exe.display().to_string().replace('\'', "''"),
-                current_exe.display().to_string().replace('\'', "''")
-            );
-            let _ = std::process::Command::new("powershell")
-                .args(["-NoProfile", "-WindowStyle", "Hidden", "-Command", &ps_script])
-                .spawn();
+        if let Ok(curr) = std::env::current_exe() {
+            let new_exe = curr.with_file_name("Stick_new.exe");
+            let ps = format!("Start-Sleep -Seconds 2; Move-Item -LiteralPath '{}' -Destination '{}' -Force; Start-Process -FilePath '{}'", new_exe.display(), curr.display(), curr.display());
+            let _ = std::process::Command::new("powershell").args(["-NoProfile", "-WindowStyle", "Hidden", "-Command", &ps]).spawn();
             std::process::exit(0);
         }
     }
@@ -1748,21 +1397,15 @@ impl StickApp {
             if layer.visible {
                 let fd = self.project.evaluate_layer_at_frame(layer, self.current_frame);
                 for m in &fd.media_items {
-                    if !self.texture_cache.contains_key(&m.path) {
-                        paths.push(m.path.clone());
-                    }
+                    if !self.texture_cache.contains_key(&m.path) { paths.push(m.path.clone()); }
                 }
             }
         }
         for path in paths {
             if let Ok(img) = image::open(&path) {
                 let rgba = img.to_rgba8();
-                let color_image = egui::ColorImage::from_rgba_unmultiplied(
-                    [rgba.width() as usize, rgba.height() as usize],
-                    rgba.as_raw(),
-                );
-                let handle = ctx.load_texture(&path, color_image, egui::TextureOptions::LINEAR);
-                self.texture_cache.insert(path, handle);
+                let ci = egui::ColorImage::from_rgba_unmultiplied([rgba.width() as usize, rgba.height() as usize], rgba.as_raw());
+                self.texture_cache.insert(path.clone(), ctx.load_texture(&path, ci, egui::TextureOptions::LINEAR));
             }
         }
     }
@@ -1771,103 +1414,56 @@ impl StickApp {
         match self.active_tool_ui {
             ActiveToolUI::SelectNormal | ActiveToolUI::SelectLasso | ActiveToolUI::FreeTransform | ActiveToolUI::VectorDirectSelect => {
                 ui.strong(tr(lang, "Transform & Selection", "خصائص التحديد والتحويل الحر"));
-                ui.add_space(4.0);
                 ui.horizontal(|ui| {
-                    if ui.selectable_label(self.active_tool_ui == ActiveToolUI::SelectNormal, tr(lang, "Select (V)", "تحديد (V)")).clicked() {
-                        self.active_tool_ui = ActiveToolUI::SelectNormal;
-                    }
-                    if ui.selectable_label(self.active_tool_ui == ActiveToolUI::FreeTransform, tr(lang, "Transform (Q)", "تحويل حر (Q)")).clicked() {
-                        self.active_tool_ui = ActiveToolUI::FreeTransform;
-                    }
+                    if ui.selectable_label(self.active_tool_ui == ActiveToolUI::SelectNormal, tr(lang, "Select (V)", "تحديد (V)")).clicked() { self.active_tool_ui = ActiveToolUI::SelectNormal; }
+                    if ui.selectable_label(self.active_tool_ui == ActiveToolUI::FreeTransform, tr(lang, "Transform (Q)", "تحويل حر (Q)")).clicked() { self.active_tool_ui = ActiveToolUI::FreeTransform; }
                 });
                 ui.horizontal(|ui| {
-                    if ui.selectable_label(self.active_tool_ui == ActiveToolUI::SelectLasso, tr(lang, "Lasso (L)", "حرة (L)")).clicked() {
-                        self.active_tool_ui = ActiveToolUI::SelectLasso;
-                    }
-                    if ui.selectable_label(self.active_tool_ui == ActiveToolUI::VectorDirectSelect, tr(lang, "Vector Pts (G)", "نقاط فيكتور (G)")).clicked() {
-                        self.active_tool_ui = ActiveToolUI::VectorDirectSelect;
-                    }
-                });
-                ui.add_space(6.0);
-                ui.label(tr(lang, "Free Transform Around Anchor:", "التحويل حول نقطة الارتكاز:"));
-                ui.horizontal(|ui| {
-                    if ui.button(" -10% ").clicked() {
-                        self.save_undo_state();
-                        self.transform_selected_items(0.90, 0.0, false, false);
-                    }
-                    if ui.button(" +10% ").clicked() {
-                        self.save_undo_state();
-                        self.transform_selected_items(1.10, 0.0, false, false);
-                    }
-                    if ui.button(" ↻ 15° ").clicked() {
-                        self.save_undo_state();
-                        self.transform_selected_items(1.0, 15.0, false, false);
-                    }
-                    if ui.button(" ↺ 15° ").clicked() {
-                        self.save_undo_state();
-                        self.transform_selected_items(1.0, -15.0, false, false);
-                    }
+                    if ui.selectable_label(self.active_tool_ui == ActiveToolUI::SelectLasso, tr(lang, "Lasso (L)", "حرة (L)")).clicked() { self.active_tool_ui = ActiveToolUI::SelectLasso; }
+                    if ui.selectable_label(self.active_tool_ui == ActiveToolUI::VectorDirectSelect, tr(lang, "Vector Pts (G)", "نقاط فيكتور (G)")).clicked() { self.active_tool_ui = ActiveToolUI::VectorDirectSelect; }
                 });
                 ui.horizontal(|ui| {
-                    if ui.button(tr(lang, "Flip H", "عكس أفقي")).clicked() {
-                        self.save_undo_state();
-                        self.transform_selected_items(1.0, 0.0, true, false);
-                    }
-                    if ui.button(tr(lang, "Flip V", "عكس رأسي")).clicked() {
-                        self.save_undo_state();
-                        self.transform_selected_items(1.0, 0.0, false, true);
-                    }
-                    if ui.small_button(tr(lang, "Reset Anchor", "توسيط الارتكاز")).clicked() {
-                        self.custom_anchor_offset = egui::Vec2::ZERO;
-                    }
+                    if ui.button(" -10% ").clicked() { self.save_undo_state(); self.transform_selected_items(0.90, 0.0, false, false); }
+                    if ui.button(" +10% ").clicked() { self.save_undo_state(); self.transform_selected_items(1.10, 0.0, false, false); }
+                    if ui.button(" ↻ 15° ").clicked() { self.save_undo_state(); self.transform_selected_items(1.0, 15.0, false, false); }
+                    if ui.button(" ↺ 15° ").clicked() { self.save_undo_state(); self.transform_selected_items(1.0, -15.0, false, false); }
                 });
-                if let Some(t_idx) = self.selected_text_idx {
-                    if let Some(layer) = self.project.layers.get_mut(self.active_layer_idx) {
-                        if let Some(frame) = layer.keyframes.get_mut(&self.current_frame) {
-                            if let Some(txt) = frame.text_items.get_mut(t_idx) {
-                                ui.add_space(6.0);
-                                ui.separator();
-                                ui.strong(tr(lang, "Selected Text Edit", "تعديل النص المحدد"));
-                                ui.text_edit_singleline(&mut txt.content);
-                                ui.horizontal(|ui| {
-                                    ui.label(tr(lang, "Size:", "الحجم:"));
-                                    ui.add(egui::DragValue::new(&mut txt.font_size).range(8.0..=260.0));
-                                    ui.color_edit_button_srgba_unmultiplied(&mut txt.color);
-                                });
-                            }
-                        }
-                    }
-                }
             }
             ActiveToolUI::VectorPen => {
-                ui.strong(tr(lang, "Vector Pen (Cubic Bezier)", "قلم الفيكتور الناعم (P)"));
-                ui.add_space(4.0);
+                ui.strong(tr(lang, "Vector Ink Pen (P)", "قلم الفيكتور الثابت (بدون ذيل)"));
                 ui.horizontal(|ui| {
                     ui.label(tr(lang, "Stroke Width:", "سُمك الخط:"));
                     ui.add(egui::DragValue::new(&mut self.brush_size).range(1.0..=100.0));
                 });
                 ui.add(egui::Slider::new(&mut self.brush_size, 1.0..=100.0).show_value(false));
-                ui.small(tr(lang, "Draws silky Cubic Bezier curves. Press G to edit control nodes.", "يرسم منحنيات بيزيه فائقة النعومة. اضغط G لتعديل النقاط."));
             }
             ActiveToolUI::Brush => {
-                ui.strong(tr(lang, "Krita Brush Engine (B)", "محرك فرش الرسم الاحترافي"));
+                ui.strong(tr(lang, "Brushes (Icon Presets)", "اختر الفرشة بالأيقونة"));
                 ui.add_space(4.0);
                 let presets = [
-                    KritaBrushPreset::GPenInk,
-                    KritaBrushPreset::SoftAirbrush,
-                    KritaBrushPreset::Watercolor,
-                    KritaBrushPreset::ChiselMarker,
-                    KritaBrushPreset::SketchPencil,
+                    (KritaBrushPreset::GPenInk, "G-Pen"),
+                    (KritaBrushPreset::Watercolor, "Watercolor"),
+                    (KritaBrushPreset::ChiselMarker, "Marker"),
+                    (KritaBrushPreset::SoftAirbrush, "Airbrush"),
+                    (KritaBrushPreset::SketchPencil, "Pencil"),
                 ];
-                egui::ComboBox::from_id_salt("krita_brush_combo")
-                    .selected_text(fix_ar(self.active_krita_brush.label()))
-                    .show_ui(ui, |ui| {
-                        for p in presets {
-                            if ui.selectable_value(&mut self.active_krita_brush, p, fix_ar(p.label())).clicked() {
-                                self.brush_opacity = p.default_opacity();
-                            }
+                // شبكة أزرار للفرش ولكل فرشة أيقونة مخصصة لها
+                ui.horizontal_wrapped(|ui| {
+                    for (preset, short_name) in presets {
+                        let is_sel = self.active_krita_brush == preset;
+                        let (btn_rect, resp) = ui.allocate_exact_size(egui::vec2(44.0, 44.0), egui::Sense::click());
+                        let bg = if is_sel { egui::Color32::from_rgb(0, 122, 204) } else if resp.hovered() { egui::Color32::from_rgb(62, 64, 72) } else { egui::Color32::from_rgb(44, 46, 52) };
+                        ui.painter().rect_filled(btn_rect, 6.0, bg);
+                        let icon_area = egui::Rect::from_min_size(btn_rect.min, egui::vec2(44.0, 28.0));
+                        draw_brush_preset_icon(ui.painter(), icon_area, preset, is_sel);
+                        ui.painter().text(egui::pos2(btn_rect.center().x, btn_rect.bottom() - 7.0), egui::Align2::CENTER_CENTER, short_name, egui::FontId::proportional(9.5), egui::Color32::WHITE);
+                        if resp.on_hover_text(fix_ar(preset.label())).clicked() {
+                            self.active_krita_brush = preset;
+                            self.brush_opacity = preset.default_opacity();
+                            self.play_sfx(SfxType::UiClick);
                         }
-                    });
+                    }
+                });
                 ui.add_space(4.0);
                 ui.horizontal(|ui| {
                     ui.label(tr(lang, "Size:", "الحجم:"));
@@ -1878,79 +1474,40 @@ impl StickApp {
                     ui.label(tr(lang, "Opacity:", "الشفافية:"));
                     ui.add(egui::Slider::new(&mut self.brush_opacity, 0.05..=1.0));
                 });
-                ui.checkbox(&mut self.pen_pressure_enabled, tr(lang, "Pen Pressure Sensitivity", "حساسية ضغط القلم"));
-                if self.pen_pressure_enabled {
-                    ui.horizontal(|ui| {
-                        ui.label(tr(lang, "Sensitivity:", "درجة الحساسية:"));
-                        ui.add(egui::Slider::new(&mut self.pressure_sensitivity, 0.2..=2.0));
-                    });
-                }
                 ui.horizontal(|ui| {
                     ui.label(tr(lang, "Stabilizer:", "مثبت اليد:"));
-                    ui.add(egui::Slider::new(&mut self.stabilizer_strength, 0.0..=0.85));
+                    ui.add(egui::Slider::new(&mut self.stabilizer_strength, 0.0..=0.75));
                 });
             }
             ActiveToolUI::ShapeLine => {
-                ui.strong(tr(lang, "Shapes & Line Tool (U)", "أداة الخطوط والأشكال الهندسية"));
-                ui.add_space(4.0);
+                ui.strong(tr(lang, "Shapes & Line Tool (U)", "أداة الخطوط والأشكال"));
                 ui.radio_value(&mut self.selected_shape_kind, GeometricShapeKind::StraightLine, tr(lang, "Straight Line", "خط مستقيم"));
-                ui.radio_value(&mut self.selected_shape_kind, GeometricShapeKind::Circle, tr(lang, "Circle", "دائرة مضبوطة"));
+                ui.radio_value(&mut self.selected_shape_kind, GeometricShapeKind::Circle, tr(lang, "Circle", "دائرة"));
                 ui.radio_value(&mut self.selected_shape_kind, GeometricShapeKind::Square, tr(lang, "Square", "مربع"));
                 ui.radio_value(&mut self.selected_shape_kind, GeometricShapeKind::Rectangle, tr(lang, "Rectangle", "مستطيل"));
-                ui.add_space(4.0);
-                ui.horizontal(|ui| {
-                    ui.label(tr(lang, "Line Thickness:", "سُمك الخط:"));
-                    ui.add(egui::DragValue::new(&mut self.brush_size).range(1.0..=100.0));
-                });
             }
             ActiveToolUI::EraserRed | ActiveToolUI::EraserGreen => {
                 ui.strong(tr(lang, "Eraser Properties", "خصائص الممحاة"));
-                ui.add_space(4.0);
                 ui.horizontal(|ui| {
-                    if ui.selectable_label(self.active_tool_ui == ActiveToolUI::EraserRed, tr(lang, "Red (Full E)", "حمراء (كامل E)")).clicked() {
-                        self.active_tool_ui = ActiveToolUI::EraserRed;
-                    }
-                    if ui.selectable_label(self.active_tool_ui == ActiveToolUI::EraserGreen, tr(lang, "Green (Part T)", "خضراء (جزئي T)")).clicked() {
-                        self.active_tool_ui = ActiveToolUI::EraserGreen;
-                    }
+                    if ui.selectable_label(self.active_tool_ui == ActiveToolUI::EraserRed, tr(lang, "Red (Full E)", "حمراء (كامل E)")).clicked() { self.active_tool_ui = ActiveToolUI::EraserRed; }
+                    if ui.selectable_label(self.active_tool_ui == ActiveToolUI::EraserGreen, tr(lang, "Green (Part T)", "خضراء (جزئي T)")).clicked() { self.active_tool_ui = ActiveToolUI::EraserGreen; }
                 });
-                ui.horizontal(|ui| {
-                    ui.label(tr(lang, "Eraser Radius:", "نطاق المسح:"));
-                    ui.add(egui::DragValue::new(&mut self.brush_size).range(2.0..=120.0));
-                });
-                ui.add(egui::Slider::new(&mut self.brush_size, 2.0..=120.0).show_value(false));
+                ui.add(egui::Slider::new(&mut self.brush_size, 2.0..=120.0));
             }
             ActiveToolUI::Text => {
-                ui.strong(tr(lang, "Text Tool Properties", "خصائص أداة النص"));
-                ui.add_space(4.0);
-                ui.horizontal(|ui| {
-                    ui.label(tr(lang, "Default Font Size:", "حجم الخط:"));
-                    ui.add(egui::DragValue::new(&mut self.text_font_size).range(10.0..=180.0));
-                });
+                ui.strong(tr(lang, "Text Properties", "خصائص النص"));
+                ui.add(egui::DragValue::new(&mut self.text_font_size).range(10.0..=180.0));
             }
             ActiveToolUI::HandCanvas => {
-                ui.strong(tr(lang, "Hand & Canvas Orientation", "أداة اليد وتدوير وعكس الكانفا"));
-                ui.add_space(4.0);
+                ui.strong(tr(lang, "Canvas Orientation", "تدوير وعكس الكانفا"));
                 ui.horizontal(|ui| {
-                    if ui.button(tr(lang, "Flip H", "عكس أفقي")).clicked() {
-                        self.canvas_flip_h = !self.canvas_flip_h;
-                    }
-                    if ui.button(tr(lang, "Flip V", "عكس رأسي")).clicked() {
-                        self.canvas_flip_v = !self.canvas_flip_v;
-                    }
+                    if ui.button(tr(lang, "Flip H", "عكس أفقي")).clicked() { self.canvas_flip_h = !self.canvas_flip_h; }
+                    if ui.button(tr(lang, "Flip V", "عكس رأسي")).clicked() { self.canvas_flip_v = !self.canvas_flip_v; }
                 });
-                ui.horizontal(|ui| {
-                    ui.label(tr(lang, "Rotation:", "زاوية الدوران:"));
-                    ui.add(egui::Slider::new(&mut self.canvas_rotation_deg, -180.0..=180.0));
-                });
-                if ui.small_button(tr(lang, "Reset Orientation", "إعادة الوضع الأصلي")).clicked() {
-                    self.canvas_rotation_deg = 0.0;
-                    self.canvas_flip_h = false;
-                    self.canvas_flip_v = false;
-                }
+                ui.add(egui::Slider::new(&mut self.canvas_rotation_deg, -180.0..=180.0));
             }
             ActiveToolUI::Bucket | ActiveToolUI::Eyedropper => {
-                ui.strong(tr(lang, "Color & Fill Properties", "خصائص اللون والتعبئة"));
+                ui.strong(tr(lang, "Fill & Picker (Solid Color)", "لون التعبئة (Solid)"));
                 ui.color_edit_button_srgba_unmultiplied(&mut self.brush_color);
             }
         }
@@ -1966,22 +1523,12 @@ impl eframe::App for StickApp {
             egui::CentralPanel::default().show(ctx, |ui| {
                 ui.vertical_centered(|ui| {
                     ui.add_space(75.0);
-                    ui.heading(
-                        egui::RichText::new("Stick Studio Setup")
-                            .size(34.0)
-                            .color(egui::Color32::from_rgb(255, 215, 25)),
-                    );
+                    ui.heading(egui::RichText::new("Stick Studio Setup").size(34.0).color(egui::Color32::from_rgb(255, 215, 25)));
                     ui.add_space(12.0);
-                    ui.label(
-                        egui::RichText::new(fix_ar("مرحباً بك في برنامج Stick! حدد مكان تسطيب البرنامج:"))
-                            .size(20.0)
-                            .color(egui::Color32::WHITE),
-                    );
+                    ui.label(egui::RichText::new(fix_ar("مرحباً بك في برنامج Stick! حدد مكان تسطيب البرنامج:")).size(20.0).color(egui::Color32::WHITE));
                     ui.add_space(22.0);
-
                     ui.horizontal(|ui| {
-                        let avail = ui.available_width();
-                        ui.add_space((avail - 460.0).max(10.0) * 0.5);
+                        ui.add_space((ui.available_width() - 460.0).max(10.0) * 0.5);
                         ui.add(egui::TextEdit::singleline(&mut self.install_target_dir).desired_width(350.0));
                         if ui.button(fix_ar("استعراض...")).clicked() {
                             if let Some(folder) = rfd::FileDialog::new().pick_folder() {
@@ -1989,37 +1536,19 @@ impl eframe::App for StickApp {
                             }
                         }
                     });
-
                     ui.add_space(24.0);
-                    let install_btn = egui::Button::new(
-                        egui::RichText::new(fix_ar("تسطيب البرنامج وإنشاء اختصار على سطح المكتب"))
-                            .size(18.0)
-                            .color(egui::Color32::BLACK),
-                    )
-                    .min_size(egui::vec2(340.0, 48.0))
-                    .fill(egui::Color32::from_rgb(255, 215, 25));
-
-                    if ui.add(install_btn).clicked() {
+                    if ui.add(egui::Button::new(egui::RichText::new(fix_ar("تسطيب البرنامج وإنشاء اختصار على سطح المكتب")).size(18.0).color(egui::Color32::BLACK)).min_size(egui::vec2(340.0, 48.0)).fill(egui::Color32::from_rgb(255, 215, 25))).clicked() {
                         self.perform_full_installation();
                     }
-
                     ui.add_space(12.0);
-                    if ui.small_button(fix_ar("تشغيل مباشر بدون تسطيب")).clicked() {
-                        self.workspace_mode = WorkspaceMode::Launcher;
-                    }
-
-                    if !self.install_status_text.is_empty() {
-                        ui.add_space(12.0);
-                        ui.colored_label(egui::Color32::LIGHT_RED, fix_ar(&self.install_status_text));
-                    }
+                    if ui.small_button(fix_ar("تشغيل مباشر بدون تسطيب")).clicked() { self.workspace_mode = WorkspaceMode::Launcher; }
                 });
             });
             return;
         }
 
-        if self.last_xp_tick_time == 0.0 {
-            self.last_xp_tick_time = now_time;
-        } else if now_time - self.last_xp_tick_time >= 60.0 {
+        if self.last_xp_tick_time == 0.0 { self.last_xp_tick_time = now_time; }
+        else if now_time - self.last_xp_tick_time >= 60.0 {
             let mins = ((now_time - self.last_xp_tick_time) / 60.0).floor() as u64;
             self.last_xp_tick_time += (mins as f64) * 60.0;
             self.user_profile.total_seconds_spent += mins * 60;
@@ -2034,38 +1563,12 @@ impl eframe::App for StickApp {
         if now_time < self.level_up_banner_timer {
             let (lvl, _, _) = self.user_profile.get_level_progress();
             let rank = self.user_profile.get_hunter_rank();
-            egui::Window::new("SYSTEM_ALERT")
-                .title_bar(false)
-                .collapsible(false)
-                .resizable(false)
-                .anchor(egui::Align2::CENTER_TOP, [0.0, 48.0])
-                .frame(
-                    egui::Frame::none()
-                        .fill(egui::Color32::from_rgba_unmultiplied(10, 22, 48, 245))
-                        .stroke(egui::Stroke::new(2.0, egui::Color32::from_rgb(56, 189, 248)))
-                        .inner_margin(16.0)
-                        .rounding(8.0),
-                )
-                .show(ctx, |ui| {
-                    ui.vertical_centered(|ui| {
-                        ui.label(
-                            egui::RichText::new("[ SYSTEM : LEVEL UP ]")
-                                .size(13.0)
-                                .color(egui::Color32::from_rgb(56, 189, 248)),
-                        );
-                        ui.heading(
-                            egui::RichText::new(format!("LEVEL {}  ({})", lvl, rank))
-                                .size(22.0)
-                                .color(egui::Color32::from_rgb(250, 204, 21)),
-                        );
-                        ui.add_space(4.0);
-                        ui.label(
-                            egui::RichText::new(fix_ar(&self.level_up_custom_msg))
-                                .size(16.0)
-                                .color(egui::Color32::WHITE),
-                        );
-                    });
+            egui::Window::new("SYSTEM_ALERT").title_bar(false).collapsible(false).resizable(false).anchor(egui::Align2::CENTER_TOP, [0.0, 48.0]).show(ctx, |ui| {
+                ui.vertical_centered(|ui| {
+                    ui.heading(egui::RichText::new(format!("LEVEL {} ({})", lvl, rank)).size(22.0).color(egui::Color32::from_rgb(250, 204, 21)));
+                    ui.label(egui::RichText::new(fix_ar(&self.level_up_custom_msg)).size(16.0).color(egui::Color32::WHITE));
                 });
+            });
             ctx.request_repaint();
         }
 
@@ -2073,68 +1576,20 @@ impl eframe::App for StickApp {
             egui::CentralPanel::default().show(ctx, |ui| {
                 ui.vertical_centered(|ui| {
                     ui.add_space(90.0);
-                    ui.heading(
-                        egui::RichText::new("Stick Studio")
-                            .size(36.0)
-                            .color(egui::Color32::from_rgb(255, 215, 25)),
-                    );
+                    ui.heading(egui::RichText::new("Stick Studio").size(36.0).color(egui::Color32::from_rgb(255, 215, 25)));
                     ui.add_space(12.0);
-                    ui.label(
-                        egui::RichText::new(tr(
-                            lang,
-                            "Are you here to draw or animate?",
-                            "هل أنت داخل ترسم؟",
-                        ))
-                        .size(24.0)
-                        .color(egui::Color32::WHITE),
-                    );
+                    ui.label(egui::RichText::new(tr(lang, "Are you here to draw or animate?", "هل أنت داخل ترسم؟")).size(24.0).color(egui::Color32::WHITE));
                     ui.add_space(30.0);
-
                     ui.horizontal(|ui| {
-                        let avail = ui.available_width();
-                        ui.add_space((avail - 440.0).max(10.0) * 0.5);
-
-                        let draw_btn = egui::Button::new(
-                            egui::RichText::new(tr(lang, "🎨 Drawing", "🎨 رسم"))
-                                .size(22.0)
-                                .color(egui::Color32::WHITE),
-                        )
-                        .min_size(egui::vec2(205.0, 95.0))
-                        .fill(egui::Color32::from_rgb(249, 115, 22));
-
-                        if ui.add(draw_btn).clicked() {
+                        ui.add_space((ui.available_width() - 440.0).max(10.0) * 0.5);
+                        if ui.add(egui::Button::new(egui::RichText::new(tr(lang, "🎨 Drawing", "🎨 رسم")).size(22.0).color(egui::Color32::WHITE)).min_size(egui::vec2(205.0, 95.0)).fill(egui::Color32::from_rgb(249, 115, 22))).clicked() {
                             self.play_sfx(SfxType::NewFrame);
                             self.workspace_mode = WorkspaceMode::DrawingOnly;
                         }
-
                         ui.add_space(25.0);
-
-                        let anim_btn = egui::Button::new(
-                            egui::RichText::new(tr(lang, "🎬 Animation", "🎬 أنيميشن"))
-                                .size(22.0)
-                                .color(egui::Color32::WHITE),
-                        )
-                        .min_size(egui::vec2(205.0, 95.0))
-                        .fill(egui::Color32::from_rgb(0, 122, 204));
-
-                        if ui.add(anim_btn).clicked() {
+                        if ui.add(egui::Button::new(egui::RichText::new(tr(lang, "🎬 Animation", "🎬 أنيميشن")).size(22.0).color(egui::Color32::WHITE)).min_size(egui::vec2(205.0, 95.0)).fill(egui::Color32::from_rgb(0, 122, 204))).clicked() {
                             self.play_sfx(SfxType::NewFrame);
                             self.workspace_mode = WorkspaceMode::AnimationStudio;
-                        }
-                    });
-
-                    ui.add_space(35.0);
-                    ui.horizontal(|ui| {
-                        let avail = ui.available_width();
-                        ui.add_space((avail - 180.0).max(10.0) * 0.5);
-                        if ui.selectable_label(lang == AppLang::Arabic, fix_ar("العربية")).clicked() {
-                            self.config.lang = AppLang::Arabic;
-                            self.config.save();
-                        }
-                        ui.separator();
-                        if ui.selectable_label(lang == AppLang::English, "English").clicked() {
-                            self.config.lang = AppLang::English;
-                            self.config.save();
                         }
                     });
                 });
@@ -2143,84 +1598,28 @@ impl eframe::App for StickApp {
         }
 
         let mut typing_in_textbox = ctx.wants_keyboard_input();
-
         let (
-            now,
-            ctrl_z,
-            ctrl_y,
-            ctrl_s,
-            ctrl_c,
-            ctrl_v,
-            ctrl_k,
-            shift_f5,
-            del_pressed,
-            space_down,
-            ctrl_down,
-            alt_down,
-            zoom_in_nav,
-            zoom_out_nav,
-            pan_right_nav,
-            pan_left_nav,
-            scroll_y,
-            close_req,
-            pointer_down,
-            pointer_pressed,
-            pointer_released,
-            pointer_pos,
-            touch_force,
-            sc_select,
-            sc_lasso,
-            sc_free_tr,
-            sc_vec_sel,
-            sc_pen,
-            sc_brush,
-            sc_eraser,
-            sc_eraser_partial,
-            sc_bucket,
-            sc_eyedropper,
-            sc_text,
-            sc_shape,
-            sc_hand,
-            sc_del_frame,
-            sc_f5,
-            sc_f6,
-            sc_f7,
-            sc_f8,
-            sc_play,
-            sc_prev,
-            sc_next,
-            sc_smaller,
-            sc_larger,
-            sc_reset_canvas,
-            pressed_key_name,
+            now, ctrl_z, ctrl_y, ctrl_s, ctrl_c, ctrl_v, ctrl_k, shift_f5, del_pressed,
+            space_down, ctrl_down, alt_down, zoom_in_nav, zoom_out_nav, pan_right_nav, pan_left_nav,
+            scroll_y, close_req, pointer_down, pointer_pressed, pointer_released, pointer_pos, touch_force,
+            sc_select, sc_lasso, sc_free_tr, sc_vec_sel, sc_pen, sc_brush, sc_eraser, sc_eraser_partial,
+            sc_bucket, sc_eyedropper, sc_text, sc_shape, sc_hand, sc_del_frame, sc_f5, sc_f6, sc_f7, sc_f8,
+            sc_play, sc_prev, sc_next, sc_smaller, sc_larger, sc_reset_canvas, pressed_key_name,
         ) = ctx.input(|i| {
             let mut captured_key = None;
             let mut stylus_force = None;
             for event in &i.events {
                 match event {
-                    egui::Event::Key { key, pressed: true, .. } => {
-                        captured_key = Some(key.name().to_string());
-                    }
-                    egui::Event::Touch { force: Some(f), .. } => {
-                        stylus_force = Some(*f);
-                    }
+                    egui::Event::Key { key, pressed: true, .. } => captured_key = Some(key.name().to_string()),
+                    egui::Event::Touch { force: Some(f), .. } => stylus_force = Some(*f),
                     _ => {}
                 }
             }
-            if captured_key.is_none() && i.modifiers.shift {
-                captured_key = Some("Shift".to_string());
-            }
-
-            // استجابة فورية وسريعة لأسهم الزوم والتحريك (حتى مع الضغط المستمر key_down)
-            let z_in = (i.modifiers.ctrl && i.key_down(egui::Key::ArrowUp))
-                || (!i.modifiers.ctrl && !i.modifiers.alt && i.key_down(egui::Key::W));
-            let z_out = (i.modifiers.ctrl && i.key_down(egui::Key::ArrowDown))
-                || (!i.modifiers.ctrl && !i.modifiers.alt && i.key_down(egui::Key::S));
-            let p_right = (i.modifiers.ctrl && i.key_down(egui::Key::ArrowRight))
-                || (!i.modifiers.ctrl && !i.modifiers.alt && i.key_down(egui::Key::D));
-            let p_left = (i.modifiers.ctrl && i.key_down(egui::Key::ArrowLeft))
-                || (!i.modifiers.ctrl && !i.modifiers.alt && i.key_down(egui::Key::A));
-
+            if captured_key.is_none() && i.modifiers.shift { captured_key = Some("Shift".to_string()); }
+            let z_in = (i.modifiers.ctrl && i.key_down(egui::Key::ArrowUp)) || (!i.modifiers.ctrl && !i.modifiers.alt && i.key_down(egui::Key::W));
+            let z_out = (i.modifiers.ctrl && i.key_down(egui::Key::ArrowDown)) || (!i.modifiers.ctrl && !i.modifiers.alt && i.key_down(egui::Key::S));
+            let p_right = (i.modifiers.ctrl && i.key_down(egui::Key::ArrowRight)) || (!i.modifiers.ctrl && !i.modifiers.alt && i.key_down(egui::Key::D));
+            let p_left = (i.modifiers.ctrl && i.key_down(egui::Key::ArrowLeft)) || (!i.modifiers.ctrl && !i.modifiers.alt && i.key_down(egui::Key::A));
             (
                 i.time,
                 i.modifiers.ctrl && !i.modifiers.shift && i.key_pressed(egui::Key::Z),
@@ -2234,10 +1633,7 @@ impl eframe::App for StickApp {
                 i.key_down(egui::Key::Space),
                 i.modifiers.ctrl,
                 i.modifiers.alt,
-                z_in,
-                z_out,
-                p_right,
-                p_left,
+                z_in, z_out, p_right, p_left,
                 i.raw_scroll_delta.y,
                 i.viewport().close_requested(),
                 i.pointer.primary_down(),
@@ -2273,11 +1669,7 @@ impl eframe::App for StickApp {
             )
         });
 
-        if ctrl_k {
-            self.show_command_palette = !self.show_command_palette;
-            self.command_search_query.clear();
-            self.play_sfx(SfxType::UiClick);
-        }
+        if ctrl_k { self.show_command_palette = !self.show_command_palette; }
 
         if let (Some(idx), Some(k_name)) = (self.listening_shortcut_idx, pressed_key_name) {
             match idx {
@@ -2294,17 +1686,6 @@ impl eframe::App for StickApp {
                 10 => self.config.tool_text = k_name,
                 11 => self.config.tool_shape = k_name,
                 12 => self.config.tool_hand = k_name,
-                13 => self.config.delete_frame_key = k_name,
-                14 => self.config.insert_frame = k_name,
-                15 => self.config.insert_keyframe = k_name,
-                16 => self.config.insert_blank_kf = k_name,
-                17 => self.config.convert_symbol = k_name,
-                18 => self.config.play_pause = k_name,
-                19 => self.config.prev_frame = k_name,
-                20 => self.config.next_frame = k_name,
-                21 => self.config.brush_smaller = k_name,
-                22 => self.config.brush_larger = k_name,
-                23 => self.config.reset_canvas = k_name,
                 _ => {}
             }
             self.config.save();
@@ -2312,21 +1693,11 @@ impl eframe::App for StickApp {
             typing_in_textbox = true;
         }
 
-        let any_modal_open = self.show_symbol_dialog
-            || self.show_text_dialog
-            || self.show_export_studio
-            || self.show_command_palette
-            || self.show_exit_dialog
-            || self.show_update_dialog
-            || self.show_settings_dialog
-            || self.show_timeline_settings
-            || self.show_credits_dialog
-            || self.renaming_layer_idx.is_some()
-            || self.trimming_audio_idx.is_some();
-
-        if any_modal_open {
-            typing_in_textbox = true;
-        }
+        let any_modal_open = self.show_symbol_dialog || self.show_text_dialog || self.show_export_studio
+            || self.show_command_palette || self.show_exit_dialog || self.show_update_dialog
+            || self.show_settings_dialog || self.show_timeline_settings || self.show_credits_dialog
+            || self.renaming_layer_idx.is_some() || self.trimming_audio_idx.is_some();
+        if any_modal_open { typing_in_textbox = true; }
 
         if !typing_in_textbox {
             if ctrl_z { self.undo(); }
@@ -2334,31 +1705,14 @@ impl eframe::App for StickApp {
             if ctrl_s { self.trigger_save(); }
             if ctrl_c { self.copy_frame(self.active_layer_idx, self.current_frame); }
             if ctrl_v { self.paste_frame(self.active_layer_idx, self.current_frame); }
-
-            // تسريع الزوم والتحريك الأسّي السلس (Smooth Exponential Zoom & Pan)
-            if zoom_in_nav {
-                self.zoom_level = (self.zoom_level * 1.045).clamp(0.1, 6.0);
-                ctx.request_repaint();
-            }
-            if zoom_out_nav {
-                self.zoom_level = (self.zoom_level / 1.045).clamp(0.1, 6.0);
-                ctx.request_repaint();
-            }
-            if pan_right_nav {
-                self.pan_offset.x += 18.0;
-                ctx.request_repaint();
-            }
-            if pan_left_nav {
-                self.pan_offset.x -= 18.0;
-                ctx.request_repaint();
-            }
+            if zoom_in_nav { self.zoom_level = (self.zoom_level * 1.045).clamp(0.1, 6.0); ctx.request_repaint(); }
+            if zoom_out_nav { self.zoom_level = (self.zoom_level / 1.045).clamp(0.1, 6.0); ctx.request_repaint(); }
+            if pan_right_nav { self.pan_offset.x += 18.0; ctx.request_repaint(); }
+            if pan_left_nav { self.pan_offset.x -= 18.0; ctx.request_repaint(); }
 
             if self.workspace_mode == WorkspaceMode::AnimationStudio {
-                if shift_f5 || sc_del_frame {
-                    self.remove_frame_completely(self.active_layer_idx, self.current_frame);
-                } else if sc_f5 {
-                    self.action_insert_frame_f5();
-                }
+                if shift_f5 || sc_del_frame { self.remove_frame_completely(self.active_layer_idx, self.current_frame); }
+                else if sc_f5 { self.action_insert_frame_f5(); }
                 if sc_f6 { self.action_insert_keyframe_f6(now_time); }
                 if sc_f7 { self.action_insert_blank_keyframe_f7(now_time); }
                 if sc_f8 { self.show_symbol_dialog = true; }
@@ -2370,916 +1724,214 @@ impl eframe::App for StickApp {
                 if sc_next && self.current_frame < self.timeline_length { self.current_frame += 1; }
             }
 
-            if sc_reset_canvas {
-                self.pan_offset = egui::Vec2::ZERO;
-                self.zoom_level = 0.75;
-                self.canvas_rotation_deg = 0.0;
-                self.canvas_flip_h = false;
-                self.canvas_flip_v = false;
-                self.play_sfx(SfxType::ZoomStep);
-                self.status_message = tr(lang, "Canvas Reset", "تم إعادة ضبط الكانفا");
-            }
-            if sc_select {
-                self.active_tool_ui = ActiveToolUI::SelectNormal;
-                self.play_sfx(SfxType::UiClick);
-            }
-            if sc_lasso {
-                self.active_tool_ui = ActiveToolUI::SelectLasso;
-                self.play_sfx(SfxType::LassoSelect);
-            }
-            if sc_free_tr {
-                self.active_tool_ui = ActiveToolUI::FreeTransform;
-                self.play_sfx(SfxType::UiClick);
-            }
-            if sc_vec_sel {
-                self.active_tool_ui = ActiveToolUI::VectorDirectSelect;
-                self.play_sfx(SfxType::VectorPenTick);
-            }
-            if sc_pen {
-                self.active_tool_ui = ActiveToolUI::VectorPen;
-                self.play_sfx(SfxType::VectorPenTick);
-            }
-            if sc_brush {
-                self.active_tool_ui = ActiveToolUI::Brush;
-                self.play_sfx(SfxType::BrushScratch);
-            }
-            if sc_eraser {
-                self.active_tool_ui = ActiveToolUI::EraserRed;
-                self.play_sfx(SfxType::EraserRub);
-            }
-            if sc_eraser_partial {
-                self.active_tool_ui = ActiveToolUI::EraserGreen;
-                self.play_sfx(SfxType::EraserRub);
-            }
-            if sc_bucket {
-                self.active_tool_ui = ActiveToolUI::Bucket;
-                self.play_sfx(SfxType::UiClick);
-            }
-            if sc_eyedropper {
-                self.active_tool_ui = ActiveToolUI::Eyedropper;
-                self.play_sfx(SfxType::UiClick);
-            }
-            if sc_text {
-                self.active_tool_ui = ActiveToolUI::Text;
-                self.play_sfx(SfxType::UiClick);
-            }
-            if sc_shape {
-                self.active_tool_ui = ActiveToolUI::ShapeLine;
-                self.play_sfx(SfxType::UiClick);
-            }
-            if sc_hand {
-                self.active_tool_ui = ActiveToolUI::HandCanvas;
-                self.play_sfx(SfxType::UiClick);
-            }
+            if sc_reset_canvas { self.pan_offset = egui::Vec2::ZERO; self.zoom_level = 0.75; self.canvas_rotation_deg = 0.0; self.canvas_flip_h = false; self.canvas_flip_v = false; }
+            if sc_select { self.active_tool_ui = ActiveToolUI::SelectNormal; }
+            if sc_lasso { self.active_tool_ui = ActiveToolUI::SelectLasso; }
+            if sc_free_tr { self.active_tool_ui = ActiveToolUI::FreeTransform; }
+            if sc_vec_sel { self.active_tool_ui = ActiveToolUI::VectorDirectSelect; }
+            if sc_pen { self.active_tool_ui = ActiveToolUI::VectorPen; }
+            if sc_brush { self.active_tool_ui = ActiveToolUI::Brush; }
+            if sc_eraser { self.active_tool_ui = ActiveToolUI::EraserRed; }
+            if sc_eraser_partial { self.active_tool_ui = ActiveToolUI::EraserGreen; }
+            if sc_bucket { self.active_tool_ui = ActiveToolUI::Bucket; }
+            if sc_eyedropper { self.active_tool_ui = ActiveToolUI::Eyedropper; }
+            if sc_text { self.active_tool_ui = ActiveToolUI::Text; }
+            if sc_shape { self.active_tool_ui = ActiveToolUI::ShapeLine; }
+            if sc_hand { self.active_tool_ui = ActiveToolUI::HandCanvas; }
             if sc_smaller { self.brush_size = (self.brush_size - 2.0).max(1.0); }
             if sc_larger { self.brush_size = (self.brush_size + 2.0).min(120.0); }
-
-            if del_pressed {
-                if let Some(t_idx) = self.selected_text_idx.take() {
-                    self.save_undo_state();
-                    self.ensure_editable_keyframe();
-                    if let Some(layer) = self.project.layers.get_mut(self.active_layer_idx) {
-                        if let Some(frame) = layer.keyframes.get_mut(&self.current_frame) {
-                            if t_idx < frame.text_items.len() {
-                                frame.text_items.remove(t_idx);
-                                self.has_unsaved_changes = true;
-                                self.play_sfx(SfxType::EraserRub);
-                            }
-                        }
+            if del_pressed && !self.selected_stroke_indices.is_empty() {
+                self.save_undo_state();
+                self.ensure_editable_keyframe();
+                if let Some(layer) = self.project.layers.get_mut(self.active_layer_idx) {
+                    if let Some(frame) = layer.keyframes.get_mut(&self.current_frame) {
+                        let mut to_rem = self.selected_stroke_indices.clone();
+                        to_rem.sort_unstable_by(|a, b| b.cmp(a));
+                        to_rem.dedup();
+                        for idx in to_rem { if idx < frame.strokes.len() { frame.strokes.remove(idx); } }
+                        self.selected_stroke_indices.clear();
                     }
-                } else if let Some(idx) = self.selected_symbol_inst_idx.take() {
-                    self.save_undo_state();
-                    self.ensure_editable_keyframe();
-                    if let Some(layer) = self.project.layers.get_mut(self.active_layer_idx) {
-                        if let Some(frame) = layer.keyframes.get_mut(&self.current_frame) {
-                            if idx < frame.symbol_instances.len() {
-                                frame.symbol_instances.remove(idx);
-                                self.has_unsaved_changes = true;
-                                self.play_sfx(SfxType::EraserRub);
-                            }
-                        }
-                    }
-                } else if !self.selected_stroke_indices.is_empty() {
-                    self.save_undo_state();
-                    self.ensure_editable_keyframe();
-                    if let Some(layer) = self.project.layers.get_mut(self.active_layer_idx) {
-                        if let Some(frame) = layer.keyframes.get_mut(&self.current_frame) {
-                            let mut to_remove = self.selected_stroke_indices.clone();
-                            to_remove.sort_unstable_by(|a, b| b.cmp(a));
-                            to_remove.dedup();
-                            for idx in to_remove {
-                                if idx < frame.strokes.len() {
-                                    frame.strokes.remove(idx);
-                                }
-                            }
-                            self.selected_stroke_indices.clear();
-                            self.has_unsaved_changes = true;
-                            self.play_sfx(SfxType::EraserRub);
-                        }
-                    }
-                } else {
-                    self.clear_frame_content(self.active_layer_idx, self.current_frame);
                 }
             }
         }
 
-        // محرك التشغيل مع دعم Loop Range (من AniCraft)
         if self.is_playing && self.workspace_mode == WorkspaceMode::AnimationStudio {
             if now - self.last_frame_time >= 1.0 / (self.project.fps.max(1) as f64) {
                 self.current_frame += 1;
-                let max_bound = if self.loop_enabled {
-                    self.loop_end_frame.clamp(1, self.timeline_length)
-                } else {
-                    self.timeline_length
-                };
-                let min_bound = if self.loop_enabled {
-                    self.loop_start_frame.clamp(1, max_bound)
-                } else {
-                    1
-                };
-                if self.current_frame > max_bound {
-                    self.current_frame = min_bound;
-                    self.stop_audio_playback();
-                    self.start_audio_playback();
-                }
+                let max_b = if self.loop_enabled { self.loop_end_frame.clamp(1, self.timeline_length) } else { self.timeline_length };
+                let min_b = if self.loop_enabled { self.loop_start_frame.clamp(1, max_b) } else { 1 };
+                if self.current_frame > max_b { self.current_frame = min_b; self.stop_audio_playback(); self.start_audio_playback(); }
                 self.last_frame_time = now;
             }
             ctx.request_repaint();
         }
 
-        if self.show_command_palette {
-            egui::Window::new(tr(lang, "Command Palette (Ctrl+K)", "لوحة الأوامر السريعة (Ctrl+K)"))
-                .collapsible(false)
-                .resizable(false)
-                .default_width(420.0)
-                .anchor(egui::Align2::CENTER_TOP, [0.0, 75.0])
-                .show(ctx, |ui| {
-                    let resp = ui.add(
-                        egui::TextEdit::singleline(&mut self.command_search_query)
-                            .hint_text(tr(lang, "Type a command or tool name...", "اكتب اسم الأداة أو الأمر للبحث السريع..."))
-                            .desired_width(400.0),
-                    );
-                    resp.request_focus();
-                    ui.separator();
-
-                    let q = self.command_search_query.to_lowercase();
-                    let commands: Vec<(&str, &str, usize)> = vec![
-                        ("Export Studio (Video, Images, Sprite Sheet, Lottie)", "استوديو التصدير الشامل", 1),
-                        ("Free Transform Tool (Q)", "أداة التحويل الحر ونقطة الارتكاز", 2),
-                        ("Vector Direct Select Tool (G)", "أداة تعديل نقاط الفيكتور", 3),
-                        ("Import SVG Vector File...", "استيراد ملف فيكتور SVG", 4),
-                        ("Import Adobe Animate (.xfl / .fla)...", "استيراد مشروع Adobe Animate", 5),
-                        ("Enable Shape Tween (Morphing)", "تفعيل التحول التلقائي بين شكلين (Shape Tween)", 6),
-                        ("Enable Classic Tween", "تفعيل التحريك الكلاسيكي (Classic Tween)", 7),
-                        ("Convert Selection to Symbol (F8)", "تحويل الرسمة إلى رمز (Symbol)", 8),
-                        ("Insert Blank Keyframe (F7)", "إدراج فريم فارغ جديد", 9),
-                        ("Settings & Solo Leveling System", "الإعدادات ونظام المستويات", 10),
-                    ];
-
-                    for (en_name, ar_name, action_id) in commands {
-                        if q.is_empty() || en_name.to_lowercase().contains(&q) || ar_name.contains(&q) {
-                            let label = format!("{}  —  {}", en_name, fix_ar(ar_name));
-                            if ui.selectable_label(false, label).clicked() {
-                                self.show_command_palette = false;
-                                match action_id {
-                                    1 => {
-                                        *self.export_task_state.lock().unwrap() = ExportTaskState::Idle;
-                                        self.show_export_studio = true;
-                                    }
-                                    2 => self.active_tool_ui = ActiveToolUI::FreeTransform,
-                                    3 => self.active_tool_ui = ActiveToolUI::VectorDirectSelect,
-                                    4 => self.import_svg_dialog(),
-                                    5 => self.import_animate_dialog(),
-                                    6 => {
-                                        self.ensure_editable_keyframe();
-                                        if let Some(l) = self.project.layers.get_mut(self.active_layer_idx) {
-                                            if let Some(fd) = l.keyframes.get_mut(&self.current_frame) {
-                                                fd.tween_mode = TweenMode::Shape;
-                                            }
-                                        }
-                                    }
-                                    7 => {
-                                        self.ensure_editable_keyframe();
-                                        if let Some(l) = self.project.layers.get_mut(self.active_layer_idx) {
-                                            if let Some(fd) = l.keyframes.get_mut(&self.current_frame) {
-                                                fd.tween_mode = TweenMode::Classic;
-                                            }
-                                        }
-                                    }
-                                    8 => self.show_symbol_dialog = true,
-                                    9 => self.action_insert_blank_keyframe_f7(now_time),
-                                    10 => self.show_settings_dialog = true,
-                                    _ => {}
-                                }
-                            }
-                        }
-                    }
-                    ui.separator();
-                    if ui.small_button(tr(lang, "Close (Esc)", "إغلاق")).clicked() {
-                        self.show_command_palette = false;
-                    }
-                });
-        }
-
         if self.show_export_studio {
             let task_st = self.export_task_state.lock().unwrap().clone();
-            egui::Window::new(tr(lang, "Stick Export Studio", "استوديو التصدير الاحترافي"))
-                .collapsible(false)
-                .resizable(false)
-                .default_width(470.0)
-                .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
-                .show(ctx, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.selectable_value(&mut self.export_studio_tab, 0, tr(lang, "🎬 Video & GIF", "🎬 فيديو و GIF"));
-                        ui.selectable_value(&mut self.export_studio_tab, 1, tr(lang, "🖼 Images", "🖼 صور"));
-                        ui.selectable_value(&mut self.export_studio_tab, 2, tr(lang, "🎮 Sprite Sheet", "🎮 ألعاب"));
-                        ui.selectable_value(&mut self.export_studio_tab, 3, tr(lang, "🌐 Lottie Web", "🌐 ويب Lottie"));
-                    });
-                    ui.separator();
-
-                    match task_st {
-                        ExportTaskState::Running(msg) => {
-                            ui.add_space(12.0);
+            egui::Window::new(tr(lang, "Stick Export Studio", "استوديو التصدير الاحترافي")).collapsible(false).resizable(false).default_width(460.0).anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0]).show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    ui.selectable_value(&mut self.export_studio_tab, 0, tr(lang, "🎬 Video & GIF", "🎬 فيديو و GIF"));
+                    ui.selectable_value(&mut self.export_studio_tab, 1, tr(lang, "🖼 Images", "🖼 صور"));
+                    ui.selectable_value(&mut self.export_studio_tab, 2, tr(lang, "🎮 Sprite Sheet", "🎮 ألعاب"));
+                    ui.selectable_value(&mut self.export_studio_tab, 3, tr(lang, "🌐 Lottie Web", "🌐 ويب Lottie"));
+                });
+                ui.separator();
+                match task_st {
+                    ExportTaskState::Running(msg) => { ui.horizontal(|ui| { ui.spinner(); ui.label(fix_ar(&msg)); }); ctx.request_repaint(); }
+                    ExportTaskState::Done(msg) => {
+                        ui.colored_label(egui::Color32::GREEN, fix_ar(&msg));
+                        if ui.button(tr(lang, "Done", "تم")).clicked() { *self.export_task_state.lock().unwrap() = ExportTaskState::Idle; self.show_export_studio = false; }
+                    }
+                    ExportTaskState::Failed(err) => {
+                        ui.colored_label(egui::Color32::LIGHT_RED, fix_ar(&err));
+                        if ui.button(tr(lang, "Close", "إغلاق")).clicked() { *self.export_task_state.lock().unwrap() = ExportTaskState::Idle; self.show_export_studio = false; }
+                    }
+                    ExportTaskState::Idle => {
+                        if self.export_studio_tab == 0 {
+                            for fmt in [VideoExportFormat::GifInstant, VideoExportFormat::Mp4, VideoExportFormat::Mov, VideoExportFormat::Avi, VideoExportFormat::Mkv, VideoExportFormat::Webm] {
+                                ui.radio_value(&mut self.selected_export_format, fmt, fix_ar(fmt.label()));
+                            }
                             ui.horizontal(|ui| {
-                                ui.spinner();
-                                ui.label(fix_ar(&msg));
+                                if ui.button(tr(lang, "🚀 Export Now...", "🚀 تصدير الآن...")).clicked() {
+                                    let ext = self.selected_export_format.ext();
+                                    if let Some(mut p) = rfd::FileDialog::new().add_filter("Anim", &[ext]).set_file_name(&format!("Stick.{}", ext)).save_file() {
+                                        if p.extension().is_none() { p.set_extension(ext); }
+                                        self.start_background_video_export(p, ctx.clone());
+                                    }
+                                }
+                                if ui.button(tr(lang, "Cancel", "إلغاء")).clicked() { self.show_export_studio = false; }
                             });
-                            ui.small(fix_ar("يتم التصيير بالتوازي في الخلفية بأقصى سرعة..."));
-                            ui.add_space(12.0);
-                            ctx.request_repaint();
-                        }
-                        ExportTaskState::Done(msg) => {
-                            ui.add_space(10.0);
-                            ui.colored_label(egui::Color32::GREEN, fix_ar(&msg));
-                            ui.add_space(10.0);
-                            if ui.button(tr(lang, "Done", "تم")).clicked() {
-                                *self.export_task_state.lock().unwrap() = ExportTaskState::Idle;
-                                self.show_export_studio = false;
+                        } else if self.export_studio_tab == 1 {
+                            for fmt in [ImageExportFormat::PngTransparent, ImageExportFormat::PngSolid, ImageExportFormat::Jpg, ImageExportFormat::Webp, ImageExportFormat::Bmp, ImageExportFormat::Tiff] {
+                                ui.radio_value(&mut self.selected_image_format, fmt, fix_ar(fmt.label()));
                             }
-                        }
-                        ExportTaskState::Failed(err) => {
-                            ui.add_space(10.0);
-                            ui.colored_label(egui::Color32::LIGHT_RED, fix_ar(&err));
-                            ui.add_space(10.0);
-                            if ui.button(tr(lang, "Close", "إغلاق")).clicked() {
-                                *self.export_task_state.lock().unwrap() = ExportTaskState::Idle;
-                                self.show_export_studio = false;
-                            }
-                        }
-                        ExportTaskState::Idle => {
-                            match self.export_studio_tab {
-                                0 => {
-                                    ui.strong(tr(lang, "Select Video / Animation Format:", "اختر صيغة الفيديو أو الحركة:"));
-                                    ui.add_space(4.0);
-                                    let v_formats = [
-                                        VideoExportFormat::GifInstant,
-                                        VideoExportFormat::Mp4,
-                                        VideoExportFormat::Mov,
-                                        VideoExportFormat::Avi,
-                                        VideoExportFormat::Mkv,
-                                        VideoExportFormat::Webm,
-                                    ];
-                                    for fmt in v_formats {
-                                        ui.radio_value(&mut self.selected_export_format, fmt, fix_ar(fmt.label()));
+                            ui.horizontal(|ui| {
+                                if ui.button(tr(lang, "💾 Save Image...", "💾 حفظ كصورة...")).clicked() {
+                                    let ext = self.selected_image_format.ext();
+                                    if let Some(mut p) = rfd::FileDialog::new().add_filter("Img", &[ext]).set_file_name(&format!("Stick.{}", ext)).save_file() {
+                                        if p.extension().is_none() { p.set_extension(ext); }
+                                        if exporter::export_single_image_format(&self.project, self.current_frame, &p, self.selected_image_format, self.stage_bg_color).is_ok() {
+                                            self.play_sfx(SfxType::ExportSuccess);
+                                            *self.export_task_state.lock().unwrap() = ExportTaskState::Done("تم حفظ الصورة!".to_string());
+                                        }
                                     }
-                                    ui.add_space(10.0);
-                                    ui.horizontal(|ui| {
-                                        if ui.button(tr(lang, "🚀 Export Video Now...", "🚀 تصدير الآن...")).clicked() {
-                                            let ext = self.selected_export_format.ext();
-                                            let default_name = format!("Stick_Anim.{}", ext);
-                                            if let Some(mut path) = rfd::FileDialog::new()
-                                                .add_filter("Animation", &[ext])
-                                                .set_file_name(&default_name)
-                                                .save_file()
-                                            {
-                                                if path.extension().is_none() {
-                                                    path.set_extension(ext);
-                                                }
-                                                self.start_background_video_export(path, ctx.clone());
-                                            }
-                                        }
-                                        if ui.button(tr(lang, "Cancel", "إلغاء")).clicked() {
-                                            self.show_export_studio = false;
-                                        }
-                                    });
                                 }
-                                1 => {
-                                    ui.strong(tr(lang, "Single Frame / Drawing Export:", "تصدير الرسمة أو الفريم الحالي:"));
-                                    ui.add_space(4.0);
-                                    let i_formats = [
-                                        ImageExportFormat::PngTransparent,
-                                        ImageExportFormat::PngSolid,
-                                        ImageExportFormat::Jpg,
-                                        ImageExportFormat::Webp,
-                                        ImageExportFormat::Bmp,
-                                        ImageExportFormat::Tiff,
-                                    ];
-                                    for fmt in i_formats {
-                                        ui.radio_value(&mut self.selected_image_format, fmt, fix_ar(fmt.label()));
+                                if ui.button(tr(lang, "Close", "إغلاق")).clicked() { self.show_export_studio = false; }
+                            });
+                        } else if self.export_studio_tab == 2 {
+                            if ui.button(tr(lang, "🎮 Export Sprite Sheet...", "🎮 تصدير Sprite Sheet...")).clicked() {
+                                self.project.total_frames = self.timeline_length;
+                                if let Some(mut p) = rfd::FileDialog::new().add_filter("PNG", &["png"]).set_file_name("SpriteSheet.png").save_file() {
+                                    if p.extension().is_none() { p.set_extension("png"); }
+                                    if exporter::export_sprite_sheet(&self.project, &p).is_ok() {
+                                        *self.export_task_state.lock().unwrap() = ExportTaskState::Done("تم تصدير Sprite Sheet!".to_string());
                                     }
-                                    ui.add_space(8.0);
-                                    ui.horizontal(|ui| {
-                                        if ui.button(tr(lang, "💾 Export Single Image...", "💾 حفظ كصورة...")).clicked() {
-                                            let ext = self.selected_image_format.ext();
-                                            let default_name = format!("Stick_Art.{}", ext);
-                                            if let Some(mut path) = rfd::FileDialog::new()
-                                                .add_filter("Image", &[ext])
-                                                .set_file_name(&default_name)
-                                                .save_file()
-                                            {
-                                                if path.extension().is_none() {
-                                                    path.set_extension(ext);
-                                                }
-                                                match exporter::export_single_image_format(
-                                                    &self.project,
-                                                    self.current_frame,
-                                                    &path,
-                                                    self.selected_image_format,
-                                                    self.stage_bg_color,
-                                                ) {
-                                                    Ok(_) => {
-                                                        self.play_sfx(SfxType::ExportSuccess);
-                                                        *self.export_task_state.lock().unwrap() = ExportTaskState::Done("تم حفظ الصورة بنجاح!".to_string());
-                                                    }
-                                                    Err(e) => {
-                                                        *self.export_task_state.lock().unwrap() = ExportTaskState::Failed(e);
-                                                    }
-                                                }
-                                            }
-                                        }
-                                        if ui.button(tr(lang, "📁 Export PNG Sequence...", "📁 تصدير تسلسل PNG شفاف...")).clicked() {
-                                            self.project.total_frames = self.timeline_length;
-                                            if let Some(folder) = rfd::FileDialog::new().pick_folder() {
-                                                match exporter::export_transparent_png_sequence(&self.project, &folder) {
-                                                    Ok(n) => {
-                                                        self.play_sfx(SfxType::ExportSuccess);
-                                                        *self.export_task_state.lock().unwrap() = ExportTaskState::Done(format!("تم تصدير {} صورة شفافة بسرعة البرق!", n));
-                                                    }
-                                                    Err(e) => {
-                                                        *self.export_task_state.lock().unwrap() = ExportTaskState::Failed(e);
-                                                    }
-                                                }
-                                            }
-                                        }
-                                        if ui.button(tr(lang, "Close", "إغلاق")).clicked() {
-                                            self.show_export_studio = false;
-                                        }
-                                    });
-                                }
-                                2 => {
-                                    ui.strong(tr(lang, "Game Development Sprite Sheet", "تصدير Sprite Sheet للألعاب (Unity / Godot)"));
-                                    ui.add_space(6.0);
-                                    ui.label(fix_ar("يقوم بدمج كافة فريمات الحركة في شريط صور شفاف واحد جاهز لمحركات الألعاب."));
-                                    ui.add_space(10.0);
-                                    ui.horizontal(|ui| {
-                                        if ui.button(tr(lang, "🎮 Export Sprite Sheet (.png)...", "🎮 تصدير Sprite Sheet...")).clicked() {
-                                            self.project.total_frames = self.timeline_length;
-                                            if let Some(mut path) = rfd::FileDialog::new()
-                                                .add_filter("PNG Sprite Sheet", &["png"])
-                                                .set_file_name("Stick_SpriteSheet.png")
-                                                .save_file()
-                                            {
-                                                if path.extension().is_none() {
-                                                    path.set_extension("png");
-                                                }
-                                                match exporter::export_sprite_sheet(&self.project, &path) {
-                                                    Ok(n) => {
-                                                        self.play_sfx(SfxType::ExportSuccess);
-                                                        *self.export_task_state.lock().unwrap() = ExportTaskState::Done(format!("تم تصدير Sprite Sheet ({} فريمات) بنجاح!", n));
-                                                    }
-                                                    Err(e) => {
-                                                        *self.export_task_state.lock().unwrap() = ExportTaskState::Failed(e);
-                                                    }
-                                                }
-                                            }
-                                        }
-                                        if ui.button(tr(lang, "Close", "إغلاق")).clicked() {
-                                            self.show_export_studio = false;
-                                        }
-                                    });
-                                }
-                                _ => {
-                                    ui.strong(tr(lang, "Lottie Web & Mobile Animation (.json)", "تصدير رسوم متجهة للويب (Lottie JSON)"));
-                                    ui.add_space(6.0);
-                                    ui.label(fix_ar("يصيّر مسارات الفيكتور بصيغة Lottie القياسية للعمل على المواقع وتطبيقات الهواتف."));
-                                    ui.add_space(10.0);
-                                    ui.horizontal(|ui| {
-                                        if ui.button(tr(lang, "🌐 Export Lottie (.json)...", "🌐 تصدير ملف Lottie...")).clicked() {
-                                            self.project.total_frames = self.timeline_length;
-                                            if let Some(mut path) = rfd::FileDialog::new()
-                                                .add_filter("Lottie JSON", &["json"])
-                                                .set_file_name("Stick_Lottie.json")
-                                                .save_file()
-                                            {
-                                                if path.extension().is_none() {
-                                                    path.set_extension("json");
-                                                }
-                                                match exporter::export_lottie_json(&self.project, &path) {
-                                                    Ok(_) => {
-                                                        self.play_sfx(SfxType::ExportSuccess);
-                                                        *self.export_task_state.lock().unwrap() = ExportTaskState::Done("تم تصدير ملف Lottie JSON بنجاح!".to_string());
-                                                    }
-                                                    Err(e) => {
-                                                        *self.export_task_state.lock().unwrap() = ExportTaskState::Failed(e);
-                                                    }
-                                                }
-                                            }
-                                        }
-                                        if ui.button(tr(lang, "Close", "إغلاق")).clicked() {
-                                            self.show_export_studio = false;
-                                        }
-                                    });
                                 }
                             }
+                            if ui.button(tr(lang, "Close", "إغلاق")).clicked() { self.show_export_studio = false; }
+                        } else {
+                            if ui.button(tr(lang, "🌐 Export Lottie JSON...", "🌐 تصدير Lottie JSON...")).clicked() {
+                                self.project.total_frames = self.timeline_length;
+                                if let Some(mut p) = rfd::FileDialog::new().add_filter("JSON", &["json"]).set_file_name("Lottie.json").save_file() {
+                                    if p.extension().is_none() { p.set_extension("json"); }
+                                    if exporter::export_lottie_json(&self.project, &p).is_ok() {
+                                        *self.export_task_state.lock().unwrap() = ExportTaskState::Done("تم تصدير Lottie JSON!".to_string());
+                                    }
+                                }
+                            }
+                            if ui.button(tr(lang, "Close", "إغلاق")).clicked() { self.show_export_studio = false; }
                         }
                     }
-                });
-        }
-
-        if self.show_timeline_settings {
-            egui::Window::new(tr(lang, "Timeline Settings", "إعدادات التايم لاين"))
-                .collapsible(false)
-                .resizable(false)
-                .default_width(320.0)
-                .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
-                .show(ctx, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.label(tr(lang, "Timeline Background:", "لون خلفية التايم لاين:"));
-                        if ui.color_edit_button_srgba_unmultiplied(&mut self.config.timeline_bg_color).changed() {
-                            self.config.save();
-                        }
-                    });
-                    ui.horizontal(|ui| {
-                        ui.label(tr(lang, "Empty Frame Color:", "لون الفريمات الفارغة:"));
-                        if ui.color_edit_button_srgba_unmultiplied(&mut self.config.timeline_cell_color).changed() {
-                            self.config.save();
-                        }
-                    });
-                    ui.horizontal(|ui| {
-                        ui.label(tr(lang, "Playhead Color:", "لون مؤشر الفريم الحالي:"));
-                        if ui.color_edit_button_srgba_unmultiplied(&mut self.config.timeline_playhead_color).changed() {
-                            self.config.save();
-                        }
-                    });
-                    ui.separator();
-                    ui.horizontal(|ui| {
-                        if ui.button(tr(lang, "Reset Colors", "استعادة الألوان الافتراضية")).clicked() {
-                            self.config.timeline_bg_color = default_tl_bg();
-                            self.config.timeline_cell_color = default_tl_cell();
-                            self.config.timeline_playhead_color = default_tl_head();
-                            self.config.save();
-                        }
-                        if ui.button(tr(lang, "Done", "تم")).clicked() {
-                            self.show_timeline_settings = false;
-                        }
-                    });
-                });
+                }
+            });
         }
 
         if self.show_text_dialog {
-            egui::Window::new(tr(lang, "Insert Text", "إضافة نص"))
-                .collapsible(false)
-                .resizable(false)
-                .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
-                .show(ctx, |ui| {
-                    ui.label(tr(lang, "Enter Text (Arabic or English):", "اكتب النص (عربي أو إنجليزي):"));
-                    ui.text_edit_singleline(&mut self.text_input_buf);
-                    if !self.text_input_buf.is_empty() {
-                        ui.horizontal(|ui| {
-                            ui.label(tr(lang, "Arabic Preview:", "معاينة النص:"));
-                            ui.heading(fix_ar(&self.text_input_buf));
-                        });
-                    }
-                    ui.horizontal(|ui| {
-                        ui.label(tr(lang, "Font Size:", "حجم الخط:"));
-                        ui.add(egui::DragValue::new(&mut self.text_font_size).range(10.0..=180.0));
-                    });
-                    ui.horizontal(|ui| {
-                        if ui.button(tr(lang, "Add to Canvas", "إضافة للرسم")).clicked() {
-                            if !self.text_input_buf.trim().is_empty() {
-                                self.save_undo_state();
-                                self.ensure_editable_keyframe();
-                                if let Some(layer) = self.project.layers.get_mut(self.active_layer_idx) {
-                                    if let Some(frame) = layer.keyframes.get_mut(&self.current_frame) {
-                                        frame.text_items.push(TextItem {
-                                            content: self.text_input_buf.clone(),
-                                            x: self.pending_text_pos.x,
-                                            y: self.pending_text_pos.y,
-                                            font_size: self.text_font_size,
-                                            color: self.brush_color,
-                                        });
-                                        self.has_unsaved_changes = true;
-                                        self.play_sfx(SfxType::NewFrame);
-                                    }
-                                }
+            egui::Window::new(tr(lang, "Insert Text", "إضافة نص")).collapsible(false).resizable(false).anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0]).show(ctx, |ui| {
+                ui.text_edit_singleline(&mut self.text_input_buf);
+                ui.horizontal(|ui| {
+                    if ui.button(tr(lang, "Add", "إضافة")).clicked() {
+                        if !self.text_input_buf.trim().is_empty() {
+                            self.save_undo_state();
+                            self.ensure_editable_keyframe();
+                            if let Some(l) = self.project.layers.get_mut(self.active_layer_idx) {
+                                l.keyframes.entry(self.current_frame).or_default().text_items.push(TextItem { content: self.text_input_buf.clone(), x: self.pending_text_pos.x, y: self.pending_text_pos.y, font_size: self.text_font_size, color: self.brush_color });
                             }
-                            self.text_input_buf.clear();
-                            self.show_text_dialog = false;
                         }
-                        if ui.button(tr(lang, "Cancel", "إلغاء")).clicked() {
-                            self.show_text_dialog = false;
-                        }
-                    });
-                });
-        }
-
-        if let Some(l_idx) = self.renaming_layer_idx {
-            egui::Window::new(tr(lang, "Rename Layer", "إعادة تسمية الطبقة"))
-                .collapsible(false)
-                .resizable(false)
-                .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
-                .show(ctx, |ui| {
-                    ui.text_edit_singleline(&mut self.rename_layer_buf);
-                    if !self.rename_layer_buf.is_empty() {
-                        ui.label(fix_ar(&self.rename_layer_buf));
+                        self.text_input_buf.clear();
+                        self.show_text_dialog = false;
                     }
-                    ui.horizontal(|ui| {
-                        if ui.button(tr(lang, "Save", "حفظ")).clicked() {
-                            if let Some(layer) = self.project.layers.get_mut(l_idx) {
-                                layer.name = fix_ar(&self.rename_layer_buf);
-                                self.has_unsaved_changes = true;
-                            }
-                            self.renaming_layer_idx = None;
-                        }
-                        if ui.button(tr(lang, "Cancel", "إلغاء")).clicked() {
-                            self.renaming_layer_idx = None;
-                        }
-                    });
+                    if ui.button(tr(lang, "Cancel", "إلغاء")).clicked() { self.show_text_dialog = false; }
                 });
-        }
-
-        if let Some(a_idx) = self.trimming_audio_idx {
-            egui::Window::new(tr(lang, "Trim Audio Track", "تقطيع الصوت على التايم لاين"))
-                .collapsible(false)
-                .resizable(false)
-                .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
-                .show(ctx, |ui| {
-                    if let Some(track) = self.project.audio_tracks.get_mut(a_idx) {
-                        ui.label(&track.name);
-                        ui.horizontal(|ui| {
-                            ui.label(tr(lang, "Start Frame:", "فريم البداية:"));
-                            ui.add(egui::DragValue::new(&mut track.start_frame).range(1..=self.timeline_length));
-                        });
-                        ui.horizontal(|ui| {
-                            ui.label(tr(lang, "End Frame:", "فريم النهاية:"));
-                            ui.add(egui::DragValue::new(&mut track.end_frame).range(track.start_frame..=self.timeline_length.max(track.start_frame)));
-                        });
-                    }
-                    if ui.button(tr(lang, "Done", "تم")).clicked() {
-                        self.trimming_audio_idx = None;
-                        self.has_unsaved_changes = true;
-                    }
-                });
-        }
-
-        if self.show_credits_dialog {
-            egui::Window::new(tr(lang, "About Stick", "حول برنامج Stick"))
-                .collapsible(false)
-                .resizable(false)
-                .default_width(340.0)
-                .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
-                .show(ctx, |ui| {
-                    ui.vertical_centered(|ui| {
-                        ui.add_space(6.0);
-                        ui.heading(egui::RichText::new("Made by Hady").color(egui::Color32::from_rgb(255, 215, 25)));
-                        ui.add_space(4.0);
-                        ui.label(format!("Stick 2D Animation Studio v{}", self.installed_version));
-                        ui.add_space(10.0);
-                        ui.separator();
-                        ui.add_space(6.0);
-                        ui.label(tr(lang, "Official YouTube Channel:", "قناة اليوتيوب الرسمية:"));
-                        ui.add_space(4.0);
-                        if ui.button(egui::RichText::new("▶ Open YouTube Channel").size(15.0).color(egui::Color32::WHITE))
-                            .on_hover_text(YOUTUBE_CHANNEL_URL)
-                            .clicked()
-                        {
-                            ctx.open_url(egui::OpenUrl::new_tab(YOUTUBE_CHANNEL_URL));
-                        }
-                        ui.add_space(6.0);
-                        ui.hyperlink_to("youtube.com/@ابلكاش-انميشن", YOUTUBE_CHANNEL_URL);
-                        ui.add_space(12.0);
-                        if ui.button(tr(lang, "Close", "إغلاق")).clicked() {
-                            self.show_credits_dialog = false;
-                        }
-                    });
-                });
+            });
         }
 
         if self.show_settings_dialog {
-            let mut sfx_changed = false;
-            egui::Window::new(tr(lang, "Settings & System", "الإعدادات والنظام"))
-                .collapsible(false)
-                .resizable(false)
-                .default_width(495.0)
-                .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
-                .show(ctx, |ui| {
-                    ui.horizontal(|ui| {
-                        if ui.selectable_label(self.settings_tab == 0, tr(lang, "Shortcuts & Grid", "الاختصارات والمربعات")).clicked() {
-                            self.settings_tab = 0;
-                        }
-                        if ui.selectable_label(self.settings_tab == 1, tr(lang, "[ SYSTEM ] Status", "[ النظام ] حالة اللاعب")).clicked() {
-                            self.settings_tab = 1;
-                        }
-                    });
-                    ui.separator();
-
-                    if self.settings_tab == 0 {
-                        ui.horizontal(|ui| {
-                            ui.strong(tr(lang, "Interface Language:", "لغة الواجهة:"));
-                            if ui.selectable_label(self.config.lang == AppLang::English, "English").clicked() {
-                                self.config.lang = AppLang::English;
-                                self.config.save();
-                            }
-                            if ui.selectable_label(self.config.lang == AppLang::Arabic, fix_ar("العربية")).clicked() {
-                                self.config.lang = AppLang::Arabic;
-                                self.config.save();
-                            }
-                        });
-                        ui.add_space(4.0);
-                        let sfx_label = tr(
-                            lang,
-                            "Fun Sound Effects (Tools, Frames, Level Up, Export, Exit)",
-                            "المؤثرات الصوتية الترفيهية (الأدوات، الفريمات، ارتقاء المستوى، التصدير)",
-                        );
-                        if ui.checkbox(&mut self.config.sound_effects_enabled, sfx_label).changed() {
-                            self.config.save();
-                            sfx_changed = true;
-                        }
-                        ui.add_space(4.0);
-                        ui.horizontal(|ui| {
-                            if ui.checkbox(&mut self.config.show_grid, tr(lang, "Show Canvas Grid", "إظهار شبكة المربعات")).changed() {
-                                self.config.save();
-                            }
-                            if self.config.show_grid {
-                                ui.label(tr(lang, "Grid Size:", "حجم المربع:"));
-                                if ui.add(egui::Slider::new(&mut self.config.grid_size, 10.0..=150.0)).changed() {
-                                    self.config.save();
-                                }
-                            }
-                        });
-
-                        ui.separator();
-                        let items = [
-                            (0, tr(lang, "Select Tool (Normal)", "أداة التحديد العادي"), self.config.tool_select.clone()),
-                            (1, tr(lang, "Area Select Tool (Lasso)", "أداة تحديد المنطقة الحرة"), self.config.tool_lasso.clone()),
-                            (2, tr(lang, "Free Transform Tool", "أداة التحويل الحر"), self.config.tool_free_transform.clone()),
-                            (3, tr(lang, "Vector Direct Select", "أداة تحديد نقاط الفيكتور"), self.config.tool_vector_select.clone()),
-                            (4, tr(lang, "Vector Pen Tool", "أداة قلم الفيكتور"), self.config.tool_pen.clone()),
-                            (5, tr(lang, "Brush Tool", "أداة الفرشاة"), self.config.tool_brush.clone()),
-                            (6, tr(lang, "Eraser Red (Full Stroke)", "الممحاة الحمراء (مسح الخط كامل)"), self.config.tool_eraser.clone()),
-                            (7, tr(lang, "Eraser Green (Partial)", "الممحاة الخضراء (مسح جزء صغير)"), self.config.tool_eraser_partial.clone()),
-                            (8, tr(lang, "Paint Bucket Tool", "أداة دلو التعبئة"), self.config.tool_bucket.clone()),
-                            (9, tr(lang, "Eyedropper Tool", "أداة قطارة الألوان"), self.config.tool_eyedropper.clone()),
-                            (10, tr(lang, "Text Tool", "أداة الكتابة (النص)"), self.config.tool_text.clone()),
-                            (11, tr(lang, "Shape / Line Tool", "أداة الخطوط والأشكال الهندسية"), self.config.tool_shape.clone()),
-                            (12, tr(lang, "Hand Tool (Rotate/Flip)", "أداة اليد (تدوير وعكس الكانفا)"), self.config.tool_hand.clone()),
-                            (13, tr(lang, "Delete Frame Completely", "حذف الفريم نهائياً"), self.config.delete_frame_key.clone()),
-                            (14, tr(lang, "Insert Frame (Extend)", "تمديد الفريم الحالي"), self.config.insert_frame.clone()),
-                            (15, tr(lang, "Insert Keyframe (Duplicate)", "إدراج فريم منسوخ"), self.config.insert_keyframe.clone()),
-                            (16, tr(lang, "Insert Blank Keyframe", "إدراج فريم فارغ جديد"), self.config.insert_blank_kf.clone()),
-                            (17, tr(lang, "Convert to Symbol", "تحويل إلى رمز (Symbol)"), self.config.convert_symbol.clone()),
-                            (18, tr(lang, "Play / Pause", "تشغيل / إيقاف"), self.config.play_pause.clone()),
-                            (19, tr(lang, "Previous Frame", "الفريم السابق"), self.config.prev_frame.clone()),
-                            (20, tr(lang, "Next Frame", "الفريم التالي"), self.config.next_frame.clone()),
-                            (21, tr(lang, "Decrease Brush Size", "تصغير حجم الفرشاة"), self.config.brush_smaller.clone()),
-                            (22, tr(lang, "Increase Brush Size", "تكبير حجم الفرشاة"), self.config.brush_larger.clone()),
-                            (23, tr(lang, "Reset Canvas View", "إرجاع الكانفا للمنتصف"), self.config.reset_canvas.clone()),
-                        ];
-                        let press_key_txt = tr(lang, "Press any key...", "اضغط أي زر...");
-                        egui::ScrollArea::vertical().max_height(210.0).show(ui, |ui| {
-                            for (idx, label, current_key) in items {
-                                ui.horizontal(|ui| {
-                                    ui.allocate_ui(egui::vec2(250.0, 22.0), |ui| {
-                                        ui.label(label);
-                                    });
-                                    let is_listening = self.listening_shortcut_idx == Some(idx);
-                                    let btn_text = if is_listening { press_key_txt.clone() } else { current_key };
-                                    let btn = egui::Button::new(btn_text)
-                                        .min_size(egui::vec2(125.0, 22.0))
-                                        .fill(if is_listening {
-                                            egui::Color32::from_rgb(200, 90, 20)
-                                        } else {
-                                            egui::Color32::from_rgb(55, 55, 62)
-                                        });
-                                    if ui.add(btn).clicked() {
-                                        self.listening_shortcut_idx = Some(idx);
-                                    }
-                                });
-                            }
-                        });
-                    } else {
-                        let (level, cur_xp, req_xp) = self.user_profile.get_level_progress();
-                        let rank = self.user_profile.get_hunter_rank();
-
-                        egui::Frame::none()
-                            .fill(egui::Color32::from_rgb(10, 18, 36))
-                            .stroke(egui::Stroke::new(2.0, egui::Color32::from_rgb(56, 189, 248)))
-                            .inner_margin(14.0)
-                            .rounding(6.0)
-                            .show(ui, |ui| {
-                                ui.vertical_centered(|ui| {
-                                    ui.label(
-                                        egui::RichText::new("[ SYSTEM : PLAYER STATUS ]")
-                                            .size(16.0)
-                                            .color(egui::Color32::from_rgb(56, 189, 248)),
-                                    );
-                                });
-                                ui.add_space(8.0);
-                                ui.horizontal(|ui| {
-                                    let (av_rect, _) = ui.allocate_exact_size(egui::vec2(76.0, 76.0), egui::Sense::hover());
-                                    ui.painter().rect_stroke(av_rect.expand(2.0), 6.0, egui::Stroke::new(2.0, egui::Color32::from_rgb(56, 189, 248)));
-                                    if let Some(ref tex) = self.avatar_texture {
-                                        ui.painter().image(
-                                            tex.id(),
-                                            av_rect,
-                                            egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
-                                            egui::Color32::WHITE,
-                                        );
-                                    } else {
-                                        ui.painter().rect_filled(av_rect, 4.0, egui::Color32::from_rgb(18, 42, 85));
-                                        ui.painter().text(
-                                            av_rect.center(),
-                                            egui::Align2::CENTER_CENTER,
-                                            "HUNTER",
-                                            egui::FontId::proportional(14.0),
-                                            egui::Color32::from_rgb(125, 211, 252),
-                                        );
-                                    }
-
-                                    ui.vertical(|ui| {
-                                        ui.horizontal(|ui| {
-                                            ui.colored_label(egui::Color32::from_rgb(125, 211, 252), "NAME:");
-                                            if ui.text_edit_singleline(&mut self.user_profile.username).changed() {
-                                                self.user_profile.save();
-                                            }
-                                        });
-                                        ui.horizontal(|ui| {
-                                            ui.colored_label(egui::Color32::from_rgb(125, 211, 252), "JOB:");
-                                            ui.colored_label(egui::Color32::WHITE, "Shadow Animator");
-                                            ui.separator();
-                                            ui.colored_label(egui::Color32::from_rgb(250, 204, 21), format!("RANK: {}", rank));
-                                        });
-                                        if ui.button(tr(lang, "Change Avatar...", "تغيير صورة الشخصية...")).clicked() {
-                                            if let Some(path) = rfd::FileDialog::new()
-                                                .add_filter("Images", &["png", "jpg", "jpeg", "webp"])
-                                                .pick_file()
-                                            {
-                                                let p_str = path.to_string_lossy().to_string();
-                                                if let Ok(img) = image::open(&path) {
-                                                    let rgba = img.to_rgba8();
-                                                    let color_image = egui::ColorImage::from_rgba_unmultiplied(
-                                                        [rgba.width() as usize, rgba.height() as usize],
-                                                        rgba.as_raw(),
-                                                    );
-                                                    self.avatar_texture = Some(ctx.load_texture("user_avatar", color_image, egui::TextureOptions::LINEAR));
-                                                    self.user_profile.avatar_path = Some(p_str);
-                                                    self.user_profile.save();
-                                                }
-                                            }
-                                        }
-                                    });
-                                });
-
-                                ui.add_space(10.0);
-                                ui.separator();
-                                ui.horizontal(|ui| {
-                                    ui.heading(
-                                        egui::RichText::new(format!("LEVEL  {} / 100", level))
-                                            .color(egui::Color32::from_rgb(56, 189, 248)),
-                                    );
-                                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                        ui.colored_label(egui::Color32::from_rgb(125, 211, 252), format!("EXP: {} / {}", cur_xp, req_xp));
-                                    });
-                                });
-                                let ratio = (cur_xp as f32 / req_xp.max(1) as f32).clamp(0.0, 1.0);
-                                ui.add(
-                                    egui::ProgressBar::new(ratio)
-                                        .fill(egui::Color32::from_rgb(14, 165, 233)),
-                                );
-
-                                ui.add_space(10.0);
-                                ui.horizontal(|ui| {
-                                    ui.colored_label(egui::Color32::from_rgb(125, 211, 252), tr(lang, "ACTIVE TIME:", "مدة النشاط:"));
-                                    let pt = self.user_profile.format_playtime(lang == AppLang::Arabic);
-                                    ui.colored_label(egui::Color32::WHITE, if lang == AppLang::Arabic { fix_ar(&pt) } else { pt });
-                                });
-                                ui.horizontal(|ui| {
-                                    ui.colored_label(egui::Color32::from_rgb(125, 211, 252), tr(lang, "FRAMES FORGED:", "الفريمات المنجزة:"));
-                                    ui.colored_label(egui::Color32::WHITE, format!("{}", self.user_profile.total_frames_drawn));
-                                });
-                            });
-                    }
-
-                    ui.separator();
-                    ui.horizontal(|ui| {
-                        if self.settings_tab == 0 && ui.button(tr(lang, "Reset Defaults", "استعادة الافتراضي")).clicked() {
-                            let saved_lang = self.config.lang;
-                            let saved_sfx = self.config.sound_effects_enabled;
-                            self.config = AppConfig::default();
-                            self.config.lang = saved_lang;
-                            self.config.sound_effects_enabled = saved_sfx;
-                            self.config.save();
-                            self.listening_shortcut_idx = None;
-                        }
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if ui.button(tr(lang, "Done", "تم")).clicked() {
-                                self.listening_shortcut_idx = None;
-                                self.show_settings_dialog = false;
-                            }
-                        });
-                    });
+            egui::Window::new(tr(lang, "Settings & System", "الإعدادات والنظام")).collapsible(false).resizable(false).default_width(460.0).anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0]).show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    ui.selectable_value(&mut self.settings_tab, 0, tr(lang, "General & Grid", "عام والشبكة"));
+                    ui.selectable_value(&mut self.settings_tab, 1, "[ SYSTEM ] Status");
                 });
-            if sfx_changed && self.config.sound_effects_enabled {
-                self.play_sfx(SfxType::NewFrame);
-            }
+                ui.separator();
+                if self.settings_tab == 0 {
+                    ui.horizontal(|ui| {
+                        if ui.selectable_label(self.config.lang == AppLang::English, "English").clicked() { self.config.lang = AppLang::English; self.config.save(); }
+                        if ui.selectable_label(self.config.lang == AppLang::Arabic, fix_ar("العربية")).clicked() { self.config.lang = AppLang::Arabic; self.config.save(); }
+                    });
+                    if ui.checkbox(&mut self.config.sound_effects_enabled, tr(lang, "Sound Effects", "المؤثرات الصوتية")).changed() { self.config.save(); }
+                    if ui.checkbox(&mut self.config.show_grid, tr(lang, "Show Grid", "إظهار المربعات")).changed() { self.config.save(); }
+                } else {
+                    let (lvl, cxp, rxp) = self.user_profile.get_level_progress();
+                    ui.heading(format!("LEVEL {} / 100  ({})", lvl, self.user_profile.get_hunter_rank()));
+                    ui.add(egui::ProgressBar::new((cxp as f32 / rxp.max(1) as f32).clamp(0.0, 1.0)));
+                }
+                if ui.button(tr(lang, "Done", "تم")).clicked() { self.show_settings_dialog = false; }
+            });
+        }
+
+        if self.show_credits_dialog {
+            egui::Window::new("Stick").collapsible(false).resizable(false).anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0]).show(ctx, |ui| {
+                ui.heading("Made by Hady");
+                ui.hyperlink_to("YouTube Channel", YOUTUBE_CHANNEL_URL);
+                if ui.button("Close").clicked() { self.show_credits_dialog = false; }
+            });
         }
 
         if self.show_update_dialog {
-            let current_st = self.update_state.lock().unwrap().clone();
-            egui::Window::new(tr(lang, "Stick Updater", "تحديث البرنامج"))
-                .collapsible(false)
-                .resizable(false)
-                .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
-                .show(ctx, |ui| {
-                    ui.label(format!("Current Version: v{}", self.installed_version));
-                    ui.separator();
-                    match current_st {
-                        UpdateState::Idle => {}
-                        UpdateState::Checking => {
-                            ui.horizontal(|ui| { ui.spinner(); ui.label(tr(lang, "Checking GitHub...", "جاري البحث عن تحديثات...")); });
-                        }
-                        UpdateState::UpToDate => {
-                            ui.colored_label(egui::Color32::GREEN, tr(lang, "You are on the latest version!", "لديك أحدث إصدار بالفعل!"));
-                            if ui.button(tr(lang, "Close", "إغلاق")).clicked() { self.show_update_dialog = false; }
-                        }
-                        UpdateState::UpdateAvailable { version, download_url } => {
-                            ui.colored_label(egui::Color32::LIGHT_BLUE, format!("New Version: v{}", version));
-                            ui.horizontal(|ui| {
-                                if ui.button(tr(lang, "Download & Install", "تحميل وتثبيت")).clicked() {
-                                    self.download_and_apply_update(version, download_url, ctx.clone());
-                                }
-                                if ui.button(tr(lang, "Cancel", "إلغاء")).clicked() { self.show_update_dialog = false; }
-                            });
-                        }
-                        UpdateState::Downloading(msg) => {
-                            ui.horizontal(|ui| { ui.spinner(); ui.label(msg); });
-                        }
-                        UpdateState::ReadyToRestart => {
-                            ui.colored_label(egui::Color32::GREEN, tr(lang, "Update ready! Restart now?", "اكتمل التحميل! إعادة التشغيل الآن؟"));
-                            if ui.button(tr(lang, "Restart & Apply", "إعادة التشغيل والتحديث")).clicked() { self.restart_with_new_exe(); }
-                        }
-                        UpdateState::Error(err) => {
-                            ui.colored_label(egui::Color32::RED, err);
-                            if ui.button(tr(lang, "Close", "إغلاق")).clicked() { self.show_update_dialog = false; }
-                        }
+            let st = self.update_state.lock().unwrap().clone();
+            egui::Window::new("Updater").collapsible(false).resizable(false).anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0]).show(ctx, |ui| {
+                match st {
+                    UpdateState::Checking => { ui.spinner(); }
+                    UpdateState::UpToDate => { ui.label("Up to date!"); if ui.button("Close").clicked() { self.show_update_dialog = false; } }
+                    UpdateState::UpdateAvailable { version, download_url } => {
+                        if ui.button(format!("Install v{}", version)).clicked() { self.download_and_apply_update(version, download_url, ctx.clone()); }
                     }
-                });
+                    UpdateState::Downloading(m) => { ui.label(m); }
+                    UpdateState::ReadyToRestart => { if ui.button("Restart").clicked() { self.restart_with_new_exe(); } }
+                    UpdateState::Error(e) => { ui.label(e); if ui.button("Close").clicked() { self.show_update_dialog = false; } }
+                    UpdateState::Idle => {}
+                }
+            });
         }
 
         if self.show_symbol_dialog {
-            egui::Window::new(tr(lang, "Convert to Symbol", "تحويل إلى رمز"))
-                .collapsible(false)
-                .resizable(false)
-                .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
-                .show(ctx, |ui| {
-                    ui.label(tr(lang, "Symbol Name:", "اسم الرمز:"));
-                    ui.text_edit_singleline(&mut self.new_symbol_name);
-                    ui.horizontal(|ui| {
-                        if ui.button(tr(lang, "Create", "إنشاء")).clicked() {
-                            self.save_undo_state();
-                            self.ensure_editable_keyframe();
-                            if let Some(layer) = self.project.layers.get_mut(self.active_layer_idx) {
-                                if let Some(frame) = layer.keyframes.get_mut(&self.current_frame) {
-                                    if !frame.strokes.is_empty() {
-                                        let mut nested = HashMap::new();
-                                        nested.insert(1, frame.strokes.clone());
-                                        let sym = Symbol {
-                                            name: self.new_symbol_name.clone(),
-                                            strokes: frame.strokes.clone(),
-                                            nested_keyframes: nested,
-                                            nested_total_frames: 1,
-                                        };
-                                        self.project.library_symbols.insert(self.new_symbol_name.clone(), sym);
-                                        frame.strokes.clear();
-                                        frame.symbol_instances.push(SymbolInstance {
-                                            symbol_name: self.new_symbol_name.clone(),
-                                            x: 0.0,
-                                            y: 0.0,
-                                            scale: 1.0,
-                                            rotation_deg: 0.0,
-                                            anchor_offset_x: 0.0,
-                                            anchor_offset_y: 0.0,
-                                        });
-                                        self.has_unsaved_changes = true;
-                                        self.play_sfx(SfxType::NewFrame);
-                                    }
-                                }
-                            }
-                            self.show_symbol_dialog = false;
+            egui::Window::new("Symbol").collapsible(false).resizable(false).anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0]).show(ctx, |ui| {
+                ui.text_edit_singleline(&mut self.new_symbol_name);
+                if ui.button("Create").clicked() {
+                    self.save_undo_state();
+                    self.ensure_editable_keyframe();
+                    if let Some(l) = self.project.layers.get_mut(self.active_layer_idx) {
+                        if let Some(f) = l.keyframes.get_mut(&self.current_frame) {
+                            let mut nested = HashMap::new();
+                            nested.insert(1, f.strokes.clone());
+                            self.project.library_symbols.insert(self.new_symbol_name.clone(), Symbol { name: self.new_symbol_name.clone(), strokes: f.strokes.clone(), nested_keyframes: nested, nested_total_frames: 1 });
+                            f.strokes.clear();
+                            f.symbol_instances.push(SymbolInstance { symbol_name: self.new_symbol_name.clone(), x: 0.0, y: 0.0, scale: 1.0, rotation_deg: 0.0, anchor_offset_x: 0.0, anchor_offset_y: 0.0 });
                         }
-                        if ui.button(tr(lang, "Cancel", "إلغاء")).clicked() { self.show_symbol_dialog = false; }
-                    });
-                });
+                    }
+                    self.show_symbol_dialog = false;
+                }
+            });
         }
 
         if close_req && !self.allow_close {
@@ -3292,1072 +1944,214 @@ impl eframe::App for StickApp {
         }
 
         if self.show_exit_dialog {
-            egui::Window::new(tr(lang, "Unsaved Changes", "تغييرات غير محفوظة"))
-                .collapsible(false)
-                .resizable(false)
-                .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
-                .show(ctx, |ui| {
-                    ui.label(tr(lang, "Save changes before closing?", "هل تريد حفظ المشروع قبل الإغلاق؟"));
-                    ui.horizontal(|ui| {
-                        if ui.button(tr(lang, "Save & Exit", "حفظ وخروج")).clicked() && self.trigger_save() {
-                            play_sfx_async(self.config.sound_effects_enabled, SfxType::ExitFarewell, true);
-                            self.allow_close = true;
-                            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-                        }
-                        if ui.button(tr(lang, "Don't Save", "عدم الحفظ")).clicked() {
-                            play_sfx_async(self.config.sound_effects_enabled, SfxType::ExitFarewell, true);
-                            self.allow_close = true;
-                            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-                        }
-                    });
+            egui::Window::new("Exit").collapsible(false).resizable(false).anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0]).show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    if ui.button("Save & Exit").clicked() && self.trigger_save() { self.allow_close = true; ctx.send_viewport_cmd(egui::ViewportCommand::Close); }
+                    if ui.button("Exit").clicked() { self.allow_close = true; ctx.send_viewport_cmd(egui::ViewportCommand::Close); }
                 });
+            });
         }
 
         // الشريط العلوي
         egui::TopBottomPanel::top("top_bar").show(ctx, |ui| {
             egui::menu::bar(ui, |ui| {
-                let (heart_rect, heart_resp) = ui.allocate_exact_size(egui::vec2(22.0, 20.0), egui::Sense::click());
-                if heart_resp.hovered() {
-                    ui.painter().rect_filled(heart_rect, 4.0, egui::Color32::from_gray(55));
-                }
-                draw_red_heart_icon(ui.painter(), heart_rect, heart_resp.hovered());
-                if heart_resp.on_hover_text("Made by Hady - Credits").clicked() {
-                    self.play_sfx(SfxType::UiClick);
-                    self.show_credits_dialog = true;
-                }
-
+                let (h_rect, h_resp) = ui.allocate_exact_size(egui::vec2(22.0, 20.0), egui::Sense::click());
+                draw_red_heart_icon(ui.painter(), h_rect, h_resp.hovered());
+                if h_resp.clicked() { self.show_credits_dialog = true; }
                 ui.colored_label(egui::Color32::from_rgb(255, 215, 25), "Stick");
                 ui.separator();
-
-                let mode_btn_lbl = if self.workspace_mode == WorkspaceMode::DrawingOnly {
-                    tr(lang, "Switch to Animation", "التبديل للأنيميشن")
-                } else {
-                    tr(lang, "Switch to Drawing", "التبديل للرسم")
-                };
-                if ui.button(mode_btn_lbl).clicked() {
-                    self.play_sfx(SfxType::UiClick);
-                    self.workspace_mode = if self.workspace_mode == WorkspaceMode::DrawingOnly {
-                        WorkspaceMode::AnimationStudio
-                    } else {
-                        WorkspaceMode::DrawingOnly
-                    };
+                let m_lbl = if self.workspace_mode == WorkspaceMode::DrawingOnly { tr(lang, "Switch to Animation", "التبديل للأنيميشن") } else { tr(lang, "Switch to Drawing", "التبديل للرسم") };
+                if ui.button(m_lbl).clicked() {
+                    self.workspace_mode = if self.workspace_mode == WorkspaceMode::DrawingOnly { WorkspaceMode::AnimationStudio } else { WorkspaceMode::DrawingOnly };
                 }
                 ui.separator();
-
                 ui.menu_button(tr(lang, "File", "ملف"), |ui| {
-                    if ui.button(tr(lang, "Save Project (Ctrl+S)", "حفظ المشروع")).clicked() { self.trigger_save(); ui.close_menu(); }
-                    if ui.button(tr(lang, "Open Project (.stick / .ah2d)", "فتح مشروع")).clicked() {
-                        if let Some(path) = rfd::FileDialog::new().add_filter("Stick Project", &["stick", "ah2d"]).pick_file() {
-                            match AniProject::load_from_file(&path) {
-                                Ok(proj) => {
-                                    self.timeline_length = proj.total_frames.max(1);
-                                    self.current_frame = 1;
-                                    self.active_layer_idx = 0;
-                                    self.selected_stroke_indices.clear();
-                                    self.selected_text_idx = None;
-                                    self.selected_symbol_inst_idx = None;
-                                    self.project = proj;
-                                    self.has_unsaved_changes = false;
-                                    self.play_sfx(SfxType::NewFrame);
-                                    self.status_message = tr(lang, "Project Loaded!", "تم فتح المشروع بنجاح!");
-                                }
-                                Err(err) => {
-                                    self.status_message = err;
-                                }
+                    if ui.button(tr(lang, "Save (Ctrl+S)", "حفظ")).clicked() { self.trigger_save(); ui.close_menu(); }
+                    if ui.button(tr(lang, "Open (.stick / .ah2d)", "فتح مشروع")).clicked() {
+                        if let Some(p) = rfd::FileDialog::new().add_filter("Stick", &["stick", "ah2d"]).pick_file() {
+                            if let Ok(proj) = AniProject::load_from_file(&p) {
+                                self.timeline_length = proj.total_frames.max(1);
+                                self.current_frame = 1;
+                                self.project = proj;
                             }
                         }
                         ui.close_menu();
                     }
-                    ui.separator();
-                    if ui.button(tr(lang, "Import Image...", "استيراد صورة...")).clicked() { self.import_image_dialog(); ui.close_menu(); }
-                    if ui.button(tr(lang, "Import SVG Vector...", "استيراد فيكتور SVG...")).clicked() { self.import_svg_dialog(); ui.close_menu(); }
-                    if self.workspace_mode == WorkspaceMode::AnimationStudio {
-                        if ui.button(tr(lang, "Import Adobe Animate (.xfl / .fla)...", "استيراد Adobe Animate...")).clicked() {
-                            self.import_animate_dialog();
-                            ui.close_menu();
-                        }
-                        if ui.button(tr(lang, "Import Video...", "استيراد فيديو...")).clicked() { self.import_video_dialog(); ui.close_menu(); }
-                        if ui.button(tr(lang, "Import Audio...", "استيراد صوت...")).clicked() { self.import_audio_dialog(); ui.close_menu(); }
-                    }
-                    ui.separator();
-                    if ui.button(tr(lang, "🚀 Open Export Studio...", "🚀 فتح استوديو التصدير الشامل...")).clicked() {
-                        *self.export_task_state.lock().unwrap() = ExportTaskState::Idle;
-                        self.show_export_studio = true;
-                        ui.close_menu();
-                    }
+                    if ui.button(tr(lang, "Import Image...", "استيراد صورة")).clicked() { self.import_image_dialog(); ui.close_menu(); }
+                    if ui.button(tr(lang, "Import SVG...", "استيراد SVG")).clicked() { self.import_svg_dialog(); ui.close_menu(); }
+                    if ui.button(tr(lang, "Import Adobe Animate...", "استيراد Animate")).clicked() { self.import_animate_dialog(); ui.close_menu(); }
+                    if ui.button(tr(lang, "🚀 Export Studio...", "🚀 استوديو التصدير")).clicked() { self.show_export_studio = true; ui.close_menu(); }
                 });
+                let can_u = !self.undo_stack.is_empty();
+                let (ur, uresp) = ui.allocate_exact_size(egui::vec2(26.0, 22.0), egui::Sense::click());
+                draw_undo_redo_arrow(ui.painter(), ur, true, can_u);
+                if uresp.clicked() && can_u { self.undo(); }
 
-                ui.separator();
-                let can_undo = !self.undo_stack.is_empty();
-                let (u_rect, u_resp) = ui.allocate_exact_size(egui::vec2(26.0, 22.0), egui::Sense::click());
-                if u_resp.hovered() && can_undo {
-                    ui.painter().rect_filled(u_rect, 4.0, egui::Color32::from_gray(55));
-                }
-                draw_undo_redo_arrow(ui.painter(), u_rect, true, can_undo);
-                if u_resp.on_hover_text("Undo (Ctrl+Z)").clicked() && can_undo {
-                    self.undo();
-                }
-
-                let can_redo = !self.redo_stack.is_empty();
-                let (r_rect, r_resp) = ui.allocate_exact_size(egui::vec2(26.0, 22.0), egui::Sense::click());
-                if r_resp.hovered() && can_redo {
-                    ui.painter().rect_filled(r_rect, 4.0, egui::Color32::from_gray(55));
-                }
-                draw_undo_redo_arrow(ui.painter(), r_rect, false, can_redo);
-                if r_resp.on_hover_text("Redo (Ctrl+Y)").clicked() && can_redo {
-                    self.redo();
-                }
+                let can_r = !self.redo_stack.is_empty();
+                let (rr, rresp) = ui.allocate_exact_size(egui::vec2(26.0, 22.0), egui::Sense::click());
+                draw_undo_redo_arrow(ui.painter(), rr, false, can_r);
+                if rresp.clicked() && can_r { self.redo(); }
 
                 ui.separator();
                 if ui.button(tr(lang, "+ Image", "+ صورة")).clicked() { self.import_image_dialog(); }
-                if ui.button("+ SVG").on_hover_text("Import SVG Vector").clicked() { self.import_svg_dialog(); }
+                if ui.button("+ SVG").clicked() { self.import_svg_dialog(); }
                 if self.workspace_mode == WorkspaceMode::AnimationStudio {
                     if ui.button(tr(lang, "+ Video", "+ فيديو")).clicked() { self.import_video_dialog(); }
                     if ui.button(tr(lang, "+ Audio", "+ صوت")).clicked() { self.import_audio_dialog(); }
                 }
-                ui.separator();
                 if ui.button(egui::RichText::new(tr(lang, "Export Studio", "استوديو التصدير")).color(egui::Color32::from_rgb(56, 189, 248))).clicked() {
-                    *self.export_task_state.lock().unwrap() = ExportTaskState::Idle;
                     self.show_export_studio = true;
-                }
-                if ui.small_button("Ctrl+K").on_hover_text("Command Palette").clicked() {
-                    self.show_command_palette = true;
                 }
                 if ui.button(tr(lang, "Updates", "تحديثات")).clicked() { self.check_for_updates(ctx.clone()); }
 
-                if let Some(ref sym_name) = self.editing_symbol_name.clone() {
-                    ui.separator();
-                    ui.colored_label(egui::Color32::from_rgb(250, 204, 21), format!("[Symbol: {}]", sym_name));
-                    if ui.small_button(tr(lang, "⬅ Exit Symbol", "⬅ العودة للمشهد الرئيسي")).clicked() {
-                        self.editing_symbol_name = None;
-                    }
-                }
-
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    let (gear_rect, gear_resp) = ui.allocate_exact_size(egui::vec2(24.0, 22.0), egui::Sense::click());
-                    if gear_resp.hovered() {
-                        ui.painter().rect_filled(gear_rect, 4.0, egui::Color32::from_gray(65));
-                    }
-                    draw_gear_icon(ui.painter(), gear_rect, 1.0);
-                    if gear_resp.on_hover_text(tr(lang, "Settings & System", "الإعدادات والنظام")).clicked() {
-                        self.play_sfx(SfxType::UiClick);
-                        self.show_settings_dialog = true;
-                    }
-
-                    ui.separator();
-                    if ui.small_button("+15%").clicked() {
-                        self.zoom_level = (self.zoom_level * 1.15).clamp(0.1, 6.0);
-                        self.play_sfx(SfxType::ZoomStep);
-                    }
+                    let (gr, gresp) = ui.allocate_exact_size(egui::vec2(24.0, 22.0), egui::Sense::click());
+                    draw_gear_icon(ui.painter(), gr, 1.0);
+                    if gresp.clicked() { self.show_settings_dialog = true; }
+                    if ui.small_button("+15%").clicked() { self.zoom_level = (self.zoom_level * 1.15).clamp(0.1, 6.0); }
                     ui.label(format!("{:.0}%", self.zoom_level * 100.0));
-                    if ui.small_button("-15%").clicked() {
-                        self.zoom_level = (self.zoom_level / 1.15).clamp(0.1, 6.0);
-                        self.play_sfx(SfxType::ZoomStep);
-                    }
-                    if ui.small_button(format!("{} ({})", tr(lang, "Center", "توسيط"), self.config.reset_canvas)).clicked() {
-                        self.zoom_level = 0.75;
-                        self.pan_offset = egui::Vec2::ZERO;
-                        self.canvas_rotation_deg = 0.0;
-                        self.canvas_flip_h = false;
-                        self.canvas_flip_v = false;
-                        self.play_sfx(SfxType::ZoomStep);
-                    }
-                    ui.separator();
-                    ui.colored_label(egui::Color32::LIGHT_GRAY, fix_ar(&self.status_message));
+                    if ui.small_button("-15%").clicked() { self.zoom_level = (self.zoom_level / 1.15).clamp(0.1, 6.0); }
+                    if ui.small_button("Center (R)").clicked() { self.zoom_level = 0.75; self.pan_offset = egui::Vec2::ZERO; }
                 });
             });
         });
 
         // شريط الأدوات الأيسر
-        egui::SidePanel::left("tools_panel")
-            .resizable(true)
-            .default_width(64.0)
-            .width_range(52.0..=220.0)
-            .show(ctx, |ui| {
-                ui.vertical_centered(|ui| {
-                    ui.add_space(6.0);
-                    let select_ui = match self.active_tool_ui {
-                        ActiveToolUI::SelectLasso => ActiveToolUI::SelectLasso,
-                        ActiveToolUI::VectorDirectSelect => ActiveToolUI::VectorDirectSelect,
-                        _ => ActiveToolUI::SelectNormal,
-                    };
-                    let select_label = match select_ui {
-                        ActiveToolUI::SelectLasso => tr(lang, "Area Select", "تحديد منطقة"),
-                        ActiveToolUI::VectorDirectSelect => tr(lang, "Vector Select", "نقاط فيكتور"),
-                        _ => tr(lang, "Select", "تحديد عادي"),
-                    };
-                    let select_sc = match select_ui {
-                        ActiveToolUI::SelectLasso => self.config.tool_lasso.clone(),
-                        ActiveToolUI::VectorDirectSelect => self.config.tool_vector_select.clone(),
-                        _ => self.config.tool_select.clone(),
-                    };
-
-                    let eraser_ui = if self.active_tool_ui == ActiveToolUI::EraserGreen {
-                        ActiveToolUI::EraserGreen
-                    } else {
-                        ActiveToolUI::EraserRed
-                    };
-                    let eraser_label = if eraser_ui == ActiveToolUI::EraserGreen {
-                        tr(lang, "Partial Eraser", "ممحاة جزئية")
-                    } else {
-                        tr(lang, "Stroke Eraser", "ممحاة كاملة")
-                    };
-                    let eraser_sc = if eraser_ui == ActiveToolUI::EraserGreen {
-                        self.config.tool_eraser_partial.clone()
-                    } else {
-                        self.config.tool_eraser.clone()
-                    };
-
-                    let tools = [
-                        (select_ui, select_label, select_sc),
-                        (ActiveToolUI::FreeTransform, tr(lang, "Free Transform", "تحويل حر"), self.config.tool_free_transform.clone()),
-                        (ActiveToolUI::VectorPen, tr(lang, "Vector Pen", "قلم فيكتور"), self.config.tool_pen.clone()),
-                        (ActiveToolUI::Brush, tr(lang, "Brush", "فرشاة"), self.config.tool_brush.clone()),
-                        (eraser_ui, eraser_label, eraser_sc),
-                        (ActiveToolUI::Bucket, tr(lang, "Bucket", "تعبئة"), self.config.tool_bucket.clone()),
-                        (ActiveToolUI::Eyedropper, tr(lang, "Picker", "قطارة"), self.config.tool_eyedropper.clone()),
-                        (ActiveToolUI::Text, tr(lang, "Text", "نص"), self.config.tool_text.clone()),
-                        (ActiveToolUI::ShapeLine, tr(lang, "Shapes / Line", "خطوط وأشكال"), self.config.tool_shape.clone()),
-                        (ActiveToolUI::HandCanvas, tr(lang, "Hand / Flip", "اليد / عكس وتدوير"), self.config.tool_hand.clone()),
-                    ];
-                    let show_labels = ui.available_width() > 95.0;
-                    for (tool, name, sc) in tools {
-                        let selected = self.active_tool_ui == tool;
-                        let accent = get_tool_ui_color(tool);
-                        let btn_w = if show_labels { ui.available_width() - 8.0 } else { 42.0 };
-                        let (rect, resp) = ui.allocate_exact_size(egui::vec2(btn_w, 32.0), egui::Sense::click());
-                        let bg = if selected {
-                            accent
-                        } else if resp.hovered() {
-                            egui::Color32::from_rgb(62, 62, 68)
-                        } else {
-                            egui::Color32::from_rgb(44, 44, 48)
-                        };
-                        ui.painter().rect_filled(rect, 6.0, bg);
-                        let icon_rect = egui::Rect::from_min_size(rect.min, egui::vec2(42.0, 32.0));
-                        draw_tool_ui_icon(ui.painter(), icon_rect, tool, selected);
-                        if show_labels {
-                            ui.painter().text(
-                                icon_rect.right_center() + egui::vec2(4.0, 0.0),
-                                egui::Align2::LEFT_CENTER,
-                                format!("{} ({})", name, sc),
-                                egui::FontId::proportional(12.5),
-                                egui::Color32::WHITE,
-                            );
-                        }
-                        if resp.clicked() {
-                            self.active_tool_ui = tool;
-                            match tool {
-                                ActiveToolUI::VectorPen | ActiveToolUI::VectorDirectSelect => self.play_sfx(SfxType::VectorPenTick),
-                                ActiveToolUI::Brush => self.play_sfx(SfxType::BrushScratch),
-                                ActiveToolUI::EraserRed | ActiveToolUI::EraserGreen => self.play_sfx(SfxType::EraserRub),
-                                ActiveToolUI::SelectLasso => self.play_sfx(SfxType::LassoSelect),
-                                _ => self.play_sfx(SfxType::UiClick),
-                            }
-                        }
-                        if matches!(tool, ActiveToolUI::SelectNormal | ActiveToolUI::SelectLasso | ActiveToolUI::VectorDirectSelect) {
-                            let lbl_norm = tr(lang, "Normal Select (V)", "تحديد عادي (V)");
-                            let lbl_area = tr(lang, "Area / Lasso Select (L)", "تحديد منطقة حرة (L)");
-                            let lbl_vec = tr(lang, "Vector Direct Select (G)", "تحديد نقاط الفيكتور (G)");
-                            resp.context_menu(|ui| {
-                                if ui.selectable_label(self.active_tool_ui == ActiveToolUI::SelectNormal, &lbl_norm).clicked() {
-                                    self.active_tool_ui = ActiveToolUI::SelectNormal;
-                                    self.play_sfx(SfxType::UiClick);
-                                    ui.close_menu();
-                                }
-                                if ui.selectable_label(self.active_tool_ui == ActiveToolUI::SelectLasso, &lbl_area).clicked() {
-                                    self.active_tool_ui = ActiveToolUI::SelectLasso;
-                                    self.play_sfx(SfxType::LassoSelect);
-                                    ui.close_menu();
-                                }
-                                if ui.selectable_label(self.active_tool_ui == ActiveToolUI::VectorDirectSelect, &lbl_vec).clicked() {
-                                    self.active_tool_ui = ActiveToolUI::VectorDirectSelect;
-                                    self.play_sfx(SfxType::VectorPenTick);
-                                    ui.close_menu();
-                                }
-                            });
-                        }
-                        if matches!(tool, ActiveToolUI::EraserRed | ActiveToolUI::EraserGreen) {
-                            let lbl_red = tr(lang, "Red Eraser: Full Stroke (E)", "الممحاة الحمراء: مسح الخط كامل (E)");
-                            let lbl_green = tr(lang, "Green Eraser: Partial (T)", "الممحاة الخضراء: مسح جزء صغير (T)");
-                            resp.context_menu(|ui| {
-                                if ui.selectable_label(self.active_tool_ui == ActiveToolUI::EraserRed, &lbl_red).clicked() {
-                                    self.active_tool_ui = ActiveToolUI::EraserRed;
-                                    self.play_sfx(SfxType::EraserRub);
-                                    ui.close_menu();
-                                }
-                                if ui.selectable_label(self.active_tool_ui == ActiveToolUI::EraserGreen, &lbl_green).clicked() {
-                                    self.active_tool_ui = ActiveToolUI::EraserGreen;
-                                    self.play_sfx(SfxType::EraserRub);
-                                    ui.close_menu();
-                                }
-                            });
-                        }
-                        if tool == ActiveToolUI::ShapeLine {
-                            resp.context_menu(|ui| {
-                                if ui.selectable_label(self.selected_shape_kind == GeometricShapeKind::StraightLine, tr(lang, "Straight Line", "خط مستقيم")).clicked() {
-                                    self.active_tool_ui = ActiveToolUI::ShapeLine;
-                                    self.selected_shape_kind = GeometricShapeKind::StraightLine;
-                                    ui.close_menu();
-                                }
-                                if ui.selectable_label(self.selected_shape_kind == GeometricShapeKind::Circle, tr(lang, "Circle", "دائرة مضبوطة")).clicked() {
-                                    self.active_tool_ui = ActiveToolUI::ShapeLine;
-                                    self.selected_shape_kind = GeometricShapeKind::Circle;
-                                    ui.close_menu();
-                                }
-                                if ui.selectable_label(self.selected_shape_kind == GeometricShapeKind::Square, tr(lang, "Square", "مربع")).clicked() {
-                                    self.active_tool_ui = ActiveToolUI::ShapeLine;
-                                    self.selected_shape_kind = GeometricShapeKind::Square;
-                                    ui.close_menu();
-                                }
-                                if ui.selectable_label(self.selected_shape_kind == GeometricShapeKind::Rectangle, tr(lang, "Rectangle", "مستطيل")).clicked() {
-                                    self.active_tool_ui = ActiveToolUI::ShapeLine;
-                                    self.selected_shape_kind = GeometricShapeKind::Rectangle;
-                                    ui.close_menu();
-                                }
-                            });
-                        }
-                        if tool == ActiveToolUI::HandCanvas {
-                            resp.context_menu(|ui| {
-                                if ui.button(tr(lang, "Flip Horizontal (Left/Right)", "عكس أفقي (يمين / شمال)")).clicked() {
-                                    self.canvas_flip_h = !self.canvas_flip_h;
-                                    self.play_sfx(SfxType::ZoomStep);
-                                    ui.close_menu();
-                                }
-                                if ui.button(tr(lang, "Flip Vertical (Up/Down)", "عكس رأسي (فوق / تحت)")).clicked() {
-                                    self.canvas_flip_v = !self.canvas_flip_v;
-                                    self.play_sfx(SfxType::ZoomStep);
-                                    ui.close_menu();
-                                }
-                                ui.separator();
-                                if ui.button(tr(lang, "Rotate +15°", "تدوير +15 درجة")).clicked() {
-                                    self.canvas_rotation_deg = (self.canvas_rotation_deg + 15.0) % 360.0;
-                                    self.play_sfx(SfxType::ZoomStep);
-                                    ui.close_menu();
-                                }
-                                if ui.button(tr(lang, "Rotate -15°", "تدوير -15 درجة")).clicked() {
-                                    self.canvas_rotation_deg = (self.canvas_rotation_deg - 15.0) % 360.0;
-                                    self.play_sfx(SfxType::ZoomStep);
-                                    ui.close_menu();
-                                }
-                                if ui.button(tr(lang, "Reset Orientation", "إعادة الوضع الأصلي")).clicked() {
-                                    self.canvas_rotation_deg = 0.0;
-                                    self.canvas_flip_h = false;
-                                    self.canvas_flip_v = false;
-                                    self.play_sfx(SfxType::ZoomStep);
-                                    ui.close_menu();
-                                }
-                            });
-                        }
-                    }
-                    ui.separator();
-                    ui.small(tr(lang, "Color", "اللون"));
-                    ui.color_edit_button_srgba_unmultiplied(&mut self.brush_color);
-                });
+        egui::SidePanel::left("tools_panel").resizable(true).default_width(60.0).show(ctx, |ui| {
+            ui.vertical_centered(|ui| {
+                ui.add_space(6.0);
+                let tools = [
+                    (ActiveToolUI::SelectNormal, "Select (V)"),
+                    (ActiveToolUI::FreeTransform, "Transform (Q)"),
+                    (ActiveToolUI::VectorPen, "Ink Pen (P)"),
+                    (ActiveToolUI::Brush, "Brushes (B)"),
+                    (ActiveToolUI::EraserRed, "Eraser (E)"),
+                    (ActiveToolUI::EraserGreen, "Part Eraser (T)"),
+                    (ActiveToolUI::Bucket, "Bucket Fill (K)"),
+                    (ActiveToolUI::Eyedropper, "Picker (I)"),
+                    (ActiveToolUI::Text, "Text (N)"),
+                    (ActiveToolUI::ShapeLine, "Shapes (U)"),
+                    (ActiveToolUI::HandCanvas, "Hand (H)"),
+                ];
+                for (tool, tip) in tools {
+                    let sel = self.active_tool_ui == tool;
+                    let (rect, resp) = ui.allocate_exact_size(egui::vec2(40.0, 30.0), egui::Sense::click());
+                    let bg = if sel { get_tool_ui_color(tool) } else if resp.hovered() { egui::Color32::from_rgb(62, 62, 68) } else { egui::Color32::from_rgb(44, 44, 48) };
+                    ui.painter().rect_filled(rect, 6.0, bg);
+                    draw_tool_ui_icon(ui.painter(), rect, tool, sel);
+                    if resp.on_hover_text(tip).clicked() { self.active_tool_ui = tool; }
+                }
+                ui.separator();
+                ui.color_edit_button_srgba_unmultiplied(&mut self.brush_color);
             });
+        });
 
         // اللوحة اليمنى
-        egui::SidePanel::right("right_panel")
-            .resizable(true)
-            .default_width(265.0)
-            .width_range(190.0..=480.0)
-            .show(ctx, |ui| {
-                if self.workspace_mode == WorkspaceMode::DrawingOnly {
-                    ui.strong(tr(lang, "🎨 Krita Drawing Studio", "🎨 استوديو الرسم (محرك Krita)"));
-                    ui.separator();
-                    self.render_tool_properties_ui(ui, lang);
-
-                    ui.add_space(8.0);
-                    ui.separator();
-                    ui.strong(tr(lang, "Symmetry Mirroring", "الرسم المتماثل (المرآة)"));
-                    ui.horizontal(|ui| {
-                        ui.selectable_value(&mut self.symmetry_mode, SymmetryMode::Off, tr(lang, "Off", "إيقاف"));
-                        ui.selectable_value(&mut self.symmetry_mode, SymmetryMode::Horizontal, tr(lang, "Horizontal", "أفقي"));
-                        ui.selectable_value(&mut self.symmetry_mode, SymmetryMode::Vertical, tr(lang, "Vertical", "رأسي"));
-                    });
-
-                    ui.add_space(6.0);
-                    ui.strong(tr(lang, "Quick Color Swatches", "ألوان سريعة"));
-                    let swatches: [[u8; 4]; 8] = [
-                        [0, 0, 0, 255],
-                        [255, 255, 255, 255],
-                        [239, 68, 68, 255],
-                        [249, 115, 22, 255],
-                        [250, 204, 21, 255],
-                        [34, 197, 94, 255],
-                        [56, 189, 248, 255],
-                        [168, 85, 247, 255],
-                    ];
-                    ui.horizontal(|ui| {
-                        for col in swatches {
-                            let c32 = egui::Color32::from_rgba_unmultiplied(col[0], col[1], col[2], 255);
-                            let (r, resp) = ui.allocate_exact_size(egui::vec2(22.0, 22.0), egui::Sense::click());
-                            ui.painter().rect_filled(r, 4.0, c32);
-                            ui.painter().rect_stroke(r, 4.0, egui::Stroke::new(1.0, egui::Color32::GRAY));
-                            if resp.clicked() {
-                                self.brush_color = col;
-                                self.play_sfx(SfxType::UiClick);
-                            }
-                        }
-                    });
-
-                    ui.add_space(8.0);
-                    ui.separator();
-                    ui.horizontal(|ui| {
-                        ui.strong(tr(lang, "Layers", "الطبقات"));
-                        if ui.small_button(tr(lang, "+ Layer", "+ طبقة")).clicked() {
-                            self.save_undo_state();
-                            let count = self.project.layers.len() + 1;
-                            let mut kf = HashMap::new();
-                            kf.insert(1, Default::default());
-                            self.project.layers.push(Layer {
-                                name: format!("Layer_{}", count),
-                                visible: true,
-                                locked: false,
-                                is_guide: false,
-                                keyframes: kf,
-                            });
-                            self.play_sfx(SfxType::NewFrame);
-                        }
-                    });
-                    let mut del_l = None;
-                    let l_len = self.project.layers.len();
-                    egui::ScrollArea::vertical().max_height(150.0).show(ui, |ui| {
-                        for (idx, layer) in self.project.layers.iter_mut().enumerate() {
-                            ui.horizontal(|ui| {
-                                ui.checkbox(&mut layer.visible, "");
-                                if ui.selectable_label(self.active_layer_idx == idx, &layer.name).clicked() {
-                                    self.active_layer_idx = idx;
-                                }
-                                if l_len > 1 && ui.small_button("X").clicked() {
-                                    del_l = Some(idx);
-                                }
-                            });
-                        }
-                    });
-                    if let Some(idx) = del_l {
+        egui::SidePanel::right("right_panel").resizable(true).default_width(270.0).show(ctx, |ui| {
+            self.render_tool_properties_ui(ui, lang);
+            ui.add_space(8.0);
+            ui.separator();
+            ui.strong(tr(lang, "Symmetry Mirroring", "الرسم المتماثل"));
+            ui.horizontal(|ui| {
+                ui.selectable_value(&mut self.symmetry_mode, SymmetryMode::Off, "Off");
+                ui.selectable_value(&mut self.symmetry_mode, SymmetryMode::Horizontal, "H");
+                ui.selectable_value(&mut self.symmetry_mode, SymmetryMode::Vertical, "V");
+            });
+            ui.add_space(6.0);
+            ui.horizontal(|ui| {
+                ui.strong(tr(lang, "Layers", "الطبقات"));
+                if ui.small_button("+ Layer").clicked() {
+                    self.save_undo_state();
+                    let mut kf = HashMap::new();
+                    kf.insert(1, Default::default());
+                    self.project.layers.insert(0, Layer { name: format!("Layer_{}", self.project.layers.len() + 1), visible: true, locked: false, is_guide: false, opacity: 1.0, keyframes: kf });
+                    self.active_layer_idx = 0;
+                }
+                if self.project.layers.len() > 1 && self.active_layer_idx + 1 < self.project.layers.len() {
+                    if ui.small_button("Merge ↓").clicked() {
                         self.save_undo_state();
-                        self.project.layers.remove(idx);
-                        if self.active_layer_idx >= self.project.layers.len() {
-                            self.active_layer_idx = self.project.layers.len().saturating_sub(1);
-                        }
-                    }
-
-                    ui.add_space(8.0);
-                    ui.separator();
-                    if ui.button(tr(lang, "🚀 Open Export Studio...", "🚀 تصدير الرسمة (Export Studio)...")).clicked() {
-                        self.export_studio_tab = 1;
-                        self.show_export_studio = true;
-                    }
-                } else {
-                    ui.horizontal(|ui| {
-                        if ui.selectable_label(self.right_tab == 0, tr(lang, "Properties", "الخصائص")).clicked() { self.right_tab = 0; }
-                        if ui.selectable_label(self.right_tab == 1, tr(lang, "Library & Audio", "المكتبة والصوت")).clicked() { self.right_tab = 1; }
-                    });
-                    ui.separator();
-
-                    if self.right_tab == 0 {
-                        self.render_tool_properties_ui(ui, lang);
-
-                        if let Some(layer) = self.project.layers.get_mut(self.active_layer_idx) {
-                            if let Some(fd) = layer.keyframes.get_mut(&self.current_frame) {
-                                ui.add_space(8.0);
-                                ui.separator();
-                                ui.strong(tr(lang, "Frame Tween & Easing", "التحريك التلقائي والنعومة (Tweens)"));
-                                ui.horizontal(|ui| {
-                                    ui.selectable_value(&mut fd.tween_mode, TweenMode::None, tr(lang, "None", "بدون"));
-                                    ui.selectable_value(&mut fd.tween_mode, TweenMode::Classic, "Classic");
-                                    ui.selectable_value(&mut fd.tween_mode, TweenMode::Shape, "Shape");
-                                });
-                                if fd.tween_mode != TweenMode::None {
-                                    ui.horizontal(|ui| {
-                                        ui.label("Easing:");
-                                        egui::ComboBox::from_id_salt("easing_combo")
-                                            .selected_text(fix_ar(fd.easing.label()))
-                                            .show_ui(ui, |ui| {
-                                                ui.selectable_value(&mut fd.easing, EasingCurve::Linear, fix_ar(EasingCurve::Linear.label()));
-                                                ui.selectable_value(&mut fd.easing, EasingCurve::EaseIn, fix_ar(EasingCurve::EaseIn.label()));
-                                                ui.selectable_value(&mut fd.easing, EasingCurve::EaseOut, fix_ar(EasingCurve::EaseOut.label()));
-                                                ui.selectable_value(&mut fd.easing, EasingCurve::EaseInOut, fix_ar(EasingCurve::EaseInOut.label()));
-                                            });
-                                    });
-                                }
-                            }
-                        }
-
-                        if let Some(a_idx) = self.selected_audio_idx {
-                            if let Some(track) = self.project.audio_tracks.get_mut(a_idx) {
-                                ui.add_space(10.0);
-                                ui.separator();
-                                ui.strong(tr(lang, "Selected Audio Properties", "خصائص الصوت المحدد"));
-                                ui.label(&track.name);
-                                ui.horizontal(|ui| {
-                                    ui.label(tr(lang, "Sync Mode:", "وضع الصوت:"));
-                                    ui.selectable_value(&mut track.sync_mode, AudioSyncMode::Stream, "Stream");
-                                    ui.selectable_value(&mut track.sync_mode, AudioSyncMode::Normal, "Normal");
-                                });
-                                ui.horizontal(|ui| {
-                                    ui.label(tr(lang, "Range:", "النطاق:"));
-                                    ui.add(egui::DragValue::new(&mut track.start_frame).range(1..=self.timeline_length));
-                                    ui.label("->");
-                                    ui.add(egui::DragValue::new(&mut track.end_frame).range(track.start_frame..=self.timeline_length.max(track.start_frame)));
-                                });
-                            }
-                        }
-
-                        ui.add_space(12.0);
-                        ui.separator();
-                        ui.strong(tr(lang, "Document", "إعدادات المسرح"));
-                        ui.add_space(4.0);
-                        ui.horizontal(|ui| {
-                            ui.label("W:");
-                            ui.add(egui::DragValue::new(&mut self.project.width).range(320..=3840));
-                            ui.label("H:");
-                            ui.add(egui::DragValue::new(&mut self.project.height).range(240..=2160));
-                        });
-                        ui.horizontal(|ui| {
-                            if ui.small_button("1080p").clicked() { self.project.width = 1920; self.project.height = 1080; }
-                            if ui.small_button("720p").clicked() { self.project.width = 1280; self.project.height = 720; }
-                            if ui.small_button("Shorts").clicked() { self.project.width = 1080; self.project.height = 1920; }
-                        });
-                        ui.horizontal(|ui| {
-                            ui.label(tr(lang, "Stage Color:", "لون الخلفية:"));
-                            ui.color_edit_button_srgba_unmultiplied(&mut self.stage_bg_color);
-                        });
-                        ui.horizontal(|ui| {
-                            ui.label("FPS:");
-                            ui.add(egui::DragValue::new(&mut self.project.fps).range(1..=60));
-                        });
-                    } else {
-                        ui.strong(tr(lang, "Symbols & Nested Timelines", "مكتبة الرموز والتايم لاين الداخلي"));
-                        let sym_names: Vec<String> = self.project.library_symbols.keys().cloned().collect();
-                        if sym_names.is_empty() {
-                            ui.small(tr(lang, "Draw & press F8 to create symbol", "ارسم واضغط F8 لإنشاء رمز"));
-                        }
-                        for s_name in sym_names {
-                            ui.horizontal(|ui| {
-                                ui.label(&s_name);
-                                if ui.small_button(tr(lang, "+ Place", "+ إدراج")).clicked() {
-                                    self.save_undo_state();
-                                    self.ensure_editable_keyframe();
-                                    if let Some(layer) = self.project.layers.get_mut(self.active_layer_idx) {
-                                        let frame = layer.keyframes.entry(self.current_frame).or_default();
-                                        frame.symbol_instances.push(SymbolInstance {
-                                            symbol_name: s_name.clone(),
-                                            x: 100.0,
-                                            y: 100.0,
-                                            scale: 1.0,
-                                            rotation_deg: 0.0,
-                                            anchor_offset_x: 0.0,
-                                            anchor_offset_y: 0.0,
-                                        });
-                                        self.has_unsaved_changes = true;
-                                        self.play_sfx(SfxType::NewFrame);
-                                    }
-                                }
-                                if ui.small_button(tr(lang, "Edit Timeline", "تعديل الداخل")).clicked() {
-                                    self.editing_symbol_name = Some(s_name);
-                                }
-                            });
-                        }
-
-                        ui.add_space(12.0);
-                        ui.separator();
-                        ui.strong(tr(lang, "Audio Tracks", "ملفات الصوت"));
-                        if ui.button(tr(lang, "+ Import Audio", "+ إضافة صوت")).clicked() {
-                            self.import_audio_dialog();
-                        }
-                        let mut remove_audio_idx = None;
-                        for (idx, track) in self.project.audio_tracks.iter().enumerate() {
-                            ui.horizontal(|ui| {
-                                if ui.selectable_label(self.selected_audio_idx == Some(idx), &track.name).clicked() {
-                                    self.selected_audio_idx = Some(idx);
-                                }
-                                if ui.small_button("X").clicked() {
-                                    remove_audio_idx = Some(idx);
-                                }
-                            });
-                        }
-                        if let Some(idx) = remove_audio_idx {
-                            self.save_undo_state();
-                            self.project.audio_tracks.remove(idx);
-                            self.selected_audio_idx = None;
+                        let top = self.project.layers.remove(self.active_layer_idx);
+                        if let Some(below) = self.project.layers.get_mut(self.active_layer_idx) {
+                            if let Some(tfd) = top.keyframes.get(&1) { below.keyframes.entry(1).or_default().strokes.extend(tfd.strokes.clone()); }
                         }
                     }
                 }
             });
-
-        // شريط Telemetry السفلي على طراز AniCraft
-        egui::TopBottomPanel::bottom("telemetry_footer")
-            .exact_height(22.0)
-            .show(ctx, |ui| {
+            if let Some(al) = self.project.layers.get_mut(self.active_layer_idx) {
                 ui.horizontal(|ui| {
-                    ui.colored_label(egui::Color32::from_rgb(34, 197, 94), "● Ready");
-                    ui.separator();
-                    ui.small(format!("X: {:.0}  Y: {:.0}", self.last_stage_cursor.x, self.last_stage_cursor.y));
-                    ui.separator();
-                    ui.small(format!("Stage: {}x{} @ {}fps", self.project.width, self.project.height, self.project.fps));
-                    ui.separator();
-                    ui.small(format!("Undo History: {}", self.undo_stack.len()));
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        ui.small(format!("Zoom: {:.0}%", self.zoom_level * 100.0));
-                    });
+                    ui.label("Opacity:");
+                    ui.add(egui::Slider::new(&mut al.opacity, 0.05..=1.0));
                 });
-            });
+            }
+            for (idx, layer) in self.project.layers.iter_mut().enumerate() {
+                ui.horizontal(|ui| {
+                    ui.checkbox(&mut layer.visible, "");
+                    if ui.small_button(if layer.locked { "🔒" } else { "🔓" }).clicked() { layer.locked = !layer.locked; }
+                    if ui.selectable_label(self.active_layer_idx == idx, &layer.name).clicked() { self.active_layer_idx = idx; }
+                });
+            }
+        });
 
-        // التايم لاين السفلي بميكانيك AniCraft الكامل (Ruler Scrubbing + Playhead Line + Loop Range + Keyframe Spans)
+        // شريط التايم لاين السفلي في وضع الأنيميشن
         if self.workspace_mode == WorkspaceMode::AnimationStudio {
-            let tl_bg = self.config.timeline_bg_color;
-            let tl_cell_col = self.config.timeline_cell_color;
-            let tl_head_col = self.config.timeline_playhead_color;
-
-            egui::TopBottomPanel::bottom("timeline_panel")
-                .resizable(true)
-                .default_height(225.0)
-                .height_range(115.0..=520.0)
-                .frame(egui::Frame::none().fill(egui::Color32::from_rgba_unmultiplied(tl_bg[0], tl_bg[1], tl_bg[2], 255)).inner_margin(6.0))
-                .show(ctx, |ui| {
-                    let tl_rect = ui.available_rect_before_wrap();
-                    let is_over_tl = pointer_pos.map_or(false, |p| tl_rect.contains(p));
-                    if ctrl_down && scroll_y != 0.0 && is_over_tl {
-                        self.timeline_cell_width = (self.timeline_cell_width + scroll_y * 0.05).clamp(16.0, 64.0);
+            egui::TopBottomPanel::bottom("timeline_panel").resizable(true).default_height(200.0).show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    if ui.button("|<").clicked() { self.current_frame = 1; }
+                    if ui.button("<").clicked() && self.current_frame > 1 { self.current_frame -= 1; }
+                    if ui.button(if self.is_playing { "Pause" } else { "Play" }).clicked() {
+                        self.is_playing = !self.is_playing;
+                        if self.is_playing { self.start_audio_playback(); } else { self.stop_audio_playback(); }
                     }
-
+                    if ui.button(">").clicked() && self.current_frame < self.timeline_length { self.current_frame += 1; }
+                    ui.toggle_value(&mut self.loop_enabled, "🔁 Loop");
+                    ui.label(format!("{}f / {}f", self.current_frame, self.timeline_length));
+                    if ui.button("Frame (F5)").clicked() { self.action_insert_frame_f5(); }
+                    if ui.button("Keyframe (F6)").clicked() { self.action_insert_keyframe_f6(now_time); }
+                    if ui.button("Blank (F7)").clicked() { self.action_insert_blank_keyframe_f7(now_time); }
+                    ui.checkbox(&mut self.project.onion_skin.enabled, "Onion Skin");
+                });
+                ui.separator();
+                let cell_w = self.timeline_cell_width;
+                let cols = self.timeline_length.max(30);
+                egui::ScrollArea::both().show(ui, |ui| {
                     ui.horizontal(|ui| {
-                        if ui.button("|<").clicked() { self.current_frame = 1; }
-                        if ui.button("<").clicked() && self.current_frame > 1 { self.current_frame -= 1; }
-                        if ui.button(if self.is_playing { tr(lang, "Pause", "إيقاف") } else { tr(lang, "Play", "تشغيل") }).clicked() {
-                            self.is_playing = !self.is_playing;
-                            if self.is_playing { self.start_audio_playback(); } else { self.stop_audio_playback(); }
-                        }
-                        if ui.button(">").clicked() && self.current_frame < self.timeline_length {
-                            self.current_frame += 1;
-                        }
-                        if ui.button(">|").clicked() { self.current_frame = self.timeline_length; }
-
-                        ui.separator();
-                        // التحكم في Loop Range (ميزة أساسية في AniCraft)
-                        ui.toggle_value(&mut self.loop_enabled, "🔁 Loop");
-                        if self.loop_enabled {
-                            ui.add(egui::DragValue::new(&mut self.loop_start_frame).range(1..=self.timeline_length));
-                            ui.label("-");
-                            ui.add(egui::DragValue::new(&mut self.loop_end_frame).range(self.loop_start_frame..=self.timeline_length.max(self.loop_start_frame)));
-                        }
-
-                        ui.separator();
-                        ui.colored_label(
-                            egui::Color32::from_rgba_unmultiplied(tl_head_col[0], tl_head_col[1], tl_head_col[2], 255),
-                            format!("{}f", self.current_frame),
-                        );
-                        ui.label(format!("{} fps  {:.2}s", self.project.fps, self.current_frame as f32 / self.project.fps.max(1) as f32));
-
-                        ui.separator();
-                        if ui.button(format!("{} ({})", tr(lang, "Frame", "تمديد"), self.config.insert_frame)).clicked() {
-                            self.action_insert_frame_f5();
-                        }
-                        if ui.button(format!("{} ({})", tr(lang, "Keyframe", "فريم منسوخ"), self.config.insert_keyframe)).clicked() {
-                            self.action_insert_keyframe_f6(now_time);
-                        }
-                        if ui.button(format!("{} ({})", tr(lang, "Blank", "فريم فارغ"), self.config.insert_blank_kf)).clicked() {
-                            self.action_insert_blank_keyframe_f7(now_time);
-                        }
-
-                        ui.separator();
-                        ui.checkbox(&mut self.project.onion_skin.enabled, tr(lang, "Onion Skin", "شفافية الحركة"));
-                        if self.project.onion_skin.enabled {
-                            ui.add(egui::DragValue::new(&mut self.project.onion_skin.frames_before).range(0..=10));
-                            ui.color_edit_button_srgba_unmultiplied(&mut self.project.onion_skin.color_before);
-                            ui.add(egui::DragValue::new(&mut self.project.onion_skin.frames_after).range(0..=10));
-                            ui.color_edit_button_srgba_unmultiplied(&mut self.project.onion_skin.color_after);
-                        }
-
-                        ui.separator();
-                        if ui.button(tr(lang, "+ Layer", "+ طبقة")).clicked() {
-                            self.save_undo_state();
-                            let count = self.project.layers.len() + 1;
-                            let mut kf = HashMap::new();
-                            kf.insert(1, Default::default());
-                            self.project.layers.push(Layer {
-                                name: format!("Layer_{}", count),
-                                visible: true,
-                                locked: false,
-                                is_guide: false,
-                                keyframes: kf,
-                            });
-                            self.play_sfx(SfxType::NewFrame);
-                        }
-
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            let (tl_gear_rect, tl_gear_resp) = ui.allocate_exact_size(egui::vec2(22.0, 20.0), egui::Sense::click());
-                            if tl_gear_resp.hovered() {
-                                ui.painter().rect_filled(tl_gear_rect, 4.0, egui::Color32::from_gray(65));
+                        ui.allocate_ui(egui::vec2(140.0, 20.0), |ui| { ui.strong("Timeline"); });
+                        for f in 1..=cols {
+                            let is_c = self.current_frame == f;
+                            let (r, resp) = ui.allocate_exact_size(egui::vec2(cell_w, 20.0), egui::Sense::click_and_drag());
+                            if is_c { ui.painter().rect_filled(r, 2.0, egui::Color32::from_rgb(225, 55, 55)); }
+                            if is_c || f == 1 || f % 5 == 0 {
+                                ui.painter().text(r.center(), egui::Align2::CENTER_CENTER, format!("{}", f), egui::FontId::proportional(11.0), egui::Color32::WHITE);
                             }
-                            draw_gear_icon(ui.painter(), tl_gear_rect, 0.85);
-                            if tl_gear_resp.on_hover_text(tr(lang, "Timeline Settings", "إعدادات التايم لاين")).clicked() {
-                                self.play_sfx(SfxType::UiClick);
-                                self.show_timeline_settings = true;
+                            if resp.clicked() || (pointer_down && resp.hovered()) {
+                                if f > self.timeline_length { self.timeline_length = f; self.project.total_frames = f; }
+                                self.current_frame = f;
                             }
-                        });
+                        }
                     });
-
-                    ui.separator();
-
-                    let mut pending_copy: Option<(usize, usize)> = None;
-                    let mut pending_paste: Option<(usize, usize)> = None;
-                    let mut pending_clear_frame: Option<(usize, usize)> = None;
-                    let mut pending_remove_frame: Option<(usize, usize)> = None;
-                    let mut pending_tween_op: Option<(usize, usize, TweenMode)> = None;
-                    let mut pending_dup_layer: Option<usize> = None;
-                    let mut delete_layer_idx: Option<usize> = None;
-                    let mut swap_layers: Option<(usize, usize)> = None;
-                    let mut move_frame_op: Option<((usize, usize), (usize, usize))> = None;
-                    let mut remove_audio_idx: Option<usize> = None;
-
-                    let cell_w = self.timeline_cell_width;
-                    let display_cols = self.timeline_length.max(30);
-                    let mut playhead_x_pos: Option<f32> = None;
-                    let mut ruler_top_y = 0.0f32;
-                    let mut tracks_bottom_y = 0.0f32;
-
-                    egui::ScrollArea::both().show(ui, |ui| {
-                        // مسطرة الفريمات التفاعلية (AniCraft Ruler with Continuous Scrubbing)
+                    for (l_idx, layer) in self.project.layers.iter().enumerate() {
                         ui.horizontal(|ui| {
-                            ui.allocate_ui(egui::vec2(150.0, 20.0), |ui| {
-                                ui.strong(tr(lang, "Layers", "الطبقات"));
-                            });
-                            for f in 1..=display_cols {
-                                let is_curr = self.current_frame == f;
-                                let (r_rect, r_resp) = ui.allocate_exact_size(egui::vec2(cell_w, 20.0), egui::Sense::click_and_drag());
-                                if f == 1 {
-                                    ruler_top_y = r_rect.top();
-                                }
-                                if is_curr {
-                                    playhead_x_pos = Some(r_rect.center().x);
-                                    ui.painter().rect_filled(
-                                        r_rect,
-                                        3.0,
-                                        egui::Color32::from_rgba_unmultiplied(tl_head_col[0], tl_head_col[1], tl_head_col[2], 255),
-                                    );
-                                } else if self.loop_enabled && f >= self.loop_start_frame && f <= self.loop_end_frame {
-                                    ui.painter().rect_filled(r_rect, 2.0, egui::Color32::from_rgba_unmultiplied(56, 189, 248, 45));
-                                }
-
-                                if is_curr || f == 1 || f % 5 == 0 {
-                                    ui.painter().text(
-                                        r_rect.center(),
-                                        egui::Align2::CENTER_CENTER,
-                                        format!("{}", f),
-                                        egui::FontId::proportional(11.0),
-                                        if is_curr { egui::Color32::WHITE } else { egui::Color32::from_gray(170) },
-                                    );
-                                } else {
-                                    ui.painter().line_segment(
-                                        [egui::pos2(r_rect.center().x, r_rect.bottom() - 4.0), egui::pos2(r_rect.center().x, r_rect.bottom())],
-                                        egui::Stroke::new(1.0, egui::Color32::from_gray(95)),
-                                    );
-                                }
-
-                                // السحب المستمر للمؤشر الأحمر فوق المسطرة (Scrubbing)
-                                if r_resp.clicked() || (pointer_down && r_resp.hovered()) {
-                                    if f > self.timeline_length {
-                                        self.timeline_length = f;
-                                        self.project.total_frames = f;
-                                    }
+                            ui.allocate_ui(egui::vec2(140.0, 22.0), |ui| { ui.label(&layer.name); });
+                            for f in 1..=cols {
+                                let is_b = f > self.timeline_length;
+                                let is_kf = !is_b && layer.keyframes.contains_key(&f);
+                                let eff = if is_b { None } else { Self::get_effective_frame_data(layer, f) };
+                                let has_d = eff.map_or(false, |fd| !fd.strokes.is_empty() || !fd.media_items.is_empty());
+                                let tw = eff.map(|fd| fd.tween_mode).unwrap_or(TweenMode::None);
+                                let (cr, cresp) = ui.allocate_exact_size(egui::vec2(cell_w, 22.0), egui::Sense::click());
+                                let bg = if self.active_layer_idx == l_idx && self.current_frame == f { egui::Color32::from_rgb(0, 122, 204) } else if has_d { egui::Color32::from_rgb(65, 68, 76) } else { egui::Color32::from_rgb(40, 42, 48) };
+                                ui.painter().rect_filled(cr, 2.0, bg);
+                                if !is_b { draw_anicraft_timeline_cell(ui.painter(), cr, is_kf, has_d, tw); }
+                                if cresp.clicked() {
+                                    if is_b { self.timeline_length = f; self.project.total_frames = f; }
+                                    self.active_layer_idx = l_idx;
                                     self.current_frame = f;
                                 }
                             }
-                            if ui.add(egui::Button::new("+").min_size(egui::vec2(24.0, 20.0))).clicked() {
-                                self.action_insert_frame_f5();
-                            }
                         });
-
-                        let layers_len = self.project.layers.len();
-                        let has_clip = self.clipboard_frame.is_some();
-                        let lbl_rename = tr(lang, "Rename Layer", "إعادة تسمية الطبقة");
-                        let lbl_guide = tr(lang, "Toggle Guide Layer (Sketch Only)", "تحويل لطبقة سكتش إرشادية (Guide)");
-                        let lbl_copy = tr(lang, "Copy Frame (Ctrl+C)", "نسخ الفريم (Copy)");
-                        let lbl_paste = tr(lang, "Paste Frame (Ctrl+V)", "لصق الفريم (Paste)");
-                        let lbl_clear_frame = tr(lang, "Clear Frame (Make Blank)", "مسح المحتوى (Clear)");
-                        let lbl_remove_frame = format!(
-                            "{} ({})",
-                            tr(lang, "Delete Frame (Remove & Shift)", "حذف الفريم تماماً"),
-                            self.config.delete_frame_key
-                        );
-                        let lbl_dup_layer = tr(lang, "Duplicate Layer", "تكرار الطبقة");
-                        let lbl_del_layer = tr(lang, "Delete Layer", "حذف الطبقة");
-
-                        for (l_idx, layer) in self.project.layers.iter_mut().enumerate() {
-                            ui.horizontal(|ui| {
-                                ui.allocate_ui(egui::vec2(150.0, 24.0), |ui| {
-                                    ui.horizontal(|ui| {
-                                        ui.checkbox(&mut layer.visible, "");
-                                        let is_active_l = self.active_layer_idx == l_idx;
-                                        let disp_name = if layer.is_guide {
-                                            format!("📐 {}", layer.name)
-                                        } else {
-                                            layer.name.clone()
-                                        };
-                                        let layer_btn = egui::Button::new(disp_name)
-                                            .selected(is_active_l)
-                                            .sense(egui::Sense::click_and_drag());
-                                        let layer_resp = ui.add(layer_btn);
-                                        if layer_resp.clicked() {
-                                            self.active_layer_idx = l_idx;
-                                        }
-                                        if layer_resp.drag_started() {
-                                            self.dragged_layer_idx = Some(l_idx);
-                                        }
-                                        if pointer_released && layer_resp.hovered() {
-                                            if let Some(src_l) = self.dragged_layer_idx.take() {
-                                                if src_l != l_idx {
-                                                    swap_layers = Some((src_l, l_idx));
-                                                }
-                                            }
-                                        }
-                                        layer_resp.context_menu(|ui| {
-                                            if ui.button(&lbl_rename).clicked() {
-                                                self.renaming_layer_idx = Some(l_idx);
-                                                self.rename_layer_buf = layer.name.clone();
-                                                ui.close_menu();
-                                            }
-                                            if ui.checkbox(&mut layer.is_guide, &lbl_guide).clicked() {
-                                                ui.close_menu();
-                                            }
-                                            if ui.button(&lbl_dup_layer).clicked() {
-                                                pending_dup_layer = Some(l_idx);
-                                                ui.close_menu();
-                                            }
-                                            if layers_len > 1 && ui.button(&lbl_del_layer).clicked() {
-                                                delete_layer_idx = Some(l_idx);
-                                                ui.close_menu();
-                                            }
-                                        });
-                                        if layers_len > 1 && ui.small_button("X").clicked() {
-                                            delete_layer_idx = Some(l_idx);
-                                        }
-                                    });
-                                });
-
-                                for f in 1..=display_cols {
-                                    let is_beyond = f > self.timeline_length;
-                                    let is_keyframe = !is_beyond && layer.keyframes.contains_key(&f);
-                                    let eff_fd = if is_beyond { None } else { Self::get_effective_frame_data(layer, f) };
-                                    let has_drawings = eff_fd.map_or(false, |fd| {
-                                        !fd.strokes.is_empty()
-                                            || !fd.media_items.is_empty()
-                                            || !fd.symbol_instances.is_empty()
-                                            || !fd.text_items.is_empty()
-                                    });
-                                    let tw_mode = eff_fd.map(|fd| fd.tween_mode).unwrap_or(TweenMode::None);
-
-                                    let is_selected = self.active_layer_idx == l_idx && self.current_frame == f;
-
-                                    let fill = if is_selected {
-                                        egui::Color32::from_rgb(0, 122, 204)
-                                    } else if is_beyond {
-                                        egui::Color32::from_rgb(24, 25, 29)
-                                    } else if has_drawings {
-                                        egui::Color32::from_rgb(65, 68, 76)
-                                    } else {
-                                        egui::Color32::from_rgba_unmultiplied(tl_cell_col[0], tl_cell_col[1], tl_cell_col[2], 255)
-                                    };
-
-                                    let (cell_rect, cell_resp) = ui.allocate_exact_size(
-                                        egui::vec2(cell_w, 22.0),
-                                        egui::Sense::click_and_drag(),
-                                    );
-                                    tracks_bottom_y = tracks_bottom_y.max(cell_rect.bottom());
-                                    ui.painter().rect_filled(cell_rect, 2.0, fill);
-                                    if !is_beyond {
-                                        draw_anicraft_timeline_cell(ui.painter(), cell_rect, is_keyframe, has_drawings, tw_mode);
-                                    }
-
-                                    if cell_resp.clicked() {
-                                        if is_beyond {
-                                            self.timeline_length = f;
-                                            self.project.total_frames = f;
-                                        }
-                                        self.active_layer_idx = l_idx;
-                                        self.current_frame = f;
-                                    }
-                                    if !is_beyond && cell_resp.drag_started() {
-                                        self.dragged_frame = Some((l_idx, f));
-                                    }
-                                    if !is_beyond && pointer_released && cell_resp.hovered() {
-                                        if let Some(src) = self.dragged_frame.take() {
-                                            if src != (l_idx, f) {
-                                                move_frame_op = Some((src, (l_idx, f)));
-                                            }
-                                        }
-                                    }
-
-                                    cell_resp.context_menu(|ui| {
-                                        if ui.button(tr(lang, "Create Classic Tween", "تفعيل Classic Tween")).clicked() {
-                                            pending_tween_op = Some((l_idx, f, TweenMode::Classic));
-                                            ui.close_menu();
-                                        }
-                                        if ui.button(tr(lang, "Create Shape Tween (Morph)", "تفعيل Shape Tween (تحول الشكل)")).clicked() {
-                                            pending_tween_op = Some((l_idx, f, TweenMode::Shape));
-                                            ui.close_menu();
-                                        }
-                                        if ui.button(tr(lang, "Remove Tween", "إلغاء التحريك التلقائي")).clicked() {
-                                            pending_tween_op = Some((l_idx, f, TweenMode::None));
-                                            ui.close_menu();
-                                        }
-                                        ui.separator();
-                                        if ui.button(&lbl_copy).clicked() {
-                                            pending_copy = Some((l_idx, f));
-                                            ui.close_menu();
-                                        }
-                                        if ui.add_enabled(has_clip, egui::Button::new(&lbl_paste)).clicked() {
-                                            pending_paste = Some((l_idx, f));
-                                            ui.close_menu();
-                                        }
-                                        ui.separator();
-                                        if ui.button(&lbl_clear_frame).clicked() {
-                                            pending_clear_frame = Some((l_idx, f));
-                                            ui.close_menu();
-                                        }
-                                        if ui.button(&lbl_remove_frame).clicked() {
-                                            pending_remove_frame = Some((l_idx, f));
-                                            ui.close_menu();
-                                        }
-                                    });
-                                }
-                            });
-                        }
-
-                        for (a_idx, track) in self.project.audio_tracks.iter().enumerate() {
-                            ui.horizontal(|ui| {
-                                ui.allocate_ui(egui::vec2(150.0, 28.0), |ui| {
-                                    let is_sel = self.selected_audio_idx == Some(a_idx);
-                                    let lbl_resp = ui.selectable_label(is_sel, format!("🎵 {}", track.name));
-                                    if lbl_resp.clicked() {
-                                        self.selected_audio_idx = Some(a_idx);
-                                    }
-                                    lbl_resp.context_menu(|ui| {
-                                        if ui.button(tr(lang, "Trim / Cut Range...", "تقطيع نطاق الصوت...")).clicked() {
-                                            self.trimming_audio_idx = Some(a_idx);
-                                            ui.close_menu();
-                                        }
-                                        if ui.button(tr(lang, "Delete Audio Track", "حذف تراك الصوت")).clicked() {
-                                            remove_audio_idx = Some(a_idx);
-                                            ui.close_menu();
-                                        }
-                                    });
-                                });
-
-                                for f in 1..=display_cols {
-                                    let active = f >= track.start_frame && f <= track.end_frame;
-                                    let (w_rect, w_resp) = ui.allocate_exact_size(
-                                        egui::vec2(cell_w, 28.0),
-                                        egui::Sense::click(),
-                                    );
-                                    tracks_bottom_y = tracks_bottom_y.max(w_rect.bottom());
-                                    if active {
-                                        ui.painter().rect_filled(w_rect, 2.0, egui::Color32::from_rgb(130, 30, 85));
-                                        let peak_idx = (f - track.start_frame) % track.waveform_peaks.len().max(1);
-                                        let amp = track.waveform_peaks.get(peak_idx).copied().unwrap_or(0.5);
-                                        let bar_h = (w_rect.height() * 0.85 * amp).max(3.0);
-                                        let bar_rect = egui::Rect::from_center_size(
-                                            w_rect.center(),
-                                            egui::vec2((cell_w * 0.65).max(3.0), bar_h),
-                                        );
-                                        ui.painter().rect_filled(bar_rect, 1.0, egui::Color32::from_rgb(255, 110, 195));
-                                    } else {
-                                        ui.painter().rect_filled(w_rect, 2.0, egui::Color32::from_rgb(24, 25, 29));
-                                    }
-
-                                    if w_resp.clicked() {
-                                        self.current_frame = f;
-                                        self.selected_audio_idx = Some(a_idx);
-                                    }
-                                    w_resp.context_menu(|ui| {
-                                        if ui.button(tr(lang, "Trim / Cut Audio...", "تقطيع الصوت من هنا...")).clicked() {
-                                            self.trimming_audio_idx = Some(a_idx);
-                                            ui.close_menu();
-                                        }
-                                        if ui.button(tr(lang, "Delete Audio", "حذف الصوت")).clicked() {
-                                            remove_audio_idx = Some(a_idx);
-                                            ui.close_menu();
-                                        }
-                                    });
-                                }
-                            });
-                        }
-
-                        // رسم الخط الرأسي الأحمر المتصل للمؤشر (Playhead Line) عبر جميع الطبقات مثل AniCraft
-                        if let Some(px) = playhead_x_pos {
-                            if tracks_bottom_y > ruler_top_y {
-                                let head_c = egui::Color32::from_rgba_unmultiplied(tl_head_col[0], tl_head_col[1], tl_head_col[2], 220);
-                                ui.painter().line_segment(
-                                    [egui::pos2(px, ruler_top_y + 18.0), egui::pos2(px, tracks_bottom_y)],
-                                    egui::Stroke::new(1.6, head_c),
-                                );
-                            }
-                        }
-                    });
-
-                    if pointer_released {
-                        self.dragged_layer_idx = None;
-                        self.dragged_frame = None;
-                    }
-
-                    if let Some((l_idx, f_idx, tw)) = pending_tween_op {
-                        self.save_undo_state();
-                        if let Some(layer) = self.project.layers.get_mut(l_idx) {
-                            let eff_k = Self::get_effective_keyframe_index(layer, f_idx).unwrap_or(f_idx);
-                            if let Some(fd) = layer.keyframes.get_mut(&eff_k) {
-                                fd.tween_mode = tw;
-                                self.has_unsaved_changes = true;
-                            }
-                        }
-                    }
-
-                    if let Some((src_l, dst_l)) = swap_layers {
-                        self.save_undo_state();
-                        let moved = self.project.layers.remove(src_l);
-                        self.project.layers.insert(dst_l, moved);
-                        self.active_layer_idx = dst_l;
-                        self.has_unsaved_changes = true;
-                    }
-                    if let Some(((sl, sf), (dl, df))) = move_frame_op {
-                        self.save_undo_state();
-                        if let Some(data) = self.project.layers.get_mut(sl).and_then(|l| l.keyframes.remove(&sf)) {
-                            if let Some(dst_layer) = self.project.layers.get_mut(dl) {
-                                dst_layer.keyframes.insert(df, data);
-                                self.active_layer_idx = dl;
-                                self.current_frame = df;
-                                self.has_unsaved_changes = true;
-                            }
-                        }
-                    }
-                    if let Some((l, f)) = pending_copy { self.copy_frame(l, f); }
-                    if let Some((l, f)) = pending_paste { self.paste_frame(l, f); }
-                    if let Some((l, f)) = pending_clear_frame { self.clear_frame_content(l, f); }
-                    if let Some((l, f)) = pending_remove_frame { self.remove_frame_completely(l, f); }
-                    if let Some(idx) = remove_audio_idx {
-                        self.save_undo_state();
-                        self.project.audio_tracks.remove(idx);
-                        self.selected_audio_idx = None;
-                    }
-                    if let Some(l_idx) = pending_dup_layer {
-                        self.save_undo_state();
-                        if let Some(layer) = self.project.layers.get(l_idx).cloned() {
-                            let mut dup = layer;
-                            dup.name = format!("{}_copy", dup.name);
-                            self.project.layers.insert(l_idx + 1, dup);
-                            self.active_layer_idx = l_idx + 1;
-                        }
-                    }
-                    if let Some(idx) = delete_layer_idx {
-                        self.save_undo_state();
-                        self.project.layers.remove(idx);
-                        if self.active_layer_idx >= self.project.layers.len() {
-                            self.active_layer_idx = self.project.layers.len().saturating_sub(1);
-                        }
                     }
                 });
+            });
         }
 
         self.preload_frame_textures(ctx);
@@ -4366,350 +2160,62 @@ impl eframe::App for StickApp {
         egui::CentralPanel::default().show(ctx, |ui| {
             let canvas_rect = ui.available_rect_before_wrap();
             let painter = ui.painter_at(canvas_rect);
-
             let center = canvas_rect.center() + self.pan_offset;
             let scale = self.zoom_level.max(0.1);
-            let stage_w = self.project.width as f32;
-            let stage_h = self.project.height as f32;
-            let stage_size = egui::vec2(stage_w, stage_h) * scale;
-            let stage_rect = egui::Rect::from_center_size(center, stage_size);
+            let (stage_w, stage_h) = (self.project.width as f32, self.project.height as f32);
+            let stage_rect = egui::Rect::from_center_size(center, egui::vec2(stage_w, stage_h) * scale);
 
-            let is_inside_white_stage = pointer_pos.map_or(false, |p| stage_rect.contains(p) && canvas_rect.contains(p));
-            let show_white_dot_cursor = is_inside_white_stage
-                && !any_modal_open
-                && !space_down
-                && !alt_down
-                && self.active_tool_ui != ActiveToolUI::HandCanvas;
-
-            if show_white_dot_cursor {
-                ctx.set_cursor_icon(egui::CursorIcon::None);
-            } else if space_down || self.active_tool_ui == ActiveToolUI::HandCanvas {
-                ctx.set_cursor_icon(egui::CursorIcon::Grab);
-            } else {
-                ctx.set_cursor_icon(egui::CursorIcon::Default);
-            }
+            let is_inside_stage = pointer_pos.map_or(false, |p| stage_rect.contains(p) && canvas_rect.contains(p));
+            let show_dot = is_inside_stage && !any_modal_open && !space_down && !alt_down && self.active_tool_ui != ActiveToolUI::HandCanvas;
+            ctx.set_cursor_icon(if show_dot { egui::CursorIcon::None } else if space_down || self.active_tool_ui == ActiveToolUI::HandCanvas { egui::CursorIcon::Grab } else { egui::CursorIcon::Default });
 
             let is_over_canvas = pointer_pos.map_or(false, |p| canvas_rect.contains(p));
-            // تسريع الزوم بعجلة الماوس ليكون سلساً وفورياً
             if scroll_y != 0.0 && is_over_canvas && !any_modal_open {
-                let zoom_factor = (1.0 + scroll_y * 0.0022).clamp(0.75, 1.35);
-                self.zoom_level = (self.zoom_level * zoom_factor).clamp(0.1, 6.0);
+                self.zoom_level = (self.zoom_level * (1.0 + scroll_y * 0.0022).clamp(0.75, 1.35)).clamp(0.1, 6.0);
+            }
+            if (space_down || self.active_tool_ui == ActiveToolUI::HandCanvas) && pointer_down && !any_modal_open {
+                if let (Some(c), Some(l)) = (pointer_pos, self.last_pointer_pos) { self.pan_offset += c - l; }
             }
 
-            if alt_down && pointer_down && is_over_canvas && !any_modal_open {
-                if let (Some(curr), Some(last)) = (pointer_pos, self.last_pointer_pos) {
-                    let dx = curr.x - last.x;
-                    self.canvas_rotation_deg = (self.canvas_rotation_deg + dx * 0.45) % 360.0;
-                }
-            } else if (space_down || self.active_tool_ui == ActiveToolUI::HandCanvas) && pointer_down && !any_modal_open {
-                if let (Some(curr), Some(last)) = (pointer_pos, self.last_pointer_pos) {
-                    self.pan_offset += curr - last;
-                }
-            }
-
-            painter.rect_filled(
-                stage_rect.translate(egui::vec2(6.0, 6.0)),
-                0.0,
-                egui::Color32::from_black_alpha(110),
-            );
             let bg = self.stage_bg_color;
-            painter.rect_filled(
-                stage_rect,
-                0.0,
-                egui::Color32::from_rgba_unmultiplied(bg[0], bg[1], bg[2], bg[3]),
-            );
+            painter.rect_filled(stage_rect, 0.0, egui::Color32::from_rgba_unmultiplied(bg[0], bg[1], bg[2], bg[3]));
 
-            let rot_rad = self.canvas_rotation_deg.to_radians();
-            let (sin_r, cos_r) = rot_rad.sin_cos();
-            let flip_h = self.canvas_flip_h;
-            let flip_v = self.canvas_flip_v;
-
+            let (sin_r, cos_r) = self.canvas_rotation_deg.to_radians().sin_cos();
+            let (fh, fv) = (self.canvas_flip_h, self.canvas_flip_v);
             let to_screen = |p: egui::Pos2| -> egui::Pos2 {
                 let mut nx = p.x - stage_w * 0.5;
                 let mut ny = p.y - stage_h * 0.5;
-                if flip_h { nx = -nx; }
-                if flip_v { ny = -ny; }
-                let rx = nx * cos_r - ny * sin_r;
-                let ry = nx * sin_r + ny * cos_r;
-                egui::pos2(center.x + rx * scale, center.y + ry * scale)
+                if fh { nx = -nx; }
+                if fv { ny = -ny; }
+                egui::pos2(center.x + (nx * cos_r - ny * sin_r) * scale, center.y + (nx * sin_r + ny * cos_r) * scale)
             };
-
             let to_stage = |sp: egui::Pos2| -> egui::Pos2 {
-                let rx = (sp.x - center.x) / scale;
-                let ry = (sp.y - center.y) / scale;
+                let (rx, ry) = ((sp.x - center.x) / scale, (sp.y - center.y) / scale);
                 let mut nx = rx * cos_r + ry * sin_r;
                 let mut ny = -rx * sin_r + ry * cos_r;
-                if flip_h { nx = -nx; }
-                if flip_v { ny = -ny; }
+                if fh { nx = -nx; }
+                if fv { ny = -ny; }
                 egui::pos2(nx + stage_w * 0.5, ny + stage_h * 0.5)
             };
 
-            if let Some(p) = pointer_pos {
-                self.last_stage_cursor = to_stage(p);
-            }
-
-            if self.config.show_grid {
-                let step = self.config.grid_size.max(8.0);
-                let grid_col = egui::Color32::from_rgba_unmultiplied(120, 130, 150, 75);
-                let mut gx = 0.0;
-                while gx <= stage_w {
-                    painter.line_segment(
-                        [to_screen(egui::pos2(gx, 0.0)), to_screen(egui::pos2(gx, stage_h))],
-                        egui::Stroke::new(1.0, grid_col),
-                    );
-                    gx += step;
-                }
-                let mut gy = 0.0;
-                while gy <= stage_h {
-                    painter.line_segment(
-                        [to_screen(egui::pos2(0.0, gy)), to_screen(egui::pos2(stage_w, gy))],
-                        egui::Stroke::new(1.0, grid_col),
-                    );
-                    gy += step;
-                }
-            }
-
-            if self.workspace_mode == WorkspaceMode::DrawingOnly {
-                match self.symmetry_mode {
-                    SymmetryMode::Horizontal => {
-                        painter.line_segment(
-                            [to_screen(egui::pos2(stage_w * 0.5, 0.0)), to_screen(egui::pos2(stage_w * 0.5, stage_h))],
-                            egui::Stroke::new(1.2, egui::Color32::from_rgba_unmultiplied(249, 115, 22, 140)),
-                        );
-                    }
-                    SymmetryMode::Vertical => {
-                        painter.line_segment(
-                            [to_screen(egui::pos2(0.0, stage_h * 0.5)), to_screen(egui::pos2(stage_w, stage_h * 0.5))],
-                            egui::Stroke::new(1.2, egui::Color32::from_rgba_unmultiplied(249, 115, 22, 140)),
-                        );
-                    }
-                    SymmetryMode::Off => {}
-                }
-            }
-
-            if !space_down && !alt_down && self.active_tool_ui != ActiveToolUI::HandCanvas && is_over_canvas && !any_modal_open {
+            if !space_down && !alt_down && self.active_tool_ui != ActiveToolUI::HandCanvas && is_over_canvas && !any_modal_open && !self.is_active_layer_locked() {
                 if let Some(pos) = pointer_pos {
                     let stage_pos = to_stage(pos);
-                    let delta = self.last_pointer_pos.map_or(egui::Vec2::ZERO, |last| (pos - last) / scale);
-
+                    let delta = self.last_pointer_pos.map_or(egui::Vec2::ZERO, |l| (pos - l) / scale);
                     match self.active_tool_ui {
-                        ActiveToolUI::Text if pointer_pressed => {
-                            self.pending_text_pos = stage_pos;
-                            self.show_text_dialog = true;
-                        }
+                        ActiveToolUI::Text if pointer_pressed => { self.pending_text_pos = stage_pos; self.show_text_dialog = true; }
                         ActiveToolUI::ShapeLine => {
-                            if pointer_pressed {
-                                self.shape_drag_start = Some(stage_pos);
-                                self.shape_drag_current = Some(stage_pos);
-                            } else if pointer_down {
-                                self.shape_drag_current = Some(stage_pos);
-                            }
-                        }
-                        ActiveToolUI::VectorDirectSelect => {
-                            if pointer_pressed {
-                                self.editing_vector_node = None;
-                                if let Some(layer) = self.project.layers.get(self.active_layer_idx) {
-                                    if let Some(frame) = Self::get_effective_frame_data(layer, self.current_frame) {
-                                        'vec_search: for (s_idx, s) in frame.strokes.iter().enumerate() {
-                                            if s.is_vector {
-                                                for (p_idx, p) in s.points.iter().enumerate() {
-                                                    if ((p.x - stage_pos.x).powi(2) + (p.y - stage_pos.y).powi(2)).sqrt() < 15.0 {
-                                                        self.editing_vector_node = Some((s_idx, p_idx));
-                                                        break 'vec_search;
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                                if self.editing_vector_node.is_some() {
-                                    self.save_undo_state();
-                                }
-                            } else if pointer_down {
-                                if let Some((s_idx, p_idx)) = self.editing_vector_node {
-                                    self.ensure_editable_keyframe();
-                                    if let Some(layer) = self.project.layers.get_mut(self.active_layer_idx) {
-                                        if let Some(frame) = layer.keyframes.get_mut(&self.current_frame) {
-                                            if let Some(s) = frame.strokes.get_mut(s_idx) {
-                                                if let Some(pt) = s.points.get_mut(p_idx) {
-                                                    pt.x = stage_pos.x;
-                                                    pt.y = stage_pos.y;
-                                                    self.has_unsaved_changes = true;
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        ActiveToolUI::SelectNormal | ActiveToolUI::SelectLasso | ActiveToolUI::FreeTransform => {
-                            if pointer_pressed {
-                                let mut hit_resize_handle = false;
-                                let mut hit_rotate_handle = false;
-                                let mut hit_anchor_handle = false;
-
-                                if let Some(layer) = self.project.layers.get(self.active_layer_idx) {
-                                    if let Some(frame) = Self::get_effective_frame_data(layer, self.current_frame) {
-                                        let mut min_p = egui::pos2(f32::MAX, f32::MAX);
-                                        let mut max_p = egui::pos2(f32::MIN, f32::MIN);
-                                        let mut has_sel = false;
-                                        for &idx in &self.selected_stroke_indices {
-                                            if let Some(s) = frame.strokes.get(idx) {
-                                                for p in &s.points {
-                                                    let sp = to_screen(egui::pos2(p.x, p.y));
-                                                    min_p = min_p.min(sp);
-                                                    max_p = max_p.max(sp);
-                                                    has_sel = true;
-                                                }
-                                            }
-                                        }
-                                        if let Some(t_idx) = self.selected_text_idx {
-                                            if let Some(txt) = frame.text_items.get(t_idx) {
-                                                min_p = min_p.min(to_screen(egui::pos2(txt.x, txt.y)));
-                                                max_p = max_p.max(to_screen(egui::pos2(txt.x + 110.0, txt.y + txt.font_size)));
-                                                has_sel = true;
-                                            }
-                                        }
-                                        if has_sel {
-                                            let anchor_scr = min_p.lerp(max_p, 0.5) + self.custom_anchor_offset * scale;
-                                            if pos.distance(anchor_scr) < 14.0 && self.active_tool_ui == ActiveToolUI::FreeTransform {
-                                                hit_anchor_handle = true;
-                                            } else if pos.distance(max_p + egui::vec2(6.0, 6.0)) < 20.0 {
-                                                hit_resize_handle = true;
-                                            } else if self.active_tool_ui == ActiveToolUI::FreeTransform
-                                                && pos.distance(egui::pos2(max_p.x + 6.0, min_p.y - 6.0)) < 20.0
-                                            {
-                                                hit_rotate_handle = true;
-                                            }
-                                        }
-                                    }
-                                }
-
-                                if hit_anchor_handle {
-                                    self.is_dragging_anchor = true;
-                                } else if hit_resize_handle {
-                                    self.save_undo_state();
-                                    self.is_resizing_selection = true;
-                                } else if hit_rotate_handle {
-                                    self.save_undo_state();
-                                    self.is_rotating_selection = true;
-                                } else {
-                                    self.is_dragging_anchor = false;
-                                    self.is_resizing_selection = false;
-                                    self.is_rotating_selection = false;
-                                    if self.active_tool_ui == ActiveToolUI::SelectLasso {
-                                        let mut clicked_selected = false;
-                                        if !self.selected_stroke_indices.is_empty() {
-                                            if let Some(layer) = self.project.layers.get(self.active_layer_idx) {
-                                                if let Some(frame) = Self::get_effective_frame_data(layer, self.current_frame) {
-                                                    for &idx in &self.selected_stroke_indices {
-                                                        if let Some(s) = frame.strokes.get(idx) {
-                                                            if s.points.iter().any(|p| ((p.x - stage_pos.x).powi(2) + (p.y - stage_pos.y).powi(2)).sqrt() < 28.0) {
-                                                                clicked_selected = true;
-                                                                break;
-                                                            }
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                        }
-                                        if !clicked_selected {
-                                            self.selected_stroke_indices.clear();
-                                            self.selected_text_idx = None;
-                                            self.custom_anchor_offset = egui::Vec2::ZERO;
-                                            self.lasso_polygon.clear();
-                                            self.lasso_polygon.push(stage_pos);
-                                            self.is_drawing_lasso = true;
-                                        }
-                                    } else {
-                                        self.selected_stroke_indices.clear();
-                                        self.selected_symbol_inst_idx = None;
-                                        self.selected_text_idx = None;
-                                        self.custom_anchor_offset = egui::Vec2::ZERO;
-                                        if let Some(layer) = self.project.layers.get(self.active_layer_idx) {
-                                            if let Some(frame) = Self::get_effective_frame_data(layer, self.current_frame) {
-                                                for (i, txt) in frame.text_items.iter().enumerate() {
-                                                    let txt_rect = egui::Rect::from_min_size(
-                                                        egui::pos2(txt.x - 10.0, txt.y - 10.0),
-                                                        egui::vec2((txt.content.len() as f32 * txt.font_size * 0.55).max(80.0), txt.font_size + 20.0),
-                                                    );
-                                                    if txt_rect.contains(stage_pos) {
-                                                        self.selected_text_idx = Some(i);
-                                                        break;
-                                                    }
-                                                }
-                                                if self.selected_text_idx.is_none() {
-                                                    for (i, inst) in frame.symbol_instances.iter().enumerate() {
-                                                        if ((inst.x - stage_pos.x).powi(2) + (inst.y - stage_pos.y).powi(2)).sqrt() < 60.0 {
-                                                            self.selected_symbol_inst_idx = Some(i);
-                                                            break;
-                                                        }
-                                                    }
-                                                }
-                                                if self.selected_text_idx.is_none() && self.selected_symbol_inst_idx.is_none() {
-                                                    for (i, s) in frame.strokes.iter().enumerate() {
-                                                        if s.points.iter().any(|p| ((p.x - stage_pos.x).powi(2) + (p.y - stage_pos.y).powi(2)).sqrt() < 20.0) {
-                                                            self.selected_stroke_indices.push(i);
-                                                            break;
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            } else if pointer_down && delta.length_sq() > 0.0 {
-                                if self.is_dragging_anchor {
-                                    self.custom_anchor_offset += delta;
-                                } else if self.is_resizing_selection || ctx.input(|i| i.modifiers.shift) {
-                                    let factor = (1.0 + (delta.x + delta.y) * 0.006).clamp(0.85, 1.15);
-                                    self.transform_selected_items(factor, 0.0, false, false);
-                                } else if self.is_rotating_selection {
-                                    self.transform_selected_items(1.0, delta.x * 0.6, false, false);
-                                } else if self.is_drawing_lasso {
-                                    self.lasso_polygon.push(stage_pos);
-                                } else {
-                                    self.ensure_editable_keyframe();
-                                    if let Some(layer) = self.project.layers.get_mut(self.active_layer_idx) {
-                                        if let Some(frame) = layer.keyframes.get_mut(&self.current_frame) {
-                                            if let Some(t_idx) = self.selected_text_idx {
-                                                if let Some(txt) = frame.text_items.get_mut(t_idx) {
-                                                    txt.x += delta.x;
-                                                    txt.y += delta.y;
-                                                    self.has_unsaved_changes = true;
-                                                }
-                                            }
-                                            if let Some(idx) = self.selected_symbol_inst_idx {
-                                                if let Some(inst) = frame.symbol_instances.get_mut(idx) {
-                                                    inst.x += delta.x;
-                                                    inst.y += delta.y;
-                                                    self.has_unsaved_changes = true;
-                                                }
-                                            }
-                                            for &idx in &self.selected_stroke_indices {
-                                                if let Some(stroke) = frame.strokes.get_mut(idx) {
-                                                    for p in &mut stroke.points {
-                                                        p.x += delta.x;
-                                                        p.y += delta.y;
-                                                    }
-                                                    self.has_unsaved_changes = true;
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
+                            if pointer_pressed { self.shape_drag_start = Some(stage_pos); self.shape_drag_current = Some(stage_pos); }
+                            else if pointer_down { self.shape_drag_current = Some(stage_pos); }
                         }
                         ActiveToolUI::Bucket if pointer_pressed => {
                             self.save_undo_state();
                             self.ensure_editable_keyframe();
-                            if let Some(layer) = self.project.layers.get_mut(self.active_layer_idx) {
-                                if let Some(frame) = layer.keyframes.get_mut(&self.current_frame) {
-                                    for s in frame.strokes.iter_mut().rev() {
+                            if let Some(l) = self.project.layers.get_mut(self.active_layer_idx) {
+                                if let Some(f) = l.keyframes.get_mut(&self.current_frame) {
+                                    for s in f.strokes.iter_mut().rev() {
                                         if s.points.iter().any(|p| ((p.x - stage_pos.x).powi(2) + (p.y - stage_pos.y).powi(2)).sqrt() < 35.0) {
                                             s.fill_color = Some(self.brush_color);
-                                            self.has_unsaved_changes = true;
-                                            self.play_sfx(SfxType::NewFrame);
                                             break;
                                         }
                                     }
@@ -4717,36 +2223,25 @@ impl eframe::App for StickApp {
                             }
                         }
                         ActiveToolUI::EraserRed | ActiveToolUI::EraserGreen if pointer_down => {
-                            if pointer_pressed {
-                                self.save_undo_state();
-                            }
-                            if delta.length() > 0.5 && now - self.last_sfx_time > 0.09 {
-                                self.play_sfx(SfxType::EraserRub);
-                                self.last_sfx_time = now;
-                            }
+                            if pointer_pressed { self.save_undo_state(); }
                             self.ensure_editable_keyframe();
-                            if let Some(layer) = self.project.layers.get_mut(self.active_layer_idx) {
-                                if let Some(frame) = layer.keyframes.get_mut(&self.current_frame) {
+                            if let Some(l) = self.project.layers.get_mut(self.active_layer_idx) {
+                                if let Some(f) = l.keyframes.get_mut(&self.current_frame) {
                                     let r = self.brush_size;
-                                    match self.active_tool_ui {
-                                        ActiveToolUI::EraserRed => {
-                                            frame.strokes.retain(|s| !s.points.iter().any(|p| ((p.x - stage_pos.x).powi(2) + (p.y - stage_pos.y).powi(2)).sqrt() < r));
-                                        }
-                                        _ => {
-                                            erase_partial_from_strokes(&mut frame.strokes, stage_pos, r);
-                                        }
+                                    if self.active_tool_ui == ActiveToolUI::EraserRed {
+                                        f.strokes.retain(|s| !s.points.iter().any(|p| ((p.x - stage_pos.x).powi(2) + (p.y - stage_pos.y).powi(2)).sqrt() < r));
+                                    } else {
+                                        erase_partial_from_strokes(&mut f.strokes, stage_pos, r);
                                     }
-                                    self.has_unsaved_changes = true;
                                 }
                             }
                         }
                         ActiveToolUI::Eyedropper if pointer_pressed => {
-                            if let Some(layer) = self.project.layers.get(self.active_layer_idx) {
-                                let frame = self.project.evaluate_layer_at_frame(layer, self.current_frame);
-                                for s in &frame.strokes {
+                            if let Some(l) = self.project.layers.get(self.active_layer_idx) {
+                                let f = self.project.evaluate_layer_at_frame(l, self.current_frame);
+                                for s in &f.strokes {
                                     if s.points.iter().any(|p| ((p.x - stage_pos.x).powi(2) + (p.y - stage_pos.y).powi(2)).sqrt() < 15.0) {
                                         self.brush_color = s.color;
-                                        self.play_sfx(SfxType::UiClick);
                                         break;
                                     }
                                 }
@@ -4755,64 +2250,55 @@ impl eframe::App for StickApp {
                         ActiveToolUI::VectorPen if pointer_down => {
                             if let Some(stroke) = &mut self.current_stroke {
                                 if let Some(last) = stroke.points.last() {
-                                    let dist = ((last.x - stage_pos.x).powi(2) + (last.y - stage_pos.y).powi(2)).sqrt();
-                                    if dist >= 5.0 {
+                                    if ((last.x - stage_pos.x).powi(2) + (last.y - stage_pos.y).powi(2)).sqrt() >= 4.0 {
                                         stroke.points.push(StrokePoint { x: stage_pos.x, y: stage_pos.y, pressure: 1.0 });
-                                        if now - self.last_sfx_time > 0.08 {
-                                            self.play_sfx(SfxType::VectorPenTick);
-                                            self.last_sfx_time = now;
-                                        }
                                     }
                                 }
                             } else {
                                 self.save_undo_state();
-                                self.current_stroke = Some(Stroke {
-                                    points: vec![StrokePoint { x: stage_pos.x, y: stage_pos.y, pressure: 1.0 }],
-                                    color: self.brush_color,
-                                    fill_color: None,
-                                    base_width: self.brush_size,
-                                    is_vector: true,
-                                    brush_preset: KritaBrushPreset::GPenInk,
-                                    opacity: 1.0,
-                                    brush_texture_id: None,
-                                });
+                                self.current_stroke = Some(Stroke { points: vec![StrokePoint { x: stage_pos.x, y: stage_pos.y, pressure: 1.0 }], color: self.brush_color, fill_color: None, base_width: self.brush_size, is_vector: true, brush_preset: KritaBrushPreset::GPenInk, opacity: 1.0, brush_texture_id: None });
                             }
                         }
                         ActiveToolUI::Brush if pointer_down => {
-                            let speed = delta.length();
-                            if speed > 0.8 && now - self.last_sfx_time > 0.08 {
-                                self.play_sfx(SfxType::BrushScratch);
-                                self.last_sfx_time = now;
-                            }
-                            let raw_p = if let Some(f) = touch_force {
-                                f
-                            } else {
-                                (1.15 - (speed * 0.025 * self.pressure_sensitivity)).clamp(0.25, 1.35)
-                            };
-                            let pressure = if self.pen_pressure_enabled { raw_p } else { 1.0 };
-
+                            let stab = self.stabilizer_strength.clamp(0.0, 0.70);
+                            let virt = if let Some(pv) = self.stabilized_cursor {
+                                egui::pos2(pv.x * stab + stage_pos.x * (1.0 - stab), pv.y * stab + stage_pos.y * (1.0 - stab))
+                            } else { stage_pos };
+                            self.stabilized_cursor = Some(virt);
                             if let Some(stroke) = &mut self.current_stroke {
                                 if let Some(last) = stroke.points.last() {
-                                    let stab = self.stabilizer_strength.clamp(0.0, 0.85);
-                                    let smooth_x = last.x * stab + stage_pos.x * (1.0 - stab);
-                                    let smooth_y = last.y * stab + stage_pos.y * (1.0 - stab);
-                                    let dist = ((last.x - smooth_x).powi(2) + (last.y - smooth_y).powi(2)).sqrt();
-                                    if dist >= 1.2 {
-                                        stroke.points.push(StrokePoint { x: smooth_x, y: smooth_y, pressure });
+                                    if ((last.x - virt.x).powi(2) + (last.y - virt.y).powi(2)).sqrt() >= 1.5 {
+                                        stroke.points.push(StrokePoint { x: virt.x, y: virt.y, pressure: 1.0 });
                                     }
                                 }
                             } else {
                                 self.save_undo_state();
-                                self.current_stroke = Some(Stroke {
-                                    points: vec![StrokePoint { x: stage_pos.x, y: stage_pos.y, pressure }],
-                                    color: self.brush_color,
-                                    fill_color: None,
-                                    base_width: self.brush_size,
-                                    is_vector: false,
-                                    brush_preset: self.active_krita_brush,
-                                    opacity: self.brush_opacity,
-                                    brush_texture_id: None,
-                                });
+                                self.current_stroke = Some(Stroke { points: vec![StrokePoint { x: virt.x, y: virt.y, pressure: 1.0 }], color: self.brush_color, fill_color: None, base_width: self.brush_size, is_vector: false, brush_preset: self.active_krita_brush, opacity: self.brush_opacity, brush_texture_id: None });
+                            }
+                        }
+                        ActiveToolUI::SelectNormal | ActiveToolUI::FreeTransform => {
+                            if pointer_pressed {
+                                self.selected_stroke_indices.clear();
+                                if let Some(l) = self.project.layers.get(self.active_layer_idx) {
+                                    let f = self.project.evaluate_layer_at_frame(l, self.current_frame);
+                                    for (i, s) in f.strokes.iter().enumerate() {
+                                        if s.points.iter().any(|p| ((p.x - stage_pos.x).powi(2) + (p.y - stage_pos.y).powi(2)).sqrt() < 20.0) {
+                                            self.selected_stroke_indices.push(i);
+                                            break;
+                                        }
+                                    }
+                                }
+                            } else if pointer_down && delta.length_sq() > 0.0 {
+                                self.ensure_editable_keyframe();
+                                if let Some(l) = self.project.layers.get_mut(self.active_layer_idx) {
+                                    if let Some(f) = l.keyframes.get_mut(&self.current_frame) {
+                                        for &idx in &self.selected_stroke_indices {
+                                            if let Some(s) = f.strokes.get_mut(idx) {
+                                                for p in &mut s.points { p.x += delta.x; p.y += delta.y; }
+                                            }
+                                        }
+                                    }
+                                }
                             }
                         }
                         _ => {}
@@ -4821,49 +2307,19 @@ impl eframe::App for StickApp {
             }
 
             if pointer_released {
-                self.is_dragging_anchor = false;
-                self.is_resizing_selection = false;
-                self.is_rotating_selection = false;
-                self.editing_vector_node = None;
-
+                self.stabilized_cursor = None;
                 if let (Some(p0), Some(p1)) = (self.shape_drag_start.take(), self.shape_drag_current.take()) {
                     if p0.distance(p1) > 3.0 {
                         self.save_undo_state();
-                        let shape_stroke = build_geometric_stroke(
-                            self.selected_shape_kind,
-                            p0,
-                            p1,
-                            self.brush_color,
-                            self.brush_size,
-                        );
-                        self.commit_stroke_with_symmetry(shape_stroke, now_time);
-                        self.play_sfx(SfxType::NewFrame);
+                        self.commit_stroke_with_symmetry(build_geometric_stroke(self.selected_shape_kind, p0, p1, self.brush_color, self.brush_size), now_time);
                     }
                 }
-
-                if self.is_drawing_lasso {
-                    self.is_drawing_lasso = false;
-                    if let Some(layer) = self.project.layers.get(self.active_layer_idx) {
-                        let frame = self.project.evaluate_layer_at_frame(layer, self.current_frame);
-                        for (i, s) in frame.strokes.iter().enumerate() {
-                            if s.points.iter().any(|p| point_in_polygon(egui::pos2(p.x, p.y), &self.lasso_polygon)) {
-                                self.selected_stroke_indices.push(i);
-                            }
-                        }
-                    }
-                    if !self.selected_stroke_indices.is_empty() {
-                        self.play_sfx(SfxType::LassoSelect);
-                    }
-                    self.lasso_polygon.clear();
-                }
-
                 if let Some(mut stroke) = self.current_stroke.take() {
                     if stroke.is_vector {
-                        // تبسيط النقاط الزائدة ثم تمريرها بمنحنى Cubic Bezier للحصول على خط فيكتور حريري ناعم
-                        stroke.simplify_vector_nodes(4.0);
-                        stroke.fit_cubic_bezier_spline(5);
+                        stroke.simplify_vector_nodes(2.2);
+                        stroke.fit_cubic_bezier_spline(8);
                     } else {
-                        stroke.fit_cubic_bezier_spline(3);
+                        stroke.fit_cubic_bezier_spline(4);
                     }
                     self.commit_stroke_with_symmetry(stroke, now_time);
                 }
@@ -4871,154 +2327,27 @@ impl eframe::App for StickApp {
 
             self.last_pointer_pos = if pointer_down { pointer_pos } else { None };
 
-            if let Some(ref sym_name) = self.editing_symbol_name {
-                if let Some(sym) = self.project.library_symbols.get(sym_name) {
-                    let sym_strokes = self.project.evaluate_symbol_strokes(sym, self.current_frame);
-                    for s in sym_strokes {
-                        draw_stroke_pro(&painter, s, None, scale, 0.0, 0.0, &to_screen);
-                    }
-                }
-            } else {
-                if self.project.onion_skin.enabled && !self.is_playing && self.workspace_mode == WorkspaceMode::AnimationStudio {
-                    if let Some(layer) = self.project.layers.get(self.active_layer_idx) {
-                        for offset in 1..=self.project.onion_skin.frames_before {
-                            if self.current_frame > offset {
-                                let fd = self.project.evaluate_layer_at_frame(layer, self.current_frame - offset);
-                                for s in &fd.strokes {
-                                    draw_stroke_pro(&painter, s, Some(self.project.onion_skin.color_before), scale, 0.0, 0.0, &to_screen);
-                                }
-                            }
-                        }
-                        for offset in 1..=self.project.onion_skin.frames_after {
-                            if self.current_frame + offset <= self.timeline_length {
-                                let fd = self.project.evaluate_layer_at_frame(layer, self.current_frame + offset);
-                                for s in &fd.strokes {
-                                    draw_stroke_pro(&painter, s, Some(self.project.onion_skin.color_after), scale, 0.0, 0.0, &to_screen);
-                                }
-                            }
+            for layer in self.project.layers.iter().rev() {
+                if layer.visible {
+                    let l_op = layer.opacity.clamp(0.05, 1.0);
+                    let fd = self.project.evaluate_layer_at_frame(layer, self.current_frame);
+                    for m in &fd.media_items {
+                        if let Some(tex) = self.texture_cache.get(&m.path) {
+                            painter.image(tex.id(), egui::Rect::from_min_max(to_screen(egui::pos2(m.x, m.y)), to_screen(egui::pos2(m.x + m.width, m.y + m.height))), egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)), egui::Color32::from_white_alpha((255.0 * l_op) as u8));
                         }
                     }
-                }
-
-                for (l_idx, layer) in self.project.layers.iter().enumerate().rev() {
-                    if layer.visible {
-                        let fd = self.project.evaluate_layer_at_frame(layer, self.current_frame);
-                        for m in &fd.media_items {
-                            if let Some(tex) = self.texture_cache.get(&m.path) {
-                                painter.image(
-                                    tex.id(),
-                                    egui::Rect::from_min_max(to_screen(egui::pos2(m.x, m.y)), to_screen(egui::pos2(m.x + m.width, m.y + m.height))),
-                                    egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
-                                    egui::Color32::WHITE,
-                                );
-                            }
-                        }
-                        for s in &fd.strokes {
-                            draw_stroke_pro(&painter, s, None, scale, 0.0, 0.0, &to_screen);
-                            if l_idx == self.active_layer_idx && self.active_tool_ui == ActiveToolUI::VectorDirectSelect && s.is_vector {
-                                // إظهار نقاط التحكم الرئيسية فقط كل 4 نقاط لسهولة التعديل
-                                for p in s.points.iter().step_by(4) {
-                                    let sp = to_screen(egui::pos2(p.x, p.y));
-                                    painter.circle_filled(sp, 4.2, egui::Color32::from_rgb(192, 132, 252));
-                                    painter.circle_stroke(sp, 5.0, egui::Stroke::new(1.2, egui::Color32::BLACK));
-                                }
-                            }
-                        }
-
-                        if l_idx == self.active_layer_idx && (!self.selected_stroke_indices.is_empty() || self.selected_text_idx.is_some()) {
-                            let mut min_p = egui::pos2(f32::MAX, f32::MAX);
-                            let mut max_p = egui::pos2(f32::MIN, f32::MIN);
-                            let mut has_box = false;
-
-                            for &s_idx in &self.selected_stroke_indices {
-                                if let Some(s) = fd.strokes.get(s_idx) {
-                                    for p in &s.points {
-                                        let sp = to_screen(egui::pos2(p.x, p.y));
-                                        min_p = min_p.min(sp);
-                                        max_p = max_p.max(sp);
-                                        has_box = true;
-                                    }
-                                }
-                            }
-                            if let Some(t_idx) = self.selected_text_idx {
-                                if let Some(txt) = fd.text_items.get(t_idx) {
-                                    let sp0 = to_screen(egui::pos2(txt.x, txt.y));
-                                    let sp1 = to_screen(egui::pos2(txt.x + 110.0, txt.y + txt.font_size));
-                                    min_p = min_p.min(sp0);
-                                    max_p = max_p.max(sp1);
-                                    has_box = true;
-                                }
-                            }
-                            if has_box {
-                                let sel_rect = egui::Rect::from_min_max(min_p - egui::vec2(6.0, 6.0), max_p + egui::vec2(6.0, 6.0));
-                                let box_col = if self.active_tool_ui == ActiveToolUI::FreeTransform {
-                                    egui::Color32::from_rgb(245, 158, 11)
-                                } else {
-                                    egui::Color32::from_rgb(56, 189, 248)
-                                };
-                                painter.rect_stroke(sel_rect, 2.0, egui::Stroke::new(1.5, box_col));
-
-                                let handle_rect = egui::Rect::from_center_size(sel_rect.right_bottom(), egui::vec2(13.0, 13.0));
-                                painter.rect_filled(handle_rect, 2.0, box_col);
-
-                                if self.active_tool_ui == ActiveToolUI::FreeTransform {
-                                    let rot_pos = egui::pos2(sel_rect.max.x, sel_rect.min.y);
-                                    painter.circle_filled(rot_pos, 6.5, egui::Color32::from_rgb(34, 197, 94));
-                                    let anchor_scr = sel_rect.center() + self.custom_anchor_offset * scale;
-                                    painter.circle_filled(anchor_scr, 5.5, egui::Color32::WHITE);
-                                    painter.circle_stroke(anchor_scr, 6.5, egui::Stroke::new(1.5, egui::Color32::BLACK));
-                                }
-                            }
-                        }
-
-                        for txt in &fd.text_items {
-                            let shaped = fix_ar(&txt.content);
-                            let col = egui::Color32::from_rgba_unmultiplied(txt.color[0], txt.color[1], txt.color[2], txt.color[3]);
-                            painter.text(
-                                to_screen(egui::pos2(txt.x, txt.y)),
-                                egui::Align2::LEFT_TOP,
-                                shaped,
-                                egui::FontId::proportional(txt.font_size * scale),
-                                col,
-                            );
-                        }
-
-                        for inst in &fd.symbol_instances {
-                            if let Some(sym) = self.project.library_symbols.get(&inst.symbol_name) {
-                                let sym_strokes = self.project.evaluate_symbol_strokes(sym, self.current_frame);
-                                for s in sym_strokes {
-                                    draw_stroke_pro(&painter, s, None, scale * inst.scale, inst.x, inst.y, &to_screen);
-                                }
-                            }
-                        }
+                    for s in &fd.strokes { draw_stroke_pro(&painter, s, None, l_op, scale, 0.0, 0.0, &to_screen); }
+                    for txt in &fd.text_items {
+                        painter.text(to_screen(egui::pos2(txt.x, txt.y)), egui::Align2::LEFT_TOP, fix_ar(&txt.content), egui::FontId::proportional(txt.font_size * scale), egui::Color32::from_rgba_unmultiplied(txt.color[0], txt.color[1], txt.color[2], (txt.color[3] as f32 * l_op) as u8));
                     }
                 }
             }
 
-            if let Some(stroke) = &self.current_stroke {
-                draw_stroke_pro(&painter, stroke, None, scale, 0.0, 0.0, &to_screen);
-            }
-
+            if let Some(stroke) = &self.current_stroke { draw_stroke_pro(&painter, stroke, None, 1.0, scale, 0.0, 0.0, &to_screen); }
             if let (Some(p0), Some(p1)) = (self.shape_drag_start, self.shape_drag_current) {
-                let preview = build_geometric_stroke(
-                    self.selected_shape_kind,
-                    p0,
-                    p1,
-                    self.brush_color,
-                    self.brush_size,
-                );
-                draw_stroke_pro(&painter, &preview, None, scale, 0.0, 0.0, &to_screen);
+                draw_stroke_pro(&painter, &build_geometric_stroke(self.selected_shape_kind, p0, p1, self.brush_color, self.brush_size), None, 1.0, scale, 0.0, 0.0, &to_screen);
             }
-
-            if self.is_drawing_lasso && self.lasso_polygon.len() > 1 {
-                let screen_pts: Vec<egui::Pos2> = self.lasso_polygon.iter().map(|&p| to_screen(p)).collect();
-                painter.add(egui::Shape::closed_line(
-                    screen_pts,
-                    egui::Stroke::new(1.5, egui::Color32::from_rgb(56, 189, 248)),
-                ));
-            }
-
-            if show_white_dot_cursor {
+            if show_dot {
                 if let Some(p) = pointer_pos {
                     painter.circle_filled(p, 3.5, egui::Color32::WHITE);
                     painter.circle_stroke(p, 4.3, egui::Stroke::new(1.2, egui::Color32::BLACK));
@@ -5028,106 +2357,11 @@ impl eframe::App for StickApp {
     }
 }
 
-/// مصيّر الخطوط المتقدم: يدعم خصائص فرش Krita (Airbrush, Watercolor, G-Pen, Pencil) ومنحنيات Cubic Bezier الناعمة
-fn draw_stroke_pro<F: Fn(egui::Pos2) -> egui::Pos2>(
-    painter: &egui::Painter,
-    stroke: &Stroke,
-    override_color: Option<[u8; 4]>,
-    scale: f32,
-    ox: f32,
-    oy: f32,
-    to_screen: &F,
-) {
-    if stroke.points.is_empty() {
-        return;
-    }
-
-    let c = override_color.unwrap_or(stroke.color);
-    let eff_alpha = ((c[3] as f32) * stroke.opacity.clamp(0.05, 1.0)) as u8;
-    let color = egui::Color32::from_rgba_unmultiplied(c[0], c[1], c[2], eff_alpha);
-
-    if stroke.points.len() == 1 {
-        let p = to_screen(egui::pos2(stroke.points[0].x + ox, stroke.points[0].y + oy));
-        let r = (stroke.base_width * stroke.points[0].pressure * scale) * 0.5;
-        painter.circle_filled(p, r.max(1.0), color);
-        return;
-    }
-
-    if let Some(fc) = stroke.fill_color {
-        let fill_c = override_color.unwrap_or(fc);
-        let pts: Vec<egui::Pos2> = stroke
-            .points
-            .iter()
-            .map(|p| to_screen(egui::pos2(p.x + ox, p.y + oy)))
-            .collect();
-        painter.add(egui::Shape::convex_polygon(
-            pts,
-            egui::Color32::from_rgba_unmultiplied(fill_c[0], fill_c[1], fill_c[2], fill_c[3]),
-            egui::Stroke::NONE,
-        ));
-    }
-
-    let total = stroke.points.len();
-    for (idx, w) in stroke.points.windows(2).enumerate() {
-        let p0 = to_screen(egui::pos2(w[0].x + ox, w[0].y + oy));
-        let p1 = to_screen(egui::pos2(w[1].x + ox, w[1].y + oy));
-
-        let taper = if stroke.is_vector {
-            1.0
-        } else {
-            let progress = idx as f32 / total as f32;
-            if progress < 0.10 {
-                (progress / 0.10).max(0.22)
-            } else if progress > 0.90 {
-                ((1.0 - progress) / 0.10).max(0.22)
-            } else {
-                1.0
-            }
-        };
-
-        let avg_pressure = ((w[0].pressure + w[1].pressure) * 0.5) * taper;
-        let width = (stroke.base_width * avg_pressure * scale).max(1.0);
-
-        match stroke.brush_preset {
-            KritaBrushPreset::SoftAirbrush => {
-                // هالة بخاخ ناعمة متعددة الطبقات
-                let halo = egui::Color32::from_rgba_unmultiplied(c[0], c[1], c[2], (eff_alpha / 3).max(8));
-                painter.circle_filled(p0, width * 0.85, halo);
-                painter.circle_filled(p0, width * 0.45, color);
-                painter.line_segment([p0, p1], egui::Stroke::new(width * 0.9, color));
-            }
-            KritaBrushPreset::Watercolor => {
-                let edge_col = egui::Color32::from_rgba_unmultiplied(c[0], c[1], c[2], (eff_alpha / 2).max(12));
-                painter.line_segment([p0, p1], egui::Stroke::new(width * 1.15, edge_col));
-                painter.line_segment([p0, p1], egui::Stroke::new(width * 0.85, color));
-            }
-            _ => {
-                painter.circle_filled(p0, width * 0.5, color);
-                painter.line_segment([p0, p1], egui::Stroke::new(width, color));
-                painter.circle_filled(p1, width * 0.5, color);
-            }
-        }
-    }
-}
-
 fn main() -> eframe::Result<()> {
     let options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default()
-            .with_title("Stick")
-            .with_inner_size([1366.0, 768.0])
-            .with_icon(generate_stick_window_icon()),
+        viewport: egui::ViewportBuilder::default().with_title("Stick").with_inner_size([1366.0, 768.0]).with_icon(generate_stick_window_icon()),
         renderer: eframe::Renderer::Wgpu,
-        wgpu_options: eframe::egui_wgpu::WgpuConfiguration {
-            power_preference: eframe::wgpu::PowerPreference::HighPerformance,
-            present_mode: eframe::wgpu::PresentMode::AutoNoVsync,
-            ..Default::default()
-        },
         ..Default::default()
     };
-
-    eframe::run_native(
-        "Stick",
-        options,
-        Box::new(|cc| Ok(Box::new(StickApp::new(cc)))),
-    )
+    eframe::run_native("Stick", options, Box::new(|cc| Ok(Box::new(StickApp::new(cc)))))
 }
