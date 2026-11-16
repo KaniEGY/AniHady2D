@@ -1,6 +1,7 @@
 use crate::project::AniProject;
+use image::ImageFormat;
 use std::fs;
-use std::io::{Cursor, Read, Write};
+use std::io::{Cursor, Read};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use tiny_skia::{Color, Paint, PathBuilder, Pixmap, Stroke, Transform};
@@ -39,6 +40,43 @@ impl VideoExportFormat {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum ImageExportFormat {
+    PngTransparent,
+    PngSolid,
+    Jpg,
+    Webp,
+    Bmp,
+    Tiff,
+}
+
+impl ImageExportFormat {
+    pub fn ext(&self) -> &'static str {
+        match self {
+            ImageExportFormat::PngTransparent | ImageExportFormat::PngSolid => "png",
+            ImageExportFormat::Jpg => "jpg",
+            ImageExportFormat::Webp => "webp",
+            ImageExportFormat::Bmp => "bmp",
+            ImageExportFormat::Tiff => "tiff",
+        }
+    }
+
+    pub fn label(&self) -> &'static str {
+        match self {
+            ImageExportFormat::PngTransparent => "PNG (خلفية شفافة - Transparent)",
+            ImageExportFormat::PngSolid => "PNG (بخلفية المسرح - High Quality)",
+            ImageExportFormat::Jpg => "JPG / JPEG (صورة مضغوطة)",
+            ImageExportFormat::Webp => "WebP (صيغة الويب الحديثة)",
+            ImageExportFormat::Bmp => "BMP (Bitmap غير مضغوط)",
+            ImageExportFormat::Tiff => "TIFF (جودة طباعة عالية)",
+        }
+    }
+
+    pub fn is_transparent(&self) -> bool {
+        matches!(self, ImageExportFormat::PngTransparent | ImageExportFormat::Webp)
+    }
+}
+
 /// البحث عن FFmpeg في مجلد البرنامج أو النظام
 pub fn find_ffmpeg_executable() -> Option<PathBuf> {
     if let Ok(exe) = std::env::current_exe() {
@@ -64,7 +102,7 @@ pub fn find_ffmpeg_executable() -> Option<PathBuf> {
     None
 }
 
-/// تحميل حزمة FFmpeg وفك ضغط ffmpeg.exe تلقائياً داخل مجلد البرنامج
+/// تحميل حزمة FFmpeg وفك ضغط ffmpeg.exe تلقائياً (تُستدعى في خيط خلفي حتى لا يتجمد البرنامج)
 pub fn ensure_ffmpeg_installed(target_dir: &Path) -> Result<PathBuf, String> {
     if let Some(existing) = find_ffmpeg_executable() {
         return Ok(existing);
@@ -76,7 +114,7 @@ pub fn ensure_ffmpeg_installed(target_dir: &Path) -> Result<PathBuf, String> {
 
     let url = "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip";
     let resp = ureq::get(url)
-        .set("User-Agent", "Stick-Studio-Installer")
+        .set("User-Agent", "Stick-Studio")
         .call()
         .map_err(|e| format!("فشل الاتصال لتحميل FFmpeg: {}", e))?;
 
@@ -100,74 +138,6 @@ pub fn ensure_ffmpeg_installed(target_dir: &Path) -> Result<PathBuf, String> {
     }
 
     Err("لم يتم العثور على ffmpeg.exe داخل الحزمة المحملة.".to_string())
-}
-
-/// البحث الشامل عن برنامج Blender في كافة الأقراص والمسارات وسجل النظام
-pub fn find_blender_executable(custom_path: Option<&str>) -> Option<PathBuf> {
-    if let Some(cp) = custom_path {
-        let pb = PathBuf::from(cp.trim());
-        if pb.exists() && pb.is_file() {
-            return Some(pb);
-        }
-    }
-    if Command::new("blender").arg("--version").output().is_ok() {
-        return Some(PathBuf::from("blender"));
-    }
-
-    // البحث في سجل الويندوز (Registry) عن مسار تثبيت Blender أو ارتباط ملفات .blend
-    if let Ok(out) = Command::new("reg")
-        .args(["query", r"HKEY_CLASSES_ROOT\blendfile\shell\open\command", "/ve"])
-        .output()
-    {
-        let stdout = String::from_utf8_lossy(&out.stdout);
-        for part in stdout.split('"') {
-            if part.to_lowercase().ends_with("blender.exe") {
-                let pb = PathBuf::from(part);
-                if pb.exists() {
-                    return Some(pb);
-                }
-            }
-        }
-    }
-
-    // البحث في كافة الأقراص C, D, E, F والمجلدات القياسية و Steam
-    let drives = ["C:", "D:", "E:", "F:"];
-    let sub_dirs = [
-        r"Program Files\Blender Foundation",
-        r"Program Files (x86)\Blender Foundation",
-        r"Program Files (x86)\Steam\steamapps\common\Blender",
-        r"SteamLibrary\steamapps\common\Blender",
-        r"Blender",
-    ];
-    for drv in drives {
-        for sub in sub_dirs {
-            let root = PathBuf::from(format!("{}\\{}", drv, sub));
-            if root.join("blender.exe").exists() {
-                return Some(root.join("blender.exe"));
-            }
-            if let Ok(entries) = fs::read_dir(&root) {
-                for entry in entries.flatten() {
-                    let exe_path = entry.path().join("blender.exe");
-                    if exe_path.exists() {
-                        return Some(exe_path);
-                    }
-                }
-            }
-        }
-    }
-
-    if let Ok(local_app) = std::env::var("LOCALAPPDATA") {
-        let p = PathBuf::from(local_app).join("Programs").join("Blender Foundation");
-        if let Ok(entries) = fs::read_dir(p) {
-            for entry in entries.flatten() {
-                let exe_path = entry.path().join("blender.exe");
-                if exe_path.exists() {
-                    return Some(exe_path);
-                }
-            }
-        }
-    }
-    None
 }
 
 pub fn render_frame_pixmap(project: &AniProject, frame_idx: usize, transparent_bg: bool, bg_rgba: [u8; 4]) -> Pixmap {
@@ -280,6 +250,55 @@ pub fn render_frame_pixmap(project: &AniProject, frame_idx: usize, transparent_b
     pixmap
 }
 
+/// تصدير الرسمة أو الفريم الحالي بأشهر صيغ الصور (PNG, JPG, WebP, BMP, TIFF)
+pub fn export_single_image_format(
+    project: &AniProject,
+    frame_idx: usize,
+    out_path: &Path,
+    format: ImageExportFormat,
+    bg_rgba: [u8; 4],
+) -> Result<(), String> {
+    let pixmap = render_frame_pixmap(project, frame_idx, format.is_transparent(), bg_rgba);
+    let w = pixmap.width();
+    let h = pixmap.height();
+
+    // فك ضرب الألفا (Unpremultiply) لاستخراج ألوان RGBA دقيقة
+    let mut raw_rgba = Vec::with_capacity((w * h * 4) as usize);
+    for px in pixmap.pixels() {
+        let c = px.demultiply();
+        raw_rgba.push(c.red());
+        raw_rgba.push(c.green());
+        raw_rgba.push(c.blue());
+        raw_rgba.push(c.alpha());
+    }
+
+    let img_buf = image::RgbaImage::from_raw(w, h, raw_rgba)
+        .ok_or_else(|| "فشل تجهيز بيانات الصورة.".to_string())?;
+    let dyn_img = image::DynamicImage::ImageRgba8(img_buf);
+
+    match format {
+        ImageExportFormat::PngTransparent | ImageExportFormat::PngSolid => {
+            dyn_img.save_with_format(out_path, ImageFormat::Png).map_err(|e| e.to_string())
+        }
+        ImageExportFormat::Jpg => {
+            image::DynamicImage::ImageRgb8(dyn_img.to_rgb8())
+                .save_with_format(out_path, ImageFormat::Jpeg)
+                .map_err(|e| e.to_string())
+        }
+        ImageExportFormat::Webp => {
+            dyn_img.save_with_format(out_path, ImageFormat::WebP).map_err(|e| e.to_string())
+        }
+        ImageExportFormat::Bmp => {
+            image::DynamicImage::ImageRgb8(dyn_img.to_rgb8())
+                .save_with_format(out_path, ImageFormat::Bmp)
+                .map_err(|e| e.to_string())
+        }
+        ImageExportFormat::Tiff => {
+            dyn_img.save_with_format(out_path, ImageFormat::Tiff).map_err(|e| e.to_string())
+        }
+    }
+}
+
 pub fn export_transparent_png_sequence(project: &AniProject, folder: &Path) -> Result<usize, String> {
     fs::create_dir_all(folder).map_err(|e| format!("Failed to create folder: {}", e))?;
     let total = project.total_frames.max(1);
@@ -289,11 +308,6 @@ pub fn export_transparent_png_sequence(project: &AniProject, folder: &Path) -> R
         pixmap.save_png(&file_path).map_err(|e| format!("PNG save error: {}", e))?;
     }
     Ok(total)
-}
-
-pub fn export_single_png(project: &AniProject, frame_idx: usize, out_path: &Path, transparent: bool, bg_rgba: [u8; 4]) -> Result<(), String> {
-    let pixmap = render_frame_pixmap(project, frame_idx, transparent, bg_rgba);
-    pixmap.save_png(out_path).map_err(|e| format!("PNG save error: {}", e))
 }
 
 pub fn export_video_multi_format(
@@ -412,42 +426,5 @@ pub fn extract_video_frames(video_path: &Path, fps: u32) -> Result<Vec<PathBuf>,
         .filter_map(|e| e.ok().map(|entry| entry.path()))
         .collect();
     files.sort();
-    Ok(files)
-}
-
-pub fn import_blender_project_frames(blend_path: &Path, custom_blender: Option<&str>) -> Result<Vec<PathBuf>, String> {
-    let blender_bin = find_blender_executable(custom_blender)
-        .ok_or_else(|| "BLENDER_NOT_FOUND".to_string())?;
-
-    let out_dir = std::env::temp_dir().join(format!("stick_blend_{}", std::process::id()));
-    let _ = fs::remove_dir_all(&out_dir);
-    fs::create_dir_all(&out_dir).map_err(|e| e.to_string())?;
-
-    let out_pattern = out_dir.join("blend_####.png");
-    let status = Command::new(&blender_bin)
-        .args([
-            "-b",
-            blend_path.to_str().unwrap_or(""),
-            "-o",
-            out_pattern.to_str().unwrap_or(""),
-            "-F",
-            "PNG",
-            "-a",
-        ])
-        .status()
-        .map_err(|e| format!("Blender error: {}", e))?;
-
-    if !status.success() {
-        return Err("فشل استخراج المشهد من ملف Blender.".to_string());
-    }
-
-    let mut files: Vec<PathBuf> = fs::read_dir(&out_dir)
-        .map_err(|e| e.to_string())?
-        .filter_map(|e| e.ok().map(|entry| entry.path()))
-        .collect();
-    files.sort();
-    if files.is_empty() {
-        return Err("لم يتم العثور على فريمات مرئية داخل ملف .blend".to_string());
-    }
     Ok(files)
 }
