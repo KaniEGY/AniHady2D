@@ -1,6 +1,6 @@
 use crate::project::AniProject;
 use std::fs;
-use std::io::{Read, Write};
+use std::io::{Cursor, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use tiny_skia::{Color, Paint, PathBuilder, Pixmap, Stroke, Transform};
@@ -64,7 +64,7 @@ pub fn find_ffmpeg_executable() -> Option<PathBuf> {
     None
 }
 
-/// تحميل أداة FFmpeg تلقائياً داخل مجلد التسطيب إذا لم تكن موجودة
+/// تحميل حزمة FFmpeg وفك ضغط ffmpeg.exe تلقائياً داخل مجلد البرنامج
 pub fn ensure_ffmpeg_installed(target_dir: &Path) -> Result<PathBuf, String> {
     if let Some(existing) = find_ffmpeg_executable() {
         return Ok(existing);
@@ -74,38 +74,91 @@ pub fn ensure_ffmpeg_installed(target_dir: &Path) -> Result<PathBuf, String> {
         return Ok(target_exe);
     }
 
-    // تحميل نسخة ffmpeg.exe جاهزة ومباشرة من مستودع موثوق
-    let url = "https://github.com/eugeneware/ffmpeg-static/releases/latest/download/win32-x64";
+    let url = "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip";
     let resp = ureq::get(url)
-        .set("User-Agent", "Stick-Installer")
+        .set("User-Agent", "Stick-Studio-Installer")
         .call()
-        .map_err(|e| format!("فشل تحميل محرك الفيديو FFmpeg: {}", e))?;
+        .map_err(|e| format!("فشل الاتصال لتحميل FFmpeg: {}", e))?;
 
-    let mut bytes = Vec::new();
+    let mut zip_bytes = Vec::new();
     resp.into_reader()
-        .read_to_end(&mut bytes)
-        .map_err(|e| format!("خطأ أثناء قراءة FFmpeg: {}", e))?;
+        .read_to_end(&mut zip_bytes)
+        .map_err(|e| format!("خطأ أثناء تحميل FFmpeg: {}", e))?;
 
-    if bytes.len() < 1_000_000 {
-        return Err("ملف FFmpeg المحمل غير مكتمل.".to_string());
-    }
+    let cursor = Cursor::new(zip_bytes);
+    let mut archive = zip::ZipArchive::new(cursor).map_err(|e| format!("فشل فك ضغط FFmpeg: {}", e))?;
 
     fs::create_dir_all(target_dir).map_err(|e| e.to_string())?;
-    let mut f = fs::File::create(&target_exe).map_err(|e| format!("فشل حفظ ffmpeg.exe: {}", e))?;
-    f.write_all(&bytes).map_err(|e| e.to_string())?;
-    Ok(target_exe)
+    for i in 0..archive.len() {
+        if let Ok(mut file) = archive.by_index(i) {
+            if file.name().ends_with("bin/ffmpeg.exe") || file.name().ends_with("bin\\ffmpeg.exe") {
+                let mut out_file = fs::File::create(&target_exe).map_err(|e| format!("فشل حفظ ffmpeg.exe: {}", e))?;
+                std::io::copy(&mut file, &mut out_file).map_err(|e| e.to_string())?;
+                return Ok(target_exe);
+            }
+        }
+    }
+
+    Err("لم يتم العثور على ffmpeg.exe داخل الحزمة المحملة.".to_string())
 }
 
-fn find_blender_executable() -> Option<PathBuf> {
+/// البحث الشامل عن برنامج Blender في كافة الأقراص والمسارات وسجل النظام
+pub fn find_blender_executable(custom_path: Option<&str>) -> Option<PathBuf> {
+    if let Some(cp) = custom_path {
+        let pb = PathBuf::from(cp.trim());
+        if pb.exists() && pb.is_file() {
+            return Some(pb);
+        }
+    }
     if Command::new("blender").arg("--version").output().is_ok() {
         return Some(PathBuf::from("blender"));
     }
-    let base_dirs = [
-        r"C:\Program Files\Blender Foundation",
-        r"C:\Program Files (x86)\Blender Foundation",
+
+    // البحث في سجل الويندوز (Registry) عن مسار تثبيت Blender أو ارتباط ملفات .blend
+    if let Ok(out) = Command::new("reg")
+        .args(["query", r"HKEY_CLASSES_ROOT\blendfile\shell\open\command", "/ve"])
+        .output()
+    {
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        for part in stdout.split('"') {
+            if part.to_lowercase().ends_with("blender.exe") {
+                let pb = PathBuf::from(part);
+                if pb.exists() {
+                    return Some(pb);
+                }
+            }
+        }
+    }
+
+    // البحث في كافة الأقراص C, D, E, F والمجلدات القياسية و Steam
+    let drives = ["C:", "D:", "E:", "F:"];
+    let sub_dirs = [
+        r"Program Files\Blender Foundation",
+        r"Program Files (x86)\Blender Foundation",
+        r"Program Files (x86)\Steam\steamapps\common\Blender",
+        r"SteamLibrary\steamapps\common\Blender",
+        r"Blender",
     ];
-    for base in base_dirs {
-        if let Ok(entries) = fs::read_dir(base) {
+    for drv in drives {
+        for sub in sub_dirs {
+            let root = PathBuf::from(format!("{}\\{}", drv, sub));
+            if root.join("blender.exe").exists() {
+                return Some(root.join("blender.exe"));
+            }
+            if let Ok(entries) = fs::read_dir(&root) {
+                for entry in entries.flatten() {
+                    let exe_path = entry.path().join("blender.exe");
+                    if exe_path.exists() {
+                        return Some(exe_path);
+                    }
+                }
+            }
+        }
+    }
+
+    if let Ok(local_app) = std::env::var("LOCALAPPDATA") {
+        let p = PathBuf::from(local_app).join("Programs").join("Blender Foundation");
+        if let Ok(entries) = fs::read_dir(p) {
             for entry in entries.flatten() {
                 let exe_path = entry.path().join("blender.exe");
                 if exe_path.exists() {
@@ -238,6 +291,11 @@ pub fn export_transparent_png_sequence(project: &AniProject, folder: &Path) -> R
     Ok(total)
 }
 
+pub fn export_single_png(project: &AniProject, frame_idx: usize, out_path: &Path, transparent: bool, bg_rgba: [u8; 4]) -> Result<(), String> {
+    let pixmap = render_frame_pixmap(project, frame_idx, transparent, bg_rgba);
+    pixmap.save_png(out_path).map_err(|e| format!("PNG save error: {}", e))
+}
+
 pub fn export_video_multi_format(
     project: &AniProject,
     output_path: &Path,
@@ -249,7 +307,6 @@ pub fn export_video_multi_format(
         .and_then(|p| p.parent().map(|d| d.to_path_buf()))
         .unwrap_or_else(|| PathBuf::from("."));
 
-    // إذا لم يكن FFmpeg موجوداً يقوم بتحميله تلقائياً فوراً
     let ffmpeg_bin = ensure_ffmpeg_installed(&exe_dir)?;
 
     let temp_dir = std::env::temp_dir().join(format!("stick_export_{}", std::process::id()));
@@ -358,10 +415,9 @@ pub fn extract_video_frames(video_path: &Path, fps: u32) -> Result<Vec<PathBuf>,
     Ok(files)
 }
 
-pub fn import_blender_project_frames(blend_path: &Path) -> Result<Vec<PathBuf>, String> {
-    let blender_bin = find_blender_executable().ok_or_else(|| {
-        "برنامج Blender غير مثبت على الجهاز! قم بتثبيت Blender لفتح ملفات .blend مباشرة.".to_string()
-    })?;
+pub fn import_blender_project_frames(blend_path: &Path, custom_blender: Option<&str>) -> Result<Vec<PathBuf>, String> {
+    let blender_bin = find_blender_executable(custom_blender)
+        .ok_or_else(|| "BLENDER_NOT_FOUND".to_string())?;
 
     let out_dir = std::env::temp_dir().join(format!("stick_blend_{}", std::process::id()));
     let _ = fs::remove_dir_all(&out_dir);
