@@ -1,85 +1,142 @@
-﻿use crate::project::AniProject;
+use crate::project::AniProject;
 use std::fs;
-use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
-use tiny_skia::{Color, FillRule, Paint, PathBuilder, Pixmap, Stroke, Transform};
+use std::process::Command;
+use tiny_skia::{Color, Paint, PathBuilder, Pixmap, Stroke, Transform};
 
-pub fn export_to_mp4(project: &AniProject, output_path: &Path) -> Result<(), String> {
-    let (width, height) = (project.width, project.height);
-    let mut args = vec![
-        "-y".to_string(), "-f".to_string(), "rawvideo".to_string(), "-vcodec".to_string(), "rawvideo".to_string(),
-        "-pix_fmt".to_string(), "rgba".to_string(), "-s".to_string(), format!("{}x{}", width, height),
-        "-r".to_string(), project.fps.to_string(), "-i".to_string(), "-".to_string(),
-    ];
-    if let Some(audio) = project.audio_tracks.first() {
-        args.extend(["-i".to_string(), audio.file_path.clone(), "-shortest".to_string()]);
-    }
-    args.extend([
-        "-c:v".to_string(), "libx264".to_string(), "-pix_fmt".to_string(), "yuv420p".to_string(),
-        "-preset".to_string(), "fast".to_string(), "-crf".to_string(), "18".to_string(),
-        output_path.to_str().unwrap_or("output.mp4").to_string(),
-    ]);
-    let mut ffmpeg = Command::new("ffmpeg").args(&args).stdin(Stdio::piped()).spawn().map_err(|e| format!("تأكد من FFmpeg: {}", e))?;
-    let mut stdin = ffmpeg.stdin.take().ok_or("فشل فتح FFmpeg")?;
-    for frame_idx in 1..=project.total_frames {
-        let mut pixmap = Pixmap::new(width, height).ok_or("فشل إنشاء مساحة الرندر")?;
+pub fn render_frame_pixmap(project: &AniProject, frame_idx: usize, transparent_bg: bool) -> Pixmap {
+    let mut pixmap = Pixmap::new(project.width.max(1), project.height.max(1)).unwrap();
+    if !transparent_bg {
         pixmap.fill(Color::WHITE);
-        for layer in &project.layers {
-            if !layer.visible { continue; }
-            if let Some(frame_data) = layer.keyframes.get(&frame_idx) {
-                for stroke in &frame_data.strokes { render_skia_stroke(&mut pixmap, stroke, 0.0, 0.0, 1.0); }
-                for inst in &frame_data.symbol_instances {
+    }
+
+    for layer in project.layers.iter().rev() {
+        if !layer.visible {
+            continue;
+        }
+        let eff_key = layer.keyframes.keys().filter(|&&k| k <= frame_idx).max().copied();
+        if let Some(k) = eff_key {
+            if let Some(fd) = layer.keyframes.get(&k) {
+                for s in &fd.strokes {
+                    if s.points.len() < 2 {
+                        continue;
+                    }
+                    let mut pb = PathBuilder::new();
+                    pb.move_to(s.points[0].x, s.points[0].y);
+                    for p in &s.points[1..] {
+                        pb.line_to(p.x, p.y);
+                    }
+                    if let Some(path) = pb.finish() {
+                        let mut paint = Paint::default();
+                        paint.set_color_rgba8(s.color[0], s.color[1], s.color[2], s.color[3]);
+                        paint.anti_alias = true;
+                        let mut stroke = Stroke::default();
+                        stroke.width = s.base_width;
+                        pixmap.stroke_path(&path, &paint, &stroke, Transform::identity(), None);
+                    }
+                }
+                for inst in &fd.symbol_instances {
                     if let Some(sym) = project.library_symbols.get(&inst.symbol_name) {
-                        for stroke in &sym.strokes { render_skia_stroke(&mut pixmap, stroke, inst.x, inst.y, inst.scale); }
+                        for s in &sym.strokes {
+                            if s.points.len() < 2 {
+                                continue;
+                            }
+                            let mut pb = PathBuilder::new();
+                            pb.move_to(s.points[0].x * inst.scale + inst.x, s.points[0].y * inst.scale + inst.y);
+                            for p in &s.points[1..] {
+                                pb.line_to(p.x * inst.scale + inst.x, p.y * inst.scale + inst.y);
+                            }
+                            if let Some(path) = pb.finish() {
+                                let mut paint = Paint::default();
+                                paint.set_color_rgba8(s.color[0], s.color[1], s.color[2], s.color[3]);
+                                paint.anti_alias = true;
+                                let mut stroke = Stroke::default();
+                                stroke.width = s.base_width * inst.scale;
+                                pixmap.stroke_path(&path, &paint, &stroke, Transform::identity(), None);
+                            }
+                        }
                     }
                 }
             }
         }
-        stdin.write_all(pixmap.data()).map_err(|e| format!("خطأ في الفريم: {}", e))?;
     }
-    drop(stdin);
-    ffmpeg.wait().map_err(|e| format!("خطأ في التصدير: {}", e))?;
-    Ok(())
+    pixmap
 }
 
-fn render_skia_stroke(pixmap: &mut Pixmap, stroke: &crate::project::Stroke, ox: f32, oy: f32, scale: f32) {
-    if stroke.points.len() < 2 { return; }
-    if let Some(fc) = stroke.fill_color {
-        let mut pb = PathBuilder::new();
-        pb.move_to(stroke.points[0].x * scale + ox, stroke.points[0].y * scale + oy);
-        for p in &stroke.points[1..] { pb.line_to(p.x * scale + ox, p.y * scale + oy); }
-        pb.close();
-        if let Some(path) = pb.finish() {
-            let mut fill_paint = Paint::default();
-            fill_paint.set_color_rgba8(fc[0], fc[1], fc[2], fc[3]);
-            pixmap.fill_path(&path, &fill_paint, FillRule::Winding, Transform::identity(), None);
-        }
+pub fn export_transparent_png_sequence(project: &AniProject, folder: &Path) -> Result<usize, String> {
+    fs::create_dir_all(folder).map_err(|e| format!("Failed to create folder: {}", e))?;
+    let total = project.total_frames.max(1);
+    for f in 1..=total {
+        let pixmap = render_frame_pixmap(project, f, true);
+        let file_path = folder.join(format!("frame_{:04}.png", f));
+        pixmap.save_png(&file_path).map_err(|e| format!("PNG save error: {}", e))?;
     }
-    let mut paint = Paint::default();
-    paint.set_color_rgba8(stroke.color[0], stroke.color[1], stroke.color[2], stroke.color[3]);
-    paint.anti_alias = true;
-    for window in stroke.points.windows(2) {
-        let mut pb = PathBuilder::new();
-        pb.move_to(window[0].x * scale + ox, window[0].y * scale + oy);
-        pb.line_to(window[1].x * scale + ox, window[1].y * scale + oy);
-        if let Some(path) = pb.finish() {
-            let mut skia_stroke = Stroke::default();
-            skia_stroke.width = stroke.base_width * window[1].pressure * scale;
-            pixmap.stroke_path(&path, &paint, &skia_stroke, Transform::identity(), None);
-        }
+    Ok(total)
+}
+
+pub fn export_to_mp4(project: &AniProject, output_path: &Path) -> Result<(), String> {
+    let temp_dir = std::env::temp_dir().join("anihady_export_frames");
+    let _ = fs::remove_dir_all(&temp_dir);
+    fs::create_dir_all(&temp_dir).map_err(|e| e.to_string())?;
+
+    let total = project.total_frames.max(1);
+    for f in 1..=total {
+        let pixmap = render_frame_pixmap(project, f, false);
+        let file_path = temp_dir.join(format!("frame_{:04}.png", f));
+        pixmap.save_png(&file_path).map_err(|e| e.to_string())?;
+    }
+
+    let input_pattern = temp_dir.join("frame_%04d.png");
+    let status = Command::new("ffmpeg")
+        .args([
+            "-y",
+            "-framerate",
+            &project.fps.to_string(),
+            "-i",
+            input_pattern.to_str().unwrap_or(""),
+            "-c:v",
+            "libx264",
+            "-pix_fmt",
+            "yuv420p",
+            output_path.to_str().unwrap_or("output.mp4"),
+        ])
+        .status()
+        .map_err(|_| "FFmpeg not found! Install FFmpeg or use Transparent PNG Sequence export.".to_string())?;
+
+    let _ = fs::remove_dir_all(&temp_dir);
+    if status.success() {
+        Ok(())
+    } else {
+        Err("FFmpeg encoding failed.".to_string())
     }
 }
 
 pub fn extract_video_frames(video_path: &Path, fps: u32) -> Result<Vec<PathBuf>, String> {
-    let temp_dir = std::env::temp_dir().join("AniHady2D_ImportedVideo");
-    let _ = fs::remove_dir_all(&temp_dir);
-    fs::create_dir_all(&temp_dir).map_err(|e| e.to_string())?;
-    let pattern = temp_dir.join("frame_%04d.png");
-    let status = Command::new("ffmpeg").args(["-i", video_path.to_str().unwrap_or(""), "-vf", &format!("fps={}", fps), pattern.to_str().unwrap_or("")]).status().map_err(|e| format!("فشل FFmpeg: {}", e))?;
-    if !status.success() { return Err("فشل استخراج الفيديو".to_string()); }
-    let mut frames = Vec::new();
-    if let Ok(entries) = fs::read_dir(&temp_dir) { for entry in entries.flatten() { frames.push(entry.path()); } }
-    frames.sort();
-    Ok(frames)
+    let out_dir = std::env::temp_dir().join(format!("anihady_vid_{}", std::process::id()));
+    let _ = fs::remove_dir_all(&out_dir);
+    fs::create_dir_all(&out_dir).map_err(|e| e.to_string())?;
+
+    let pattern = out_dir.join("vid_%04d.png");
+    let status = Command::new("ffmpeg")
+        .args([
+            "-y",
+            "-i",
+            video_path.to_str().unwrap_or(""),
+            "-vf",
+            &format!("fps={}", fps.max(1)),
+            pattern.to_str().unwrap_or(""),
+        ])
+        .status()
+        .map_err(|_| "FFmpeg not found on system.".to_string())?;
+
+    if !status.success() {
+        return Err("Failed to extract video frames.".to_string());
+    }
+
+    let mut files: Vec<PathBuf> = fs::read_dir(&out_dir)
+        .map_err(|e| e.to_string())?
+        .filter_map(|e| e.ok().map(|entry| entry.path()))
+        .collect();
+    files.sort();
+    Ok(files)
 }
