@@ -6,7 +6,7 @@ mod project;
 
 use arabic_reshaper::arabic_reshape;
 use eframe::egui;
-use exporter::VideoExportFormat;
+use exporter::{ImageExportFormat, VideoExportFormat};
 use profile::UserProfile;
 use project::{
     AniProject, AudioSyncMode, AudioTrack, FrameData, Layer, MediaItem, MediaType, Stroke, StrokePoint, Symbol,
@@ -23,7 +23,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use unicode_bidi::BidiInfo;
 
-const FALLBACK_VERSION: &str = "2.2.0";
+const FALLBACK_VERSION: &str = "2.3.0";
 const GITHUB_REPO: &str = "KaniEGY/AniHady2D";
 const YOUTUBE_CHANNEL_URL: &str = "https://www.youtube.com/@%D8%A7%D8%A8%D9%84%D9%83%D8%A7%D8%B4-%D8%A7%D9%86%D9%85%D9%8A%D8%B4%D9%86/videos";
 
@@ -64,6 +64,14 @@ enum SymmetryMode {
     Off,
     Horizontal,
     Vertical,
+}
+
+#[derive(Clone, PartialEq)]
+enum ExportTaskState {
+    Idle,
+    Running(String),
+    Done(String),
+    Failed(String),
 }
 
 #[derive(Clone, Copy)]
@@ -262,8 +270,6 @@ struct AppConfig {
     show_grid: bool,
     #[serde(default = "default_grid_size")]
     grid_size: f32,
-    #[serde(default)]
-    custom_blender_path: Option<String>,
     #[serde(default = "default_tl_bg")]
     timeline_bg_color: [u8; 4],
     #[serde(default = "default_tl_cell")]
@@ -322,7 +328,6 @@ impl Default for AppConfig {
             sound_effects_enabled: true,
             show_grid: false,
             grid_size: 40.0,
-            custom_blender_path: None,
             timeline_bg_color: default_tl_bg(),
             timeline_cell_color: default_tl_cell(),
             timeline_playhead_color: default_tl_head(),
@@ -823,10 +828,11 @@ struct StickApp {
     show_symbol_dialog: bool,
     show_text_dialog: bool,
     show_export_dialog: bool,
+    show_image_export_dialog: bool,
     show_timeline_settings: bool,
-    show_blender_locate_dialog: bool,
-    blender_path_buf: String,
     selected_export_format: VideoExportFormat,
+    selected_image_format: ImageExportFormat,
+    export_task_state: Arc<Mutex<ExportTaskState>>,
     text_input_buf: String,
     text_font_size: f32,
     pending_text_pos: egui::Pos2,
@@ -886,9 +892,6 @@ impl StickApp {
             WorkspaceMode::InstallerSetup
         };
 
-        let cfg = AppConfig::load();
-        let b_buf = cfg.custom_blender_path.clone().unwrap_or_default();
-
         Self {
             workspace_mode: initial_mode,
             install_target_dir: default_install_path,
@@ -938,10 +941,11 @@ impl StickApp {
             show_symbol_dialog: false,
             show_text_dialog: false,
             show_export_dialog: false,
+            show_image_export_dialog: false,
             show_timeline_settings: false,
-            show_blender_locate_dialog: false,
-            blender_path_buf: b_buf,
             selected_export_format: VideoExportFormat::Mp4,
+            selected_image_format: ImageExportFormat::PngTransparent,
+            export_task_state: Arc::new(Mutex::new(ExportTaskState::Idle)),
             text_input_buf: String::new(),
             text_font_size: 36.0,
             pending_text_pos: egui::pos2(200.0, 200.0),
@@ -955,7 +959,7 @@ impl StickApp {
             dragged_frame: None,
             settings_tab: 0,
             listening_shortcut_idx: None,
-            config: cfg,
+            config: AppConfig::load(),
             user_profile: profile,
             avatar_texture: avatar_tex,
             installed_version: get_installed_version(),
@@ -992,7 +996,6 @@ impl StickApp {
         let _ = std::fs::write(target_dir.join("version.txt"), FALLBACK_VERSION);
         let _ = create_desktop_shortcut(&target_exe);
 
-        // تحميل FFmpeg في الخلفية لعدم تجميد الواجهة
         let dir_clone = target_dir.clone();
         std::thread::spawn(move || {
             let _ = exporter::ensure_ffmpeg_installed(&dir_clone);
@@ -1001,6 +1004,37 @@ impl StickApp {
         self.play_sfx(SfxType::LevelUpFanfare);
         self.workspace_mode = WorkspaceMode::Launcher;
         self.status_message = "تم التسطيب وإنشاء اختصار Stick على سطح المكتب!".to_string();
+    }
+
+    fn start_background_video_export(&mut self, output_path: PathBuf, ctx: egui::Context) {
+        self.project.total_frames = self.timeline_length;
+        let proj_clone = self.project.clone();
+        let fmt = self.selected_export_format;
+        let bg = self.stage_bg_color;
+        let sfx_ok = self.config.sound_effects_enabled;
+        let state_arc = Arc::clone(&self.export_task_state);
+
+        *state_arc.lock().unwrap() = ExportTaskState::Running(
+            "جاري تجهيز محرك الفيديو وتصدير الفريمات في الخلفية...".to_string(),
+        );
+
+        std::thread::spawn(move || {
+            let res = exporter::export_video_multi_format(&proj_clone, &output_path, fmt, bg);
+            let mut st = state_arc.lock().unwrap();
+            match res {
+                Ok(_) => {
+                    play_sfx_async(sfx_ok, SfxType::ExportSuccess, false);
+                    *st = ExportTaskState::Done(format!(
+                        "تم تصدير الفيديو بنجاح بصيغة .{}!",
+                        fmt.ext().to_uppercase()
+                    ));
+                }
+                Err(err) => {
+                    *st = ExportTaskState::Failed(err);
+                }
+            }
+            ctx.request_repaint();
+        });
     }
 
     fn play_sfx(&self, sfx: SfxType) {
@@ -1129,7 +1163,6 @@ impl StickApp {
         }
     }
 
-    /// إضافة خط مرسوم مع دعم التماثل الأفقي والرأسي في وضع الرسم
     fn commit_stroke_with_symmetry(&mut self, stroke: Stroke, now_time: f64) {
         let stage_w = self.project.width as f32;
         let stage_h = self.project.height as f32;
@@ -1426,7 +1459,7 @@ impl StickApp {
 
     fn import_image_dialog(&mut self) {
         if let Some(path) = rfd::FileDialog::new()
-            .add_filter("Images", &["png", "jpg", "jpeg", "webp", "bmp"])
+            .add_filter("Images", &["png", "jpg", "jpeg", "webp", "bmp", "tiff"])
             .pick_file()
         {
             self.save_undo_state();
@@ -1502,61 +1535,6 @@ impl StickApp {
                     self.status_message = format!("Video Layer: {} frames", frames.len());
                 }
                 Err(e) => self.status_message = e,
-            }
-        }
-    }
-
-    fn import_blender_dialog(&mut self) {
-        if let Some(path) = rfd::FileDialog::new()
-            .add_filter("Blender 2D/3D Project", &["blend"])
-            .pick_file()
-        {
-            self.status_message = tr(self.config.lang, "Rendering Blender scene...", "جاري استيراد مشهد بلندر (.blend)...");
-            match exporter::import_blender_project_frames(&path, self.config.custom_blender_path.as_deref()) {
-                Ok(frames) => {
-                    self.save_undo_state();
-                    let needed_len = self.current_frame + frames.len().saturating_sub(1);
-                    if needed_len > self.timeline_length {
-                        self.timeline_length = needed_len;
-                        self.project.total_frames = needed_len;
-                    }
-                    let blend_name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
-                    let mut kf = HashMap::new();
-                    for (i, f_path) in frames.iter().enumerate() {
-                        let f_idx = self.current_frame + i;
-                        let mut fd = FrameData::default();
-                        fd.media_items.push(MediaItem {
-                            path: f_path.to_string_lossy().to_string(),
-                            media_type: MediaType::VideoFrame,
-                            x: 0.0,
-                            y: 0.0,
-                            width: self.project.width as f32,
-                            height: self.project.height as f32,
-                        });
-                        kf.insert(f_idx, fd);
-                    }
-                    self.project.layers.insert(
-                        0,
-                        Layer {
-                            name: format!("Blend_{}", blend_name),
-                            visible: true,
-                            locked: false,
-                            keyframes: kf,
-                        },
-                    );
-                    self.active_layer_idx = 0;
-                    self.has_unsaved_changes = true;
-                    self.play_sfx(SfxType::NewFrame);
-                    self.status_message = format!("Blender Layer: {} frames", frames.len());
-                }
-                Err(e) => {
-                    if e == "BLENDER_NOT_FOUND" {
-                        self.show_blender_locate_dialog = true;
-                        self.status_message = "حدد مكان blender.exe لمرة واحدة".to_string();
-                    } else {
-                        self.status_message = e;
-                    }
-                }
             }
         }
     }
@@ -1708,7 +1686,6 @@ impl StickApp {
         }
     }
 
-    /// رسم لوحة خصائص الأدوات المشتركة بين وضع الرسم ووضع الأنيميشن
     fn render_tool_properties_ui(&mut self, ui: &mut egui::Ui, lang: AppLang) {
         match self.active_tool_ui {
             ActiveToolUI::SelectNormal | ActiveToolUI::SelectLasso | ActiveToolUI::VectorDirectSelect => {
@@ -1926,7 +1903,6 @@ impl eframe::App for StickApp {
             self.trigger_audio_stream_scrub();
         }
 
-        // نافذة إشعار ارتقاء المستوى على طراز Solo Leveling بالرسائل المخصصة كل 5 مستويات
         if now_time < self.level_up_banner_timer {
             let (lvl, _, _) = self.user_profile.get_level_progress();
             let rank = self.user_profile.get_hunter_rank();
@@ -2199,11 +2175,11 @@ impl eframe::App for StickApp {
         let any_modal_open = self.show_symbol_dialog
             || self.show_text_dialog
             || self.show_export_dialog
+            || self.show_image_export_dialog
             || self.show_exit_dialog
             || self.show_update_dialog
             || self.show_settings_dialog
             || self.show_timeline_settings
-            || self.show_blender_locate_dialog
             || self.show_credits_dialog
             || self.renaming_layer_idx.is_some()
             || self.trimming_audio_idx.is_some();
@@ -2375,39 +2351,134 @@ impl eframe::App for StickApp {
             ctx.request_repaint();
         }
 
-        // نافذة تحديد مسار Blender يدوياً إذا لم يُكتشف تلقائياً
-        if self.show_blender_locate_dialog {
-            egui::Window::new(tr(lang, "Locate Blender Executable", "تحديد مسار برنامج Blender"))
+        // نافذة تصدير الصور بأشهر الصيغ (PNG, JPG, WebP, BMP, TIFF)
+        if self.show_image_export_dialog {
+            egui::Window::new(tr(lang, "Export Image / Frame", "تصدير الصورة بأشهر الصيغ"))
                 .collapsible(false)
                 .resizable(false)
-                .default_width(420.0)
+                .default_width(360.0)
                 .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
                 .show(ctx, |ui| {
-                    ui.label(fix_ar("اختر ملف blender.exe من مجلد تثبيت Blender على جهازك:"));
+                    ui.label(tr(lang, "Choose Image Format:", "اختر صيغة الصورة:"));
+                    ui.add_space(6.0);
+                    let formats = [
+                        ImageExportFormat::PngTransparent,
+                        ImageExportFormat::PngSolid,
+                        ImageExportFormat::Jpg,
+                        ImageExportFormat::Webp,
+                        ImageExportFormat::Bmp,
+                        ImageExportFormat::Tiff,
+                    ];
+                    for fmt in formats {
+                        ui.radio_value(&mut self.selected_image_format, fmt, fix_ar(fmt.label()));
+                    }
+                    ui.add_space(10.0);
                     ui.horizontal(|ui| {
-                        ui.text_edit_singleline(&mut self.blender_path_buf);
-                        if ui.button(fix_ar("استعراض...")).clicked() {
-                            if let Some(p) = rfd::FileDialog::new().add_filter("Blender", &["exe"]).pick_file() {
-                                self.blender_path_buf = p.to_string_lossy().to_string();
+                        if ui.button(tr(lang, "Save Image...", "حفظ الصورة...")).clicked() {
+                            let ext = self.selected_image_format.ext();
+                            let default_name = format!("Stick_Image.{}", ext);
+                            if let Some(mut path) = rfd::FileDialog::new()
+                                .add_filter("Image", &[ext])
+                                .set_file_name(&default_name)
+                                .save_file()
+                            {
+                                if path.extension().is_none() {
+                                    path.set_extension(ext);
+                                }
+                                match exporter::export_single_image_format(
+                                    &self.project,
+                                    self.current_frame,
+                                    &path,
+                                    self.selected_image_format,
+                                    self.stage_bg_color,
+                                ) {
+                                    Ok(_) => {
+                                        self.play_sfx(SfxType::ExportSuccess);
+                                        self.status_message = format!("Saved .{} Image!", ext.to_uppercase());
+                                    }
+                                    Err(e) => self.status_message = e,
+                                }
                             }
+                            self.show_image_export_dialog = false;
                         }
-                    });
-                    ui.horizontal(|ui| {
-                        if ui.button(fix_ar("حفظ المسار")).clicked() {
-                            if !self.blender_path_buf.trim().is_empty() {
-                                self.config.custom_blender_path = Some(self.blender_path_buf.trim().to_string());
-                                self.config.save();
-                            }
-                            self.show_blender_locate_dialog = false;
-                        }
-                        if ui.button(fix_ar("إلغاء")).clicked() {
-                            self.show_blender_locate_dialog = false;
+                        if ui.button(tr(lang, "Cancel", "إلغاء")).clicked() {
+                            self.show_image_export_dialog = false;
                         }
                     });
                 });
         }
 
-        // نافذة إعدادات التايم لاين (ألوان التايم لاين)
+        // نافذة تصدير الفيديو في الخلفية بدون تجمد الواجهة
+        if self.show_export_dialog {
+            let task_st = self.export_task_state.lock().unwrap().clone();
+            egui::Window::new(tr(lang, "Export Video / Animation", "تصدير الفيديو بصيغ متعددة"))
+                .collapsible(false)
+                .resizable(false)
+                .default_width(380.0)
+                .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+                .show(ctx, |ui| {
+                    match task_st {
+                        ExportTaskState::Running(msg) => {
+                            ui.horizontal(|ui| {
+                                ui.spinner();
+                                ui.label(fix_ar(&msg));
+                            });
+                            ui.small(fix_ar("البرنامج يعمل بسلاسة في الخلفية، يرجى الانتظار..."));
+                            ctx.request_repaint();
+                        }
+                        ExportTaskState::Done(msg) => {
+                            ui.colored_label(egui::Color32::GREEN, fix_ar(&msg));
+                            if ui.button(tr(lang, "Close", "تم")).clicked() {
+                                *self.export_task_state.lock().unwrap() = ExportTaskState::Idle;
+                                self.show_export_dialog = false;
+                            }
+                        }
+                        ExportTaskState::Failed(err) => {
+                            ui.colored_label(egui::Color32::LIGHT_RED, fix_ar(&err));
+                            if ui.button(tr(lang, "Close", "إغلاق")).clicked() {
+                                *self.export_task_state.lock().unwrap() = ExportTaskState::Idle;
+                                self.show_export_dialog = false;
+                            }
+                        }
+                        ExportTaskState::Idle => {
+                            ui.label(tr(lang, "Select Video Format:", "اختر صيغة الفيديو:"));
+                            ui.add_space(6.0);
+                            let formats = [
+                                VideoExportFormat::Mp4,
+                                VideoExportFormat::Mov,
+                                VideoExportFormat::Avi,
+                                VideoExportFormat::Mkv,
+                                VideoExportFormat::Webm,
+                                VideoExportFormat::Gif,
+                            ];
+                            for fmt in formats {
+                                ui.radio_value(&mut self.selected_export_format, fmt, fix_ar(fmt.label()));
+                            }
+                            ui.add_space(10.0);
+                            ui.horizontal(|ui| {
+                                if ui.button(tr(lang, "Export Now...", "تصدير الآن...")).clicked() {
+                                    let ext = self.selected_export_format.ext();
+                                    let default_name = format!("Stick_Export.{}", ext);
+                                    if let Some(mut path) = rfd::FileDialog::new()
+                                        .add_filter("Video", &[ext])
+                                        .set_file_name(&default_name)
+                                        .save_file()
+                                    {
+                                        if path.extension().is_none() {
+                                            path.set_extension(ext);
+                                        }
+                                        self.start_background_video_export(path, ctx.clone());
+                                    }
+                                }
+                                if ui.button(tr(lang, "Cancel", "إلغاء")).clicked() {
+                                    self.show_export_dialog = false;
+                                }
+                            });
+                        }
+                    }
+                });
+        }
+
         if self.show_timeline_settings {
             egui::Window::new(tr(lang, "Timeline Settings", "إعدادات التايم لاين"))
                 .collapsible(false)
@@ -2443,62 +2514,6 @@ impl eframe::App for StickApp {
                         }
                         if ui.button(tr(lang, "Done", "تم")).clicked() {
                             self.show_timeline_settings = false;
-                        }
-                    });
-                });
-        }
-
-        if self.show_export_dialog {
-            egui::Window::new(tr(lang, "Export Video / Animation", "تصدير الفيديو بصيغ متعددة"))
-                .collapsible(false)
-                .resizable(false)
-                .default_width(360.0)
-                .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
-                .show(ctx, |ui| {
-                    ui.label(tr(lang, "Select Video Format:", "اختر صيغة الفيديو:"));
-                    ui.add_space(6.0);
-                    let formats = [
-                        VideoExportFormat::Mp4,
-                        VideoExportFormat::Mov,
-                        VideoExportFormat::Avi,
-                        VideoExportFormat::Mkv,
-                        VideoExportFormat::Webm,
-                        VideoExportFormat::Gif,
-                    ];
-                    for fmt in formats {
-                        ui.radio_value(&mut self.selected_export_format, fmt, fix_ar(fmt.label()));
-                    }
-                    ui.add_space(10.0);
-                    ui.horizontal(|ui| {
-                        if ui.button(tr(lang, "Export Now...", "تصدير الآن...")).clicked() {
-                            self.project.total_frames = self.timeline_length;
-                            let ext = self.selected_export_format.ext();
-                            let default_name = format!("Stick_Export.{}", ext);
-                            if let Some(mut path) = rfd::FileDialog::new()
-                                .add_filter("Video", &[ext])
-                                .set_file_name(&default_name)
-                                .save_file()
-                            {
-                                if path.extension().is_none() {
-                                    path.set_extension(ext);
-                                }
-                                match exporter::export_video_multi_format(
-                                    &self.project,
-                                    &path,
-                                    self.selected_export_format,
-                                    self.stage_bg_color,
-                                ) {
-                                    Ok(_) => {
-                                        self.play_sfx(SfxType::ExportSuccess);
-                                        self.status_message = format!("Exported .{} Successfully!", ext.to_uppercase());
-                                    }
-                                    Err(e) => self.status_message = e,
-                                }
-                            }
-                            self.show_export_dialog = false;
-                        }
-                        if ui.button(tr(lang, "Cancel", "إلغاء")).clicked() {
-                            self.show_export_dialog = false;
                         }
                     });
                 });
@@ -3030,26 +3045,13 @@ impl eframe::App for StickApp {
                     }
                     ui.separator();
                     if ui.button(tr(lang, "Import Image...", "استيراد صورة...")).clicked() { self.import_image_dialog(); ui.close_menu(); }
-                    if self.workspace_mode == WorkspaceMode::DrawingOnly {
-                        if ui.button(tr(lang, "Export Transparent PNG...", "حفظ الرسمة كصورة شفافة PNG...")).clicked() {
-                            if let Some(mut p) = rfd::FileDialog::new().add_filter("PNG", &["png"]).set_file_name("drawing.png").save_file() {
-                                if p.extension().is_none() { p.set_extension("png"); }
-                                match exporter::export_single_png(&self.project, self.current_frame, &p, true, self.stage_bg_color) {
-                                    Ok(_) => {
-                                        self.play_sfx(SfxType::ExportSuccess);
-                                        self.status_message = tr(lang, "Saved PNG!", "تم حفظ الصورة الشفافة!");
-                                    }
-                                    Err(e) => self.status_message = e,
-                                }
-                            }
-                            ui.close_menu();
-                        }
-                    } else {
+                    if ui.button(tr(lang, "Export Image (PNG, JPG, WebP, BMP, TIFF)...", "تصدير صورة بأشهر الصيغ...")).clicked() {
+                        self.show_image_export_dialog = true;
+                        ui.close_menu();
+                    }
+                    if self.workspace_mode == WorkspaceMode::AnimationStudio {
+                        ui.separator();
                         if ui.button(tr(lang, "Import Video...", "استيراد فيديو...")).clicked() { self.import_video_dialog(); ui.close_menu(); }
-                        if ui.button(tr(lang, "Import Blender 2D (.blend)...", "استيراد مشروع بلندر (.blend)...")).clicked() {
-                            self.import_blender_dialog();
-                            ui.close_menu();
-                        }
                         if ui.button(tr(lang, "Import Audio...", "استيراد صوت...")).clicked() { self.import_audio_dialog(); ui.close_menu(); }
                         ui.separator();
                         if ui.button(tr(lang, "Export Transparent PNGs (Premiere)...", "تصدير صور شفافة (PNG Sequence)...")).clicked() {
@@ -3066,6 +3068,7 @@ impl eframe::App for StickApp {
                             ui.close_menu();
                         }
                         if ui.button(tr(lang, "Export Video (MP4, MOV, AVI, MKV, GIF)...", "تصدير فيديو بجميع الصيغ...")).clicked() {
+                            *self.export_task_state.lock().unwrap() = ExportTaskState::Idle;
                             self.show_export_dialog = true;
                             ui.close_menu();
                         }
@@ -3097,7 +3100,6 @@ impl eframe::App for StickApp {
                 if ui.button(tr(lang, "+ Image", "+ صورة")).clicked() { self.import_image_dialog(); }
                 if self.workspace_mode == WorkspaceMode::AnimationStudio {
                     if ui.button(tr(lang, "+ Video", "+ فيديو")).clicked() { self.import_video_dialog(); }
-                    if ui.button("+ .blend").on_hover_text("Import Blender 2D Project").clicked() { self.import_blender_dialog(); }
                     if ui.button(tr(lang, "+ Audio", "+ صوت")).clicked() { self.import_audio_dialog(); }
                 }
                 ui.separator();
@@ -3331,7 +3333,7 @@ impl eframe::App for StickApp {
                 });
             });
 
-        // اللوحة اليمنى: مدعومة بخصائص مخصصة لوضع الرسم ووضع الأنيميشن
+        // اللوحة اليمنى
         egui::SidePanel::right("right_panel")
             .resizable(true)
             .default_width(255.0)
@@ -3341,7 +3343,6 @@ impl eframe::App for StickApp {
                     ui.strong(tr(lang, "🎨 Drawing Studio Tools", "🎨 استوديو الرسم الاحترافي"));
                     ui.separator();
 
-                    // عرض خصائص الأداة المختارة حالياً في وضع الرسم أيضاً
                     self.render_tool_properties_ui(ui, lang);
 
                     ui.add_space(8.0);
@@ -3421,17 +3422,8 @@ impl eframe::App for StickApp {
 
                     ui.add_space(8.0);
                     ui.separator();
-                    if ui.button(tr(lang, "💾 Export Transparent PNG", "💾 تصدير الرسمة PNG شفاف")).clicked() {
-                        if let Some(mut p) = rfd::FileDialog::new().add_filter("PNG", &["png"]).set_file_name("drawing.png").save_file() {
-                            if p.extension().is_none() { p.set_extension("png"); }
-                            match exporter::export_single_png(&self.project, self.current_frame, &p, true, self.stage_bg_color) {
-                                Ok(_) => {
-                                    self.play_sfx(SfxType::ExportSuccess);
-                                    self.status_message = tr(lang, "Saved PNG!", "تم حفظ الصورة الشفافة!");
-                                }
-                                Err(e) => self.status_message = e,
-                            }
-                        }
+                    if ui.button(tr(lang, "💾 Export Image (PNG, JPG, WebP...)", "💾 تصدير الصورة بأشهر الصيغ")).clicked() {
+                        self.show_image_export_dialog = true;
                     }
                 } else {
                     ui.horizontal(|ui| {
@@ -3549,7 +3541,7 @@ impl eframe::App for StickApp {
                 }
             });
 
-        // التايم لاين السفلي مع ترس إعدادات الألوان المخصص
+        // التايم لاين السفلي
         if self.workspace_mode == WorkspaceMode::AnimationStudio {
             let tl_bg = self.config.timeline_bg_color;
             let tl_cell_col = self.config.timeline_cell_color;
@@ -3621,7 +3613,6 @@ impl eframe::App for StickApp {
                             self.play_sfx(SfxType::NewFrame);
                         }
 
-                        // ترس إعدادات التايم لاين المخصص
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             let (tl_gear_rect, tl_gear_resp) = ui.allocate_exact_size(egui::vec2(22.0, 20.0), egui::Sense::click());
                             if tl_gear_resp.hovered() {
@@ -3926,7 +3917,6 @@ impl eframe::App for StickApp {
             let stage_size = egui::vec2(stage_w, stage_h) * scale;
             let stage_rect = egui::Rect::from_center_size(center, stage_size);
 
-            // التحقق الدقيق: هل الماوس داخل مربع الرسم الأبيض (stage_rect) ولا توجد أي نوافذ مفتوحة؟
             let is_inside_white_stage = pointer_pos.map_or(false, |p| stage_rect.contains(p) && canvas_rect.contains(p));
             let show_white_dot_cursor = is_inside_white_stage
                 && !any_modal_open
@@ -4016,7 +4006,6 @@ impl eframe::App for StickApp {
                 }
             }
 
-            // رسم خط مرآة التماثل في وضع الرسم
             if self.workspace_mode == WorkspaceMode::DrawingOnly {
                 match self.symmetry_mode {
                     SymmetryMode::Horizontal => {
@@ -4054,7 +4043,6 @@ impl eframe::App for StickApp {
                             }
                         }
                         ActiveToolUI::VectorDirectSelect => {
-                            // أداة تحديد نقاط الفيكتور: تظهر النقاط وتسمح بسحبها وتعديلها
                             if pointer_pressed {
                                 self.editing_vector_node = None;
                                 if let Some(layer) = self.project.layers.get(self.active_layer_idx) {
@@ -4274,7 +4262,6 @@ impl eframe::App for StickApp {
                             }
                         }
                         ActiveToolUI::VectorPen if pointer_down => {
-                            // قلم الفيكتور يرسم بنعومة بدون إظهار النقاط أثناء الرسم
                             if let Some(stroke) = &mut self.current_stroke {
                                 if let Some(last) = stroke.points.last() {
                                     let dist = ((last.x - stage_pos.x).powi(2) + (last.y - stage_pos.y).powi(2)).sqrt();
@@ -4376,7 +4363,6 @@ impl eframe::App for StickApp {
 
                 if let Some(mut stroke) = self.current_stroke.take() {
                     if stroke.is_vector {
-                        // تبسيط نقاط الفيكتور لنقاط تحكم ذكية ثم تنعيمها
                         stroke.simplify_vector_nodes(3.5);
                         stroke.smooth_brush();
                         stroke.simplify_vector_nodes(2.2);
@@ -4427,7 +4413,6 @@ impl eframe::App for StickApp {
                         }
                         for s in &fd.strokes {
                             draw_stroke_pro(&painter, s, None, scale, 0.0, 0.0, &to_screen);
-                            // إظهار نقاط الفيكتور الذكية فقط عند اختيار أداة Vector Direct Select (Q)
                             if l_idx == self.active_layer_idx && self.active_tool_ui == ActiveToolUI::VectorDirectSelect && s.is_vector {
                                 for p in &s.points {
                                     let sp = to_screen(egui::pos2(p.x, p.y));
@@ -4519,7 +4504,6 @@ impl eframe::App for StickApp {
                 ));
             }
 
-            // رسم النقطة البيضاء بإطار أسود فقط داخل مربع الرسم الأبيض وعند عدم وجود أي نوافذ مفتوحة
             if show_white_dot_cursor {
                 if let Some(p) = pointer_pos {
                     painter.circle_filled(p, 3.5, egui::Color32::WHITE);
