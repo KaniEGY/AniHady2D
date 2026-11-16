@@ -22,7 +22,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use unicode_bidi::BidiInfo;
 
-const FALLBACK_VERSION: &str = "1.4.0";
+const FALLBACK_VERSION: &str = "1.5.0";
 const GITHUB_REPO: &str = "KaniEGY/AniHady2D";
 const YOUTUBE_CHANNEL_URL: &str = "https://www.youtube.com/@%D8%A7%D8%A8%D9%84%D9%83%D8%A7%D8%B4-%D8%A7%D9%86%D9%85%D9%8A%D8%B4%D9%86/videos";
 
@@ -34,15 +34,17 @@ enum WorkspaceMode {
 }
 
 #[derive(Clone, Copy, PartialEq)]
-enum SelectSubMode {
-    NormalClick,
-    AreaLasso,
-}
-
-#[derive(Clone, Copy, PartialEq)]
-enum EraserSubMode {
-    WholeStrokeRed,
-    PartialGreen,
+enum ActiveToolUI {
+    SelectNormal,
+    SelectLasso,
+    VectorPen,
+    Brush,
+    EraserRed,
+    EraserGreen,
+    Bucket,
+    Eyedropper,
+    Text,
+    HandCanvas,
 }
 
 #[derive(Clone, Copy)]
@@ -199,6 +201,10 @@ struct AppConfig {
     tool_eyedropper: String,
     #[serde(default = "default_text_key")]
     tool_text: String,
+    #[serde(default = "default_hand_key")]
+    tool_hand: String,
+    #[serde(default = "default_del_frame_key")]
+    delete_frame_key: String,
     insert_frame: String,
     insert_keyframe: String,
     insert_blank_kf: String,
@@ -211,17 +217,11 @@ struct AppConfig {
     reset_canvas: String,
 }
 
-fn default_lasso_key() -> String {
-    "L".to_string()
-}
-
-fn default_partial_eraser_key() -> String {
-    "T".to_string()
-}
-
-fn default_text_key() -> String {
-    "N".to_string()
-}
+fn default_lasso_key() -> String { "L".to_string() }
+fn default_partial_eraser_key() -> String { "T".to_string() }
+fn default_text_key() -> String { "N".to_string() }
+fn default_hand_key() -> String { "H".to_string() }
+fn default_del_frame_key() -> String { "X".to_string() }
 
 impl Default for AppConfig {
     fn default() -> Self {
@@ -237,6 +237,8 @@ impl Default for AppConfig {
             tool_bucket: "K".to_string(),
             tool_eyedropper: "I".to_string(),
             tool_text: "N".to_string(),
+            tool_hand: "H".to_string(),
+            delete_frame_key: "X".to_string(),
             insert_frame: "F5".to_string(),
             insert_keyframe: "F6".to_string(),
             insert_blank_kf: "F7".to_string(),
@@ -386,53 +388,44 @@ fn draw_undo_redo_arrow(painter: &egui::Painter, rect: egui::Rect, is_undo: bool
     }
 }
 
-fn get_tool_accent_color(tool: ToolType, eraser_mode: EraserSubMode) -> egui::Color32 {
+fn get_tool_ui_color(tool: ActiveToolUI) -> egui::Color32 {
     match tool {
-        ToolType::Select => egui::Color32::from_rgb(56, 189, 248),
-        ToolType::VectorPen => egui::Color32::from_rgb(168, 85, 247),
-        ToolType::Brush => egui::Color32::from_rgb(249, 115, 22),
-        ToolType::Eraser => match eraser_mode {
-            EraserSubMode::WholeStrokeRed => egui::Color32::from_rgb(239, 68, 68),
-            EraserSubMode::PartialGreen => egui::Color32::from_rgb(34, 197, 94),
-        },
-        ToolType::Bucket => egui::Color32::from_rgb(16, 185, 129),
-        ToolType::Eyedropper => egui::Color32::from_rgb(234, 179, 8),
-        ToolType::Text => egui::Color32::from_rgb(236, 72, 153),
+        ActiveToolUI::SelectNormal | ActiveToolUI::SelectLasso => egui::Color32::from_rgb(56, 189, 248),
+        ActiveToolUI::VectorPen => egui::Color32::from_rgb(139, 92, 246),
+        ActiveToolUI::Brush => egui::Color32::from_rgb(249, 115, 22),
+        ActiveToolUI::EraserRed => egui::Color32::from_rgb(239, 68, 68),
+        ActiveToolUI::EraserGreen => egui::Color32::from_rgb(34, 197, 94),
+        ActiveToolUI::Bucket => egui::Color32::from_rgb(16, 185, 129),
+        ActiveToolUI::Eyedropper => egui::Color32::from_rgb(234, 179, 8),
+        ActiveToolUI::Text => egui::Color32::from_rgb(236, 72, 153),
+        ActiveToolUI::HandCanvas => egui::Color32::from_rgb(168, 85, 247), // أداة اليد باللون البنفسجي
     }
 }
 
-fn draw_vector_tool_icon(
-    painter: &egui::Painter,
-    rect: egui::Rect,
-    tool: ToolType,
-    active: bool,
-    lasso_mode: bool,
-    eraser_mode: EraserSubMode,
-) {
+fn draw_tool_ui_icon(painter: &egui::Painter, rect: egui::Rect, tool: ActiveToolUI, active: bool) {
     let c = rect.center();
-    let accent = get_tool_accent_color(tool, eraser_mode);
+    let accent = get_tool_ui_color(tool);
     let main_color = if active { egui::Color32::WHITE } else { accent };
     let stroke = egui::Stroke::new(2.0, main_color);
 
     match tool {
-        ToolType::Select => {
-            if lasso_mode {
-                painter.circle_stroke(c + egui::vec2(-1.0, -2.0), 6.5, stroke);
-                painter.line_segment([c + egui::vec2(3.5, 3.0), c + egui::vec2(7.5, 8.5)], stroke);
-            } else {
-                let pts = vec![
-                    c + egui::vec2(-5.5, -8.5),
-                    c + egui::vec2(-5.5, 7.5),
-                    c + egui::vec2(-1.2, 3.8),
-                    c + egui::vec2(2.5, 9.5),
-                    c + egui::vec2(5.2, 8.0),
-                    c + egui::vec2(1.5, 2.2),
-                    c + egui::vec2(7.0, 2.2),
-                ];
-                painter.add(egui::Shape::convex_polygon(pts, main_color, egui::Stroke::NONE));
-            }
+        ActiveToolUI::SelectNormal => {
+            let pts = vec![
+                c + egui::vec2(-5.5, -8.5),
+                c + egui::vec2(-5.5, 7.5),
+                c + egui::vec2(-1.2, 3.8),
+                c + egui::vec2(2.5, 9.5),
+                c + egui::vec2(5.2, 8.0),
+                c + egui::vec2(1.5, 2.2),
+                c + egui::vec2(7.0, 2.2),
+            ];
+            painter.add(egui::Shape::convex_polygon(pts, main_color, egui::Stroke::NONE));
         }
-        ToolType::VectorPen => {
+        ActiveToolUI::SelectLasso => {
+            painter.circle_stroke(c + egui::vec2(-1.0, -2.0), 6.5, stroke);
+            painter.line_segment([c + egui::vec2(3.5, 3.0), c + egui::vec2(7.5, 8.5)], stroke);
+        }
+        ActiveToolUI::VectorPen => {
             let pts = vec![
                 c + egui::vec2(0.0, -9.5),
                 c + egui::vec2(6.5, 1.0),
@@ -443,11 +436,9 @@ fn draw_vector_tool_icon(
             painter.add(egui::Shape::closed_line(pts, stroke));
             painter.circle_filled(c + egui::vec2(0.0, -0.5), 2.0, main_color);
             painter.line_segment([c + egui::vec2(0.0, -9.5), c + egui::vec2(0.0, -2.5)], stroke);
-            painter.line_segment([c + egui::vec2(-4.5, 5.5), c + egui::vec2(4.5, 5.5)], stroke);
         }
-        ToolType::Brush => {
+        ActiveToolUI::Brush => {
             painter.line_segment([c + egui::vec2(-1.5, 1.5), c + egui::vec2(7.5, -7.5)], egui::Stroke::new(3.2, main_color));
-            painter.line_segment([c + egui::vec2(-3.0, 3.0), c + egui::vec2(-0.5, 0.5)], egui::Stroke::new(4.0, egui::Color32::from_gray(220)));
             let tip = vec![
                 c + egui::vec2(-2.0, 2.0),
                 c + egui::vec2(-7.5, 3.5),
@@ -456,7 +447,7 @@ fn draw_vector_tool_icon(
             ];
             painter.add(egui::Shape::convex_polygon(tip, main_color, egui::Stroke::NONE));
         }
-        ToolType::Eraser => {
+        ActiveToolUI::EraserRed | ActiveToolUI::EraserGreen => {
             let pts = vec![
                 c + egui::vec2(-7.5, 2.0),
                 c + egui::vec2(1.0, -6.5),
@@ -472,7 +463,7 @@ fn draw_vector_tool_icon(
             ];
             painter.add(egui::Shape::convex_polygon(half, main_color, egui::Stroke::NONE));
         }
-        ToolType::Bucket => {
+        ActiveToolUI::Bucket => {
             let pts = vec![
                 c + egui::vec2(-6.5, 0.0),
                 c + egui::vec2(0.0, -6.5),
@@ -481,16 +472,26 @@ fn draw_vector_tool_icon(
             ];
             painter.add(egui::Shape::closed_line(pts, stroke));
             painter.circle_filled(c + egui::vec2(7.5, 4.5), 2.6, main_color);
-            painter.line_segment([c + egui::vec2(7.5, 1.5), c + egui::vec2(7.5, 4.5)], stroke);
         }
-        ToolType::Eyedropper => {
+        ActiveToolUI::Eyedropper => {
             painter.line_segment([c + egui::vec2(-7.0, 7.0), c + egui::vec2(2.5, -2.5)], egui::Stroke::new(2.4, main_color));
             painter.circle_filled(c + egui::vec2(5.0, -5.0), 3.6, main_color);
-            painter.line_segment([c + egui::vec2(1.0, -4.5), c + egui::vec2(4.5, -1.0)], egui::Stroke::new(2.2, egui::Color32::WHITE));
         }
-        ToolType::Text => {
+        ActiveToolUI::Text => {
             painter.line_segment([c + egui::vec2(-7.0, -7.5), c + egui::vec2(7.0, -7.5)], egui::Stroke::new(2.5, main_color));
             painter.line_segment([c + egui::vec2(0.0, -7.5), c + egui::vec2(0.0, 8.0)], egui::Stroke::new(2.5, main_color));
+        }
+        ActiveToolUI::HandCanvas => {
+            // أيقونة اليد البنفسجية
+            let palm = egui::Rect::from_center_size(c + egui::vec2(0.0, 2.5), egui::vec2(10.0, 9.0));
+            painter.rect_filled(palm, 3.0, main_color);
+            for dx in [-4.0, -1.3, 1.3, 4.0] {
+                painter.line_segment(
+                    [c + egui::vec2(dx, -1.0), c + egui::vec2(dx, -7.5)],
+                    egui::Stroke::new(2.0, main_color),
+                );
+            }
+            painter.line_segment([c + egui::vec2(-5.0, 2.0), c + egui::vec2(-8.0, -1.0)], egui::Stroke::new(2.0, main_color));
         }
     }
 }
@@ -617,9 +618,7 @@ struct AniHadyApp {
     last_scrubbed_frame: usize,
     active_layer_idx: usize,
     selected_audio_idx: Option<usize>,
-    active_tool: ToolType,
-    select_sub_mode: SelectSubMode,
-    eraser_sub_mode: EraserSubMode,
+    active_tool_ui: ActiveToolUI,
     lasso_polygon: Vec<egui::Pos2>,
     is_drawing_lasso: bool,
     selected_stroke_indices: Vec<usize>,
@@ -631,6 +630,9 @@ struct AniHadyApp {
     pressure_sensitivity: f32,
     zoom_level: f32,
     pan_offset: egui::Vec2,
+    canvas_rotation_deg: f32,
+    canvas_flip_h: bool,
+    canvas_flip_v: bool,
     is_playing: bool,
     last_frame_time: f64,
     last_sfx_time: f64,
@@ -700,9 +702,7 @@ impl AniHadyApp {
             last_scrubbed_frame: 1,
             active_layer_idx: 0,
             selected_audio_idx: None,
-            active_tool: ToolType::Brush,
-            select_sub_mode: SelectSubMode::NormalClick,
-            eraser_sub_mode: EraserSubMode::WholeStrokeRed,
+            active_tool_ui: ActiveToolUI::Brush,
             lasso_polygon: Vec::new(),
             is_drawing_lasso: false,
             selected_stroke_indices: Vec::new(),
@@ -714,6 +714,9 @@ impl AniHadyApp {
             pressure_sensitivity: 1.0,
             zoom_level: 1.0,
             pan_offset: egui::Vec2::ZERO,
+            canvas_rotation_deg: 0.0,
+            canvas_flip_h: false,
+            canvas_flip_v: false,
             is_playing: false,
             last_frame_time: 0.0,
             last_sfx_time: 0.0,
@@ -938,14 +941,47 @@ impl AniHadyApp {
         }
     }
 
-    fn delete_or_clear_frame(&mut self, layer_idx: usize, frame_idx: usize) {
+    /// Clear: تفريغ محتوى الفريم وجعله أبيض/فارغ مع بقاء مكانه
+    fn clear_frame_content(&mut self, layer_idx: usize, frame_idx: usize) {
         self.save_undo_state();
         if let Some(layer) = self.project.layers.get_mut(layer_idx) {
             layer.keyframes.insert(frame_idx, FrameData::default());
             self.has_unsaved_changes = true;
             self.play_sfx(SfxType::EraserRub);
-            self.status_message = format!("{} ({})", tr(self.config.lang, "Cleared Frame", "تم مسح الفريم"), frame_idx);
+            self.status_message = format!("{} ({})", tr(self.config.lang, "Frame Cleared", "تم تفريغ الفريم"), frame_idx);
         }
+    }
+
+    /// Delete (X): إزالة الفريم نهائياً من التايم لاين وتزحيف الفريمات اللي بعده وإرجاع الترقيم الصحيح
+    fn remove_frame_completely(&mut self, layer_idx: usize, frame_idx: usize) {
+        self.save_undo_state();
+        if let Some(layer) = self.project.layers.get_mut(layer_idx) {
+            let mut updated = HashMap::new();
+            for (&k, v) in &layer.keyframes {
+                if k < frame_idx {
+                    updated.insert(k, v.clone());
+                } else if k > frame_idx {
+                    updated.insert(k - 1, v.clone());
+                }
+            }
+            if updated.is_empty() {
+                updated.insert(1, FrameData::default());
+            }
+            layer.keyframes = updated;
+        }
+
+        // تقليص طول التايم لاين وتحديث الترقيم إذا كان الفريم المحذوف في نهاية التايم لاين أو يقلص الطول الكلي
+        if self.timeline_length > 1 {
+            self.timeline_length -= 1;
+            self.project.total_frames = self.timeline_length;
+        }
+        if self.current_frame > self.timeline_length {
+            self.current_frame = self.timeline_length;
+        }
+
+        self.has_unsaved_changes = true;
+        self.play_sfx(SfxType::EraserRub);
+        self.status_message = format!("{} ({})", tr(self.config.lang, "Frame Deleted", "تم حذف الفريم نهائياً"), frame_idx);
     }
 
     fn scale_selected_strokes(&mut self, factor: f32) {
@@ -1269,21 +1305,30 @@ impl AniHadyApp {
         }
     }
 
-    fn load_texture_if_needed(&mut self, ctx: &egui::Context, path: &str) -> Option<egui::TextureHandle> {
-        if let Some(tex) = self.texture_cache.get(path) {
-            return Some(tex.clone());
+    fn preload_frame_textures(&mut self, ctx: &egui::Context) {
+        let mut paths = Vec::new();
+        for layer in &self.project.layers {
+            if layer.visible {
+                if let Some(fd) = Self::get_effective_frame_data(layer, self.current_frame) {
+                    for m in &fd.media_items {
+                        if !self.texture_cache.contains_key(&m.path) {
+                            paths.push(m.path.clone());
+                        }
+                    }
+                }
+            }
         }
-        if let Ok(img) = image::open(path) {
-            let rgba = img.to_rgba8();
-            let color_image = egui::ColorImage::from_rgba_unmultiplied(
-                [rgba.width() as usize, rgba.height() as usize],
-                rgba.as_raw(),
-            );
-            let handle = ctx.load_texture(path, color_image, egui::TextureOptions::LINEAR);
-            self.texture_cache.insert(path.to_string(), handle.clone());
-            return Some(handle);
+        for path in paths {
+            if let Ok(img) = image::open(&path) {
+                let rgba = img.to_rgba8();
+                let color_image = egui::ColorImage::from_rgba_unmultiplied(
+                    [rgba.width() as usize, rgba.height() as usize],
+                    rgba.as_raw(),
+                );
+                let handle = ctx.load_texture(&path, color_image, egui::TextureOptions::LINEAR);
+                self.texture_cache.insert(path, handle);
+            }
         }
-        None
     }
 }
 
@@ -1412,6 +1457,8 @@ impl eframe::App for AniHadyApp {
             sc_bucket,
             sc_eyedropper,
             sc_text,
+            sc_hand,
+            sc_del_frame,
             sc_f5,
             sc_f6,
             sc_f7,
@@ -1481,6 +1528,8 @@ impl eframe::App for AniHadyApp {
                 is_shortcut_pressed(i, &self.config.tool_bucket),
                 is_shortcut_pressed(i, &self.config.tool_eyedropper),
                 is_shortcut_pressed(i, &self.config.tool_text),
+                is_shortcut_pressed(i, &self.config.tool_hand),
+                is_shortcut_pressed(i, &self.config.delete_frame_key),
                 is_shortcut_pressed(i, &self.config.insert_frame),
                 is_shortcut_pressed(i, &self.config.insert_keyframe),
                 is_shortcut_pressed(i, &self.config.insert_blank_kf),
@@ -1506,16 +1555,18 @@ impl eframe::App for AniHadyApp {
                 6 => self.config.tool_bucket = k_name,
                 7 => self.config.tool_eyedropper = k_name,
                 8 => self.config.tool_text = k_name,
-                9 => self.config.insert_frame = k_name,
-                10 => self.config.insert_keyframe = k_name,
-                11 => self.config.insert_blank_kf = k_name,
-                12 => self.config.convert_symbol = k_name,
-                13 => self.config.play_pause = k_name,
-                14 => self.config.prev_frame = k_name,
-                15 => self.config.next_frame = k_name,
-                16 => self.config.brush_smaller = k_name,
-                17 => self.config.brush_larger = k_name,
-                18 => self.config.reset_canvas = k_name,
+                9 => self.config.tool_hand = k_name,
+                10 => self.config.delete_frame_key = k_name,
+                11 => self.config.insert_frame = k_name,
+                12 => self.config.insert_keyframe = k_name,
+                13 => self.config.insert_blank_kf = k_name,
+                14 => self.config.convert_symbol = k_name,
+                15 => self.config.play_pause = k_name,
+                16 => self.config.prev_frame = k_name,
+                17 => self.config.next_frame = k_name,
+                18 => self.config.brush_smaller = k_name,
+                19 => self.config.brush_larger = k_name,
+                20 => self.config.reset_canvas = k_name,
                 _ => {}
             }
             self.config.save();
@@ -1560,13 +1611,8 @@ impl eframe::App for AniHadyApp {
             }
 
             if self.workspace_mode == WorkspaceMode::AnimationStudio {
-                if shift_f5 && self.timeline_length > 1 {
-                    self.save_undo_state();
-                    self.timeline_length -= 1;
-                    self.project.total_frames = self.timeline_length;
-                    if self.current_frame > self.timeline_length {
-                        self.current_frame = self.timeline_length;
-                    }
+                if shift_f5 || sc_del_frame {
+                    self.remove_frame_completely(self.active_layer_idx, self.current_frame);
                 } else if sc_f5 {
                     self.action_insert_frame_f5();
                 }
@@ -1584,47 +1630,50 @@ impl eframe::App for AniHadyApp {
             if sc_reset_canvas {
                 self.pan_offset = egui::Vec2::ZERO;
                 self.zoom_level = 1.0;
+                self.canvas_rotation_deg = 0.0;
+                self.canvas_flip_h = false;
+                self.canvas_flip_v = false;
                 self.play_sfx(SfxType::ZoomStep);
-                self.status_message = tr(lang, "Canvas Centered (100%)", "تم توسيط مساحة الرسم (100%)");
+                self.status_message = tr(lang, "Canvas Reset (100%)", "تم إعادة ضبط الكانفا");
             }
             if sc_select {
-                self.active_tool = ToolType::Select;
-                self.select_sub_mode = SelectSubMode::NormalClick;
+                self.active_tool_ui = ActiveToolUI::SelectNormal;
                 self.play_sfx(SfxType::UiClick);
             }
             if sc_lasso {
-                self.active_tool = ToolType::Select;
-                self.select_sub_mode = SelectSubMode::AreaLasso;
+                self.active_tool_ui = ActiveToolUI::SelectLasso;
                 self.play_sfx(SfxType::LassoSelect);
             }
             if sc_pen {
-                self.active_tool = ToolType::VectorPen;
+                self.active_tool_ui = ActiveToolUI::VectorPen;
                 self.play_sfx(SfxType::VectorPenTick);
             }
             if sc_brush {
-                self.active_tool = ToolType::Brush;
+                self.active_tool_ui = ActiveToolUI::Brush;
                 self.play_sfx(SfxType::BrushScratch);
             }
             if sc_eraser {
-                self.active_tool = ToolType::Eraser;
-                self.eraser_sub_mode = EraserSubMode::WholeStrokeRed;
+                self.active_tool_ui = ActiveToolUI::EraserRed;
                 self.play_sfx(SfxType::EraserRub);
             }
             if sc_eraser_partial {
-                self.active_tool = ToolType::Eraser;
-                self.eraser_sub_mode = EraserSubMode::PartialGreen;
+                self.active_tool_ui = ActiveToolUI::EraserGreen;
                 self.play_sfx(SfxType::EraserRub);
             }
             if sc_bucket {
-                self.active_tool = ToolType::Bucket;
+                self.active_tool_ui = ActiveToolUI::Bucket;
                 self.play_sfx(SfxType::UiClick);
             }
             if sc_eyedropper {
-                self.active_tool = ToolType::Eyedropper;
+                self.active_tool_ui = ActiveToolUI::Eyedropper;
                 self.play_sfx(SfxType::UiClick);
             }
             if sc_text {
-                self.active_tool = ToolType::Text;
+                self.active_tool_ui = ActiveToolUI::Text;
+                self.play_sfx(SfxType::UiClick);
+            }
+            if sc_hand {
+                self.active_tool_ui = ActiveToolUI::HandCanvas;
                 self.play_sfx(SfxType::UiClick);
             }
             if sc_smaller { self.brush_size = (self.brush_size - 2.0).max(1.0); }
@@ -1662,12 +1711,12 @@ impl eframe::App for AniHadyApp {
                         }
                     }
                 } else {
-                    self.delete_or_clear_frame(self.active_layer_idx, self.current_frame);
+                    self.clear_frame_content(self.active_layer_idx, self.current_frame);
                 }
             }
         }
 
-        if space_down {
+        if space_down || self.active_tool_ui == ActiveToolUI::HandCanvas {
             ctx.set_cursor_icon(egui::CursorIcon::Grab);
         }
 
@@ -1867,16 +1916,18 @@ impl eframe::App for AniHadyApp {
                             (6, tr(lang, "Paint Bucket Tool", "أداة دلو التعبئة"), self.config.tool_bucket.clone()),
                             (7, tr(lang, "Eyedropper Tool", "أداة قطارة الألوان"), self.config.tool_eyedropper.clone()),
                             (8, tr(lang, "Text Tool", "أداة الكتابة (النص)"), self.config.tool_text.clone()),
-                            (9, tr(lang, "Insert Frame (Extend)", "تمديد الفريم الحالي"), self.config.insert_frame.clone()),
-                            (10, tr(lang, "Insert Keyframe (Duplicate)", "إدراج فريم منسوخ"), self.config.insert_keyframe.clone()),
-                            (11, tr(lang, "Insert Blank Keyframe", "إدراج فريم فارغ جديد"), self.config.insert_blank_kf.clone()),
-                            (12, tr(lang, "Convert to Symbol", "تحويل إلى رمز (Symbol)"), self.config.convert_symbol.clone()),
-                            (13, tr(lang, "Play / Pause", "تشغيل / إيقاف"), self.config.play_pause.clone()),
-                            (14, tr(lang, "Previous Frame", "الفريم السابق"), self.config.prev_frame.clone()),
-                            (15, tr(lang, "Next Frame", "الفريم التالي"), self.config.next_frame.clone()),
-                            (16, tr(lang, "Decrease Brush Size", "تصغير حجم الفرشاة"), self.config.brush_smaller.clone()),
-                            (17, tr(lang, "Increase Brush Size", "تكبير حجم الفرشاة"), self.config.brush_larger.clone()),
-                            (18, tr(lang, "Reset Canvas View", "إرجاع الكانفا للمنتصف"), self.config.reset_canvas.clone()),
+                            (9, tr(lang, "Hand Tool (Rotate/Flip)", "أداة اليد (تدوير وعكس الكانفا)"), self.config.tool_hand.clone()),
+                            (10, tr(lang, "Delete Frame Completely", "حذف الفريم نهائياً"), self.config.delete_frame_key.clone()),
+                            (11, tr(lang, "Insert Frame (Extend)", "تمديد الفريم الحالي"), self.config.insert_frame.clone()),
+                            (12, tr(lang, "Insert Keyframe (Duplicate)", "إدراج فريم منسوخ"), self.config.insert_keyframe.clone()),
+                            (13, tr(lang, "Insert Blank Keyframe", "إدراج فريم فارغ جديد"), self.config.insert_blank_kf.clone()),
+                            (14, tr(lang, "Convert to Symbol", "تحويل إلى رمز (Symbol)"), self.config.convert_symbol.clone()),
+                            (15, tr(lang, "Play / Pause", "تشغيل / إيقاف"), self.config.play_pause.clone()),
+                            (16, tr(lang, "Previous Frame", "الفريم السابق"), self.config.prev_frame.clone()),
+                            (17, tr(lang, "Next Frame", "الفريم التالي"), self.config.next_frame.clone()),
+                            (18, tr(lang, "Decrease Brush Size", "تصغير حجم الفرشاة"), self.config.brush_smaller.clone()),
+                            (19, tr(lang, "Increase Brush Size", "تكبير حجم الفرشاة"), self.config.brush_larger.clone()),
+                            (20, tr(lang, "Reset Canvas View", "إرجاع الكانفا للمنتصف"), self.config.reset_canvas.clone()),
                         ];
                         let press_key_txt = tr(lang, "Press any key...", "اضغط أي زر...");
                         egui::ScrollArea::vertical().max_height(210.0).show(ui, |ui| {
@@ -2251,6 +2302,9 @@ impl eframe::App for AniHadyApp {
                     if ui.small_button(format!("{} ({})", tr(lang, "Center", "توسيط"), self.config.reset_canvas)).clicked() {
                         self.zoom_level = 1.0;
                         self.pan_offset = egui::Vec2::ZERO;
+                        self.canvas_rotation_deg = 0.0;
+                        self.canvas_flip_h = false;
+                        self.canvas_flip_v = false;
                         self.play_sfx(SfxType::ZoomStep);
                     }
                     ui.separator();
@@ -2267,41 +2321,52 @@ impl eframe::App for AniHadyApp {
             .show(ctx, |ui| {
                 ui.vertical_centered(|ui| {
                     ui.add_space(6.0);
-                    let select_label = if self.select_sub_mode == SelectSubMode::AreaLasso {
+                    let select_ui = if self.active_tool_ui == ActiveToolUI::SelectLasso {
+                        ActiveToolUI::SelectLasso
+                    } else {
+                        ActiveToolUI::SelectNormal
+                    };
+                    let select_label = if select_ui == ActiveToolUI::SelectLasso {
                         tr(lang, "Area Select", "تحديد منطقة")
                     } else {
                         tr(lang, "Select", "تحديد عادي")
                     };
-                    let select_sc = if self.select_sub_mode == SelectSubMode::AreaLasso {
+                    let select_sc = if select_ui == ActiveToolUI::SelectLasso {
                         self.config.tool_lasso.clone()
                     } else {
                         self.config.tool_select.clone()
                     };
 
-                    let eraser_label = if self.eraser_sub_mode == EraserSubMode::PartialGreen {
+                    let eraser_ui = if self.active_tool_ui == ActiveToolUI::EraserGreen {
+                        ActiveToolUI::EraserGreen
+                    } else {
+                        ActiveToolUI::EraserRed
+                    };
+                    let eraser_label = if eraser_ui == ActiveToolUI::EraserGreen {
                         tr(lang, "Partial Eraser", "ممحاة جزئية")
                     } else {
                         tr(lang, "Stroke Eraser", "ممحاة كاملة")
                     };
-                    let eraser_sc = if self.eraser_sub_mode == EraserSubMode::PartialGreen {
+                    let eraser_sc = if eraser_ui == ActiveToolUI::EraserGreen {
                         self.config.tool_eraser_partial.clone()
                     } else {
                         self.config.tool_eraser.clone()
                     };
 
                     let tools = [
-                        (ToolType::Select, select_label, select_sc),
-                        (ToolType::VectorPen, tr(lang, "Vector Pen", "قلم فيكتور"), self.config.tool_pen.clone()),
-                        (ToolType::Brush, tr(lang, "Brush", "فرشاة"), self.config.tool_brush.clone()),
-                        (ToolType::Eraser, eraser_label, eraser_sc),
-                        (ToolType::Bucket, tr(lang, "Bucket", "تعبئة"), self.config.tool_bucket.clone()),
-                        (ToolType::Eyedropper, tr(lang, "Picker", "قطارة"), self.config.tool_eyedropper.clone()),
-                        (ToolType::Text, tr(lang, "Text", "نص"), self.config.tool_text.clone()),
+                        (select_ui, select_label, select_sc),
+                        (ActiveToolUI::VectorPen, tr(lang, "Vector Pen", "قلم فيكتور"), self.config.tool_pen.clone()),
+                        (ActiveToolUI::Brush, tr(lang, "Brush", "فرشاة"), self.config.tool_brush.clone()),
+                        (eraser_ui, eraser_label, eraser_sc),
+                        (ActiveToolUI::Bucket, tr(lang, "Bucket", "تعبئة"), self.config.tool_bucket.clone()),
+                        (ActiveToolUI::Eyedropper, tr(lang, "Picker", "قطارة"), self.config.tool_eyedropper.clone()),
+                        (ActiveToolUI::Text, tr(lang, "Text", "نص"), self.config.tool_text.clone()),
+                        (ActiveToolUI::HandCanvas, tr(lang, "Hand / Flip", "اليد / عكس وتدوير"), self.config.tool_hand.clone()),
                     ];
                     let show_labels = ui.available_width() > 95.0;
                     for (tool, name, sc) in tools {
-                        let selected = self.active_tool == tool;
-                        let accent = get_tool_accent_color(tool, self.eraser_sub_mode);
+                        let selected = self.active_tool_ui == tool;
+                        let accent = get_tool_ui_color(tool);
                         let btn_w = if show_labels { ui.available_width() - 8.0 } else { 42.0 };
                         let (rect, resp) = ui.allocate_exact_size(egui::vec2(btn_w, 36.0), egui::Sense::click());
                         let bg = if selected {
@@ -2313,14 +2378,7 @@ impl eframe::App for AniHadyApp {
                         };
                         ui.painter().rect_filled(rect, 6.0, bg);
                         let icon_rect = egui::Rect::from_min_size(rect.min, egui::vec2(42.0, 36.0));
-                        draw_vector_tool_icon(
-                            ui.painter(),
-                            icon_rect,
-                            tool,
-                            selected,
-                            self.select_sub_mode == SelectSubMode::AreaLasso,
-                            self.eraser_sub_mode,
-                        );
+                        draw_tool_ui_icon(ui.painter(), icon_rect, tool, selected);
                         if show_labels {
                             ui.painter().text(
                                 icon_rect.right_center() + egui::vec2(4.0, 0.0),
@@ -2331,47 +2389,75 @@ impl eframe::App for AniHadyApp {
                             );
                         }
                         if resp.clicked() {
-                            self.active_tool = tool;
+                            self.active_tool_ui = tool;
                             match tool {
-                                ToolType::Select => self.play_sfx(SfxType::UiClick),
-                                ToolType::VectorPen => self.play_sfx(SfxType::VectorPenTick),
-                                ToolType::Brush => self.play_sfx(SfxType::BrushScratch),
-                                ToolType::Eraser => self.play_sfx(SfxType::EraserRub),
+                                ActiveToolUI::VectorPen => self.play_sfx(SfxType::VectorPenTick),
+                                ActiveToolUI::Brush => self.play_sfx(SfxType::BrushScratch),
+                                ActiveToolUI::EraserRed | ActiveToolUI::EraserGreen => self.play_sfx(SfxType::EraserRub),
+                                ActiveToolUI::SelectLasso => self.play_sfx(SfxType::LassoSelect),
                                 _ => self.play_sfx(SfxType::UiClick),
                             }
                         }
-                        if tool == ToolType::Select {
+                        if matches!(tool, ActiveToolUI::SelectNormal | ActiveToolUI::SelectLasso) {
                             let lbl_norm = tr(lang, "Normal Select (V)", "تحديد عادي (V)");
                             let lbl_area = tr(lang, "Area / Lasso Select (L)", "تحديد منطقة حرة (L)");
                             resp.context_menu(|ui| {
-                                if ui.selectable_label(self.select_sub_mode == SelectSubMode::NormalClick, &lbl_norm).clicked() {
-                                    self.active_tool = ToolType::Select;
-                                    self.select_sub_mode = SelectSubMode::NormalClick;
+                                if ui.selectable_label(self.active_tool_ui == ActiveToolUI::SelectNormal, &lbl_norm).clicked() {
+                                    self.active_tool_ui = ActiveToolUI::SelectNormal;
                                     self.play_sfx(SfxType::UiClick);
                                     ui.close_menu();
                                 }
-                                if ui.selectable_label(self.select_sub_mode == SelectSubMode::AreaLasso, &lbl_area).clicked() {
-                                    self.active_tool = ToolType::Select;
-                                    self.select_sub_mode = SelectSubMode::AreaLasso;
+                                if ui.selectable_label(self.active_tool_ui == ActiveToolUI::SelectLasso, &lbl_area).clicked() {
+                                    self.active_tool_ui = ActiveToolUI::SelectLasso;
                                     self.play_sfx(SfxType::LassoSelect);
                                     ui.close_menu();
                                 }
                             });
                         }
-                        if tool == ToolType::Eraser {
+                        if matches!(tool, ActiveToolUI::EraserRed | ActiveToolUI::EraserGreen) {
                             let lbl_red = tr(lang, "Red Eraser: Full Stroke (E)", "الممحاة الحمراء: مسح الخط كامل (E)");
                             let lbl_green = tr(lang, "Green Eraser: Partial (T)", "الممحاة الخضراء: مسح جزء صغير (T)");
                             resp.context_menu(|ui| {
-                                if ui.selectable_label(self.eraser_sub_mode == EraserSubMode::WholeStrokeRed, &lbl_red).clicked() {
-                                    self.active_tool = ToolType::Eraser;
-                                    self.eraser_sub_mode = EraserSubMode::WholeStrokeRed;
+                                if ui.selectable_label(self.active_tool_ui == ActiveToolUI::EraserRed, &lbl_red).clicked() {
+                                    self.active_tool_ui = ActiveToolUI::EraserRed;
                                     self.play_sfx(SfxType::EraserRub);
                                     ui.close_menu();
                                 }
-                                if ui.selectable_label(self.eraser_sub_mode == EraserSubMode::PartialGreen, &lbl_green).clicked() {
-                                    self.active_tool = ToolType::Eraser;
-                                    self.eraser_sub_mode = EraserSubMode::PartialGreen;
+                                if ui.selectable_label(self.active_tool_ui == ActiveToolUI::EraserGreen, &lbl_green).clicked() {
+                                    self.active_tool_ui = ActiveToolUI::EraserGreen;
                                     self.play_sfx(SfxType::EraserRub);
+                                    ui.close_menu();
+                                }
+                            });
+                        }
+                        if tool == ActiveToolUI::HandCanvas {
+                            resp.context_menu(|ui| {
+                                if ui.button(tr(lang, "Flip Horizontal (Left/Right)", "عكس أفقي (يمين / شمال)")).clicked() {
+                                    self.canvas_flip_h = !self.canvas_flip_h;
+                                    self.play_sfx(SfxType::ZoomStep);
+                                    ui.close_menu();
+                                }
+                                if ui.button(tr(lang, "Flip Vertical (Up/Down)", "عكس رأسي (فوق / تحت)")).clicked() {
+                                    self.canvas_flip_v = !self.canvas_flip_v;
+                                    self.play_sfx(SfxType::ZoomStep);
+                                    ui.close_menu();
+                                }
+                                ui.separator();
+                                if ui.button(tr(lang, "Rotate +15°", "تدوير +15 درجة")).clicked() {
+                                    self.canvas_rotation_deg = (self.canvas_rotation_deg + 15.0) % 360.0;
+                                    self.play_sfx(SfxType::ZoomStep);
+                                    ui.close_menu();
+                                }
+                                if ui.button(tr(lang, "Rotate -15°", "تدوير -15 درجة")).clicked() {
+                                    self.canvas_rotation_deg = (self.canvas_rotation_deg - 15.0) % 360.0;
+                                    self.play_sfx(SfxType::ZoomStep);
+                                    ui.close_menu();
+                                }
+                                if ui.button(tr(lang, "Reset Orientation", "إعادة الوضع الأصلي")).clicked() {
+                                    self.canvas_rotation_deg = 0.0;
+                                    self.canvas_flip_h = false;
+                                    self.canvas_flip_v = false;
+                                    self.play_sfx(SfxType::ZoomStep);
                                     ui.close_menu();
                                 }
                             });
@@ -2475,6 +2561,30 @@ impl eframe::App for AniHadyApp {
                                 ui.label(tr(lang, "Sensitivity:", "درجة الحساسية:"));
                                 ui.add(egui::Slider::new(&mut self.pressure_sensitivity, 0.2..=2.0));
                             });
+                        }
+
+                        // إعدادات أداة اليد (عكس وتدوير الكانفا)
+                        if self.active_tool_ui == ActiveToolUI::HandCanvas {
+                            ui.add_space(8.0);
+                            ui.separator();
+                            ui.strong(tr(lang, "Canvas Transform (Hand)", "تدوير وعكس الكانفا"));
+                            ui.horizontal(|ui| {
+                                if ui.button(tr(lang, "Flip H", "عكس أفقي")).clicked() {
+                                    self.canvas_flip_h = !self.canvas_flip_h;
+                                }
+                                if ui.button(tr(lang, "Flip V", "عكس رأسي")).clicked() {
+                                    self.canvas_flip_v = !self.canvas_flip_v;
+                                }
+                            });
+                            ui.horizontal(|ui| {
+                                ui.label(tr(lang, "Angle:", "الزاوية:"));
+                                ui.add(egui::Slider::new(&mut self.canvas_rotation_deg, -180.0..=180.0));
+                            });
+                            if ui.small_button(tr(lang, "Reset Transform", "إعادة الوضع الأصلي")).clicked() {
+                                self.canvas_rotation_deg = 0.0;
+                                self.canvas_flip_h = false;
+                                self.canvas_flip_v = false;
+                            }
                         }
 
                         if let Some(layer) = self.project.layers.get_mut(self.active_layer_idx) {
@@ -2652,7 +2762,8 @@ impl eframe::App for AniHadyApp {
 
                     let mut pending_copy: Option<(usize, usize)> = None;
                     let mut pending_paste: Option<(usize, usize)> = None;
-                    let mut pending_delete_frame: Option<(usize, usize)> = None;
+                    let mut pending_clear_frame: Option<(usize, usize)> = None;
+                    let mut pending_remove_frame: Option<(usize, usize)> = None;
                     let mut pending_dup_layer: Option<usize> = None;
                     let mut delete_layer_idx: Option<usize> = None;
                     let mut swap_layers: Option<(usize, usize)> = None;
@@ -2685,7 +2796,12 @@ impl eframe::App for AniHadyApp {
                         let lbl_rename = tr(lang, "Rename Layer", "إعادة تسمية الطبقة");
                         let lbl_copy = tr(lang, "Copy Frame (Ctrl+C)", "نسخ الفريم (Copy)");
                         let lbl_paste = tr(lang, "Paste Frame (Ctrl+V)", "لصق الفريم (Paste)");
-                        let lbl_del_frame = tr(lang, "Delete / Clear Frame (Del)", "حذف محتوى الفريم (Delete)");
+                        let lbl_clear_frame = tr(lang, "Clear Frame (Make White/Blank)", "مسح المحتوى (Clear - فريم أبيض)");
+                        let lbl_remove_frame = format!(
+                            "{} ({})",
+                            tr(lang, "Delete Frame (Remove & Shift)", "حذف الفريم تماماً وإرجاع الترقيم"),
+                            self.config.delete_frame_key
+                        );
                         let lbl_dup_layer = tr(lang, "Duplicate Layer", "تكرار الطبقة");
                         let lbl_del_layer = tr(lang, "Delete Layer", "حذف الطبقة");
 
@@ -2782,6 +2898,7 @@ impl eframe::App for AniHadyApp {
                                         }
                                     }
 
+                                    // كليك يمين على الفريم: Copy / Paste / Clear (تبيض الفريم) / Delete (حذف الفريم تماماً)
                                     cell_resp.context_menu(|ui| {
                                         if ui.button(&lbl_copy).clicked() {
                                             pending_copy = Some((l_idx, f));
@@ -2792,8 +2909,12 @@ impl eframe::App for AniHadyApp {
                                             ui.close_menu();
                                         }
                                         ui.separator();
-                                        if ui.button(&lbl_del_frame).clicked() {
-                                            pending_delete_frame = Some((l_idx, f));
+                                        if ui.button(&lbl_clear_frame).clicked() {
+                                            pending_clear_frame = Some((l_idx, f));
+                                            ui.close_menu();
+                                        }
+                                        if ui.button(&lbl_remove_frame).clicked() {
+                                            pending_remove_frame = Some((l_idx, f));
                                             ui.close_menu();
                                         }
                                     });
@@ -2885,7 +3006,8 @@ impl eframe::App for AniHadyApp {
                     }
                     if let Some((l, f)) = pending_copy { self.copy_frame(l, f); }
                     if let Some((l, f)) = pending_paste { self.paste_frame(l, f); }
-                    if let Some((l, f)) = pending_delete_frame { self.delete_or_clear_frame(l, f); }
+                    if let Some((l, f)) = pending_clear_frame { self.clear_frame_content(l, f); }
+                    if let Some((l, f)) = pending_remove_frame { self.remove_frame_completely(l, f); }
                     if let Some(idx) = remove_audio_idx {
                         self.save_undo_state();
                         self.project.audio_tracks.remove(idx);
@@ -2910,6 +3032,9 @@ impl eframe::App for AniHadyApp {
                 });
         }
 
+        // تحميل الصور مسبقاً قبل الرسم لتجنب أي تعارض في استعارة self
+        self.preload_frame_textures(ctx);
+
         // مساحة العمل والكانفا
         egui::CentralPanel::default().show(ctx, |ui| {
             let canvas_rect = ui.available_rect_before_wrap();
@@ -2920,7 +3045,9 @@ impl eframe::App for AniHadyApp {
                 self.zoom_level = (self.zoom_level + scroll_y * 0.001).clamp(0.1, 4.0);
             }
 
-            if space_down && pointer_down {
+            // التحريك بأداة اليد البنفسجية أو بالضغط على المسطرة
+            let is_hand_panning = (space_down || self.active_tool_ui == ActiveToolUI::HandCanvas) && pointer_down;
+            if is_hand_panning {
                 if let (Some(curr), Some(last)) = (pointer_pos, self.last_pointer_pos) {
                     self.pan_offset += curr - last;
                 }
@@ -2928,7 +3055,9 @@ impl eframe::App for AniHadyApp {
 
             let center = canvas_rect.center() + self.pan_offset;
             let scale = self.zoom_level.max(0.1);
-            let stage_size = egui::vec2(self.project.width as f32, self.project.height as f32) * scale;
+            let stage_w = self.project.width as f32;
+            let stage_h = self.project.height as f32;
+            let stage_size = egui::vec2(stage_w, stage_h) * scale;
             let stage_rect = egui::Rect::from_center_size(center, stage_size);
 
             painter.rect_filled(
@@ -2943,8 +3072,31 @@ impl eframe::App for AniHadyApp {
                 egui::Color32::from_rgba_unmultiplied(bg[0], bg[1], bg[2], bg[3]),
             );
 
-            let to_stage = |p: egui::Pos2| egui::pos2((p.x - stage_rect.min.x) / scale, (p.y - stage_rect.min.y) / scale);
-            let to_screen = |p: egui::Pos2| egui::pos2(stage_rect.min.x + p.x * scale, stage_rect.min.y + p.y * scale);
+            // تحويل الإحداثيات مع دعم التدوير والعكس الأفقي والرأسي من أداة اليد
+            let rot_rad = self.canvas_rotation_deg.to_radians();
+            let (sin_r, cos_r) = rot_rad.sin_cos();
+            let flip_h = self.canvas_flip_h;
+            let flip_v = self.canvas_flip_v;
+
+            let to_screen = |p: egui::Pos2| -> egui::Pos2 {
+                let mut nx = p.x - stage_w * 0.5;
+                let mut ny = p.y - stage_h * 0.5;
+                if flip_h { nx = -nx; }
+                if flip_v { ny = -ny; }
+                let rx = nx * cos_r - ny * sin_r;
+                let ry = nx * sin_r + ny * cos_r;
+                egui::pos2(center.x + rx * scale, center.y + ry * scale)
+            };
+
+            let to_stage = |sp: egui::Pos2| -> egui::Pos2 {
+                let rx = (sp.x - center.x) / scale;
+                let ry = (sp.y - center.y) / scale;
+                let mut nx = rx * cos_r + ry * sin_r;
+                let mut ny = -rx * sin_r + ry * cos_r;
+                if flip_h { nx = -nx; }
+                if flip_v { ny = -ny; }
+                egui::pos2(nx + stage_w * 0.5, ny + stage_h * 0.5)
+            };
 
             let modal_open = self.show_update_dialog
                 || self.show_settings_dialog
@@ -2955,21 +3107,21 @@ impl eframe::App for AniHadyApp {
                 || self.renaming_layer_idx.is_some()
                 || self.trimming_audio_idx.is_some();
 
-            if !space_down && is_over_canvas && !modal_open {
+            if !space_down && self.active_tool_ui != ActiveToolUI::HandCanvas && is_over_canvas && !modal_open {
                 if let Some(pos) = pointer_pos {
                     let stage_pos = to_stage(pos);
                     let delta = self.last_pointer_pos.map_or(egui::Vec2::ZERO, |last| (pos - last) / scale);
 
-                    match self.active_tool {
-                        ToolType::Text if pointer_pressed => {
+                    match self.active_tool_ui {
+                        ActiveToolUI::Text if pointer_pressed => {
                             self.pending_text_pos = stage_pos;
                             self.show_text_dialog = true;
                         }
-                        ToolType::Select => {
+                        ActiveToolUI::SelectNormal | ActiveToolUI::SelectLasso => {
                             if !self.selected_stroke_indices.is_empty() && pointer_down && ctx.input(|i| i.modifiers.shift) {
                                 let factor = (1.0 + delta.x * 0.005).clamp(0.85, 1.15);
                                 self.scale_selected_strokes(factor);
-                            } else if self.select_sub_mode == SelectSubMode::AreaLasso {
+                            } else if self.active_tool_ui == ActiveToolUI::SelectLasso {
                                 if pointer_pressed {
                                     let mut clicked_selected = false;
                                     if !self.selected_stroke_indices.is_empty() {
@@ -3060,7 +3212,7 @@ impl eframe::App for AniHadyApp {
                                 }
                             }
                         }
-                        ToolType::Bucket if pointer_pressed => {
+                        ActiveToolUI::Bucket if pointer_pressed => {
                             self.save_undo_state();
                             self.ensure_editable_keyframe();
                             if let Some(layer) = self.project.layers.get_mut(self.active_layer_idx) {
@@ -3076,7 +3228,7 @@ impl eframe::App for AniHadyApp {
                                 }
                             }
                         }
-                        ToolType::Eraser if pointer_down => {
+                        ActiveToolUI::EraserRed | ActiveToolUI::EraserGreen if pointer_down => {
                             if pointer_pressed {
                                 self.save_undo_state();
                             }
@@ -3088,11 +3240,11 @@ impl eframe::App for AniHadyApp {
                             if let Some(layer) = self.project.layers.get_mut(self.active_layer_idx) {
                                 if let Some(frame) = layer.keyframes.get_mut(&self.current_frame) {
                                     let r = self.brush_size;
-                                    match self.eraser_sub_mode {
-                                        EraserSubMode::WholeStrokeRed => {
+                                    match self.active_tool_ui {
+                                        ActiveToolUI::EraserRed => {
                                             frame.strokes.retain(|s| !s.points.iter().any(|p| ((p.x - stage_pos.x).powi(2) + (p.y - stage_pos.y).powi(2)).sqrt() < r));
                                         }
-                                        EraserSubMode::PartialGreen => {
+                                        _ => {
                                             erase_partial_from_strokes(&mut frame.strokes, stage_pos, r);
                                         }
                                     }
@@ -3100,7 +3252,7 @@ impl eframe::App for AniHadyApp {
                                 }
                             }
                         }
-                        ToolType::Eyedropper if pointer_pressed => {
+                        ActiveToolUI::Eyedropper if pointer_pressed => {
                             if let Some(layer) = self.project.layers.get(self.active_layer_idx) {
                                 if let Some(frame) = Self::get_effective_frame_data(layer, self.current_frame) {
                                     for s in &frame.strokes {
@@ -3113,10 +3265,10 @@ impl eframe::App for AniHadyApp {
                                 }
                             }
                         }
-                        ToolType::VectorPen | ToolType::Brush if pointer_down => {
+                        ActiveToolUI::VectorPen | ActiveToolUI::Brush if pointer_down => {
                             let speed = delta.length();
                             if speed > 0.8 && now - self.last_sfx_time > 0.08 {
-                                if self.active_tool == ToolType::VectorPen {
+                                if self.active_tool_ui == ActiveToolUI::VectorPen {
                                     self.play_sfx(SfxType::VectorPenTick);
                                 } else {
                                     self.play_sfx(SfxType::BrushScratch);
@@ -3144,7 +3296,7 @@ impl eframe::App for AniHadyApp {
                                     color: self.brush_color,
                                     fill_color: None,
                                     base_width: self.brush_size,
-                                    is_vector: self.active_tool == ToolType::VectorPen,
+                                    is_vector: self.active_tool_ui == ActiveToolUI::VectorPen,
                                     brush_texture_id: None,
                                 });
                             }
@@ -3210,61 +3362,157 @@ impl eframe::App for AniHadyApp {
                 }
             }
 
-            let layers_count = self.project.layers.len();
-            for l_idx in (0..layers_count).rev() {
-                if !self.project.layers[l_idx].visible {
-                    continue;
-                }
-                let fd_opt = Self::get_effective_frame_data(&self.project.layers[l_idx], self.current_frame).cloned();
-                if let Some(fd) = fd_opt {
-                    for m in &fd.media_items {
-                        if let Some(tex) = self.load_texture_if_needed(ctx, &m.path) {
-                            painter.image(
-                                tex.id(),
-                                egui::Rect::from_min_max(to_screen(egui::pos2(m.x, m.y)), to_screen(egui::pos2(m.x + m.width, m.y + m.height))),
-                                egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
-                                egui::Color32::WHITE,
-                            );
-                        }
-                    }
-                    for (s_idx, s) in fd.strokes.iter().enumerate() {
-                        draw_stroke_pro(&painter, s, None, scale, 0.0, 0.0, &to_screen);
-                        if l_idx == self.active_layer_idx && self.selected_stroke_indices.contains(&s_idx) && !s.points.is_empty() {
-                            let mut min_p = egui::pos2(f32::MAX, f32::MAX);
-                            let mut max_p = egui::pos2(f32::MIN, f32::MIN);
-                            for p in &s.points {
-                                let sp = to_screen(egui::pos2(p.x, p.y));
-                                min_p = min_p.min(sp);
-                                max_p = max_p.max(sp);
+            for (l_idx, layer) in self.project.layers.iter().enumerate().rev() {
+                if layer.visible {
+                    if let Some(fd) = Self::get_effective_frame_data(layer, self.current_frame) {
+                        for m in &fd.media_items {
+                            if let Some(tex) = self.texture_cache.get(&m.path) {
+                                painter.image(
+                                    tex.id(),
+                                    egui::Rect::from_min_max(to_screen(egui::pos2(m.x, m.y)), to_screen(egui::pos2(m.x + m.width, m.y + m.height))),
+                                    egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+                                    egui::Color32::WHITE,
+                                );
                             }
-                            let sel_rect = egui::Rect::from_min_max(min_p - egui::vec2(5.0, 5.0), max_p + egui::vec2(5.0, 5.0));
-                            painter.rect_stroke(
-                                sel_rect,
-                                2.0,
-                                egui::Stroke::new(1.5, egui::Color32::from_rgb(56, 189, 248)),
+                        }
+                        for (s_idx, s) in fd.strokes.iter().enumerate() {
+                            draw_stroke_pro(&painter, s, None, scale, 0.0, 0.0, &to_screen);
+                            if l_idx == self.active_layer_idx && self.selected_stroke_indices.contains(&s_idx) && !s.points.is_empty() {
+                                let mut min_p = egui::pos2(f32::MAX, f32::MAX);
+                                let mut max_p = egui::pos2(f32::MIN, f32::MIN);
+                                for p in &s.points {
+                                    let sp = to_screen(egui::pos2(p.x, p.y));
+                                    min_p = min_p.min(sp);
+                                    max_p = max_p.max(sp);
+                                }
+                                let sel_rect = egui::Rect::from_min_max(min_p - egui::vec2(5.0, 5.0), max_p + egui::vec2(5.0, 5.0));
+                                painter.rect_stroke(
+                                    sel_rect,
+                                    2.0,
+                                    egui::Stroke::new(1.5, egui::Color32::from_rgb(56, 189, 248)),
+                                );
+                                let handle_rect = egui::Rect::from_center_size(sel_rect.right_bottom(), egui::vec2(10.0, 10.0));
+                                painter.rect_filled(handle_rect, 2.0, egui::Color32::from_rgb(56, 189, 248));
+                            }
+                        }
+                        for txt in &fd.text_items {
+                            let shaped = fix_ar(&txt.content);
+                            let col = egui::Color32::from_rgba_unmultiplied(txt.color[0], txt.color[1], txt.color[2], txt.color[3]);
+                            painter.text(
+                                to_screen(egui::pos2(txt.x, txt.y)),
+                                egui::Align2::LEFT_TOP,
+                                shaped,
+                                egui::FontId::proportional(txt.font_size * scale),
+                                col,
                             );
-                            let handle_rect = egui::Rect::from_center_size(sel_rect.right_bottom(), egui::vec2(10.0, 10.0));
-                            painter.rect_filled(handle_rect, 2.0, egui::Color32::from_rgb(56, 189, 248));
                         }
                     }
-                    for txt in &fd.text_items {
-                        let shaped = fix_ar(&txt.content);
-                        let col = egui::Color32::from_rgba_unmultiplied(txt.color[0], txt.color[1], txt.color[2], txt.color[3]);
-                        painter.text(
-                            to_screen(egui::pos2(txt.x, txt.y)),
-                            egui::Align2::LEFT_TOP,
-                            shaped,
-                            egui::FontId::proportional(txt.font_size * scale),
-                            col,
-                        );
-                    }
-                }
-                let interp_symbols = Self::get_interpolated_symbols(&self.project.layers[l_idx], self.current_frame);
-                for inst in &interp_symbols {
-                    if let Some(sym) = self.project.library_symbols.get(&inst.symbol_name) {
-                        for s in &sym.strokes {
-                            draw_stroke_pro(&painter, s, None, scale * inst.scale, inst.x, inst.y, &to_screen);
+                    let interp_symbols = Self::get_interpolated_symbols(layer, self.current_frame);
+                    for inst in &interp_symbols {
+                        if let Some(sym) = self.project.library_symbols.get(&inst.symbol_name) {
+                            for s in &sym.strokes {
+                                draw_stroke_pro(&painter, s, None, scale * inst.scale, inst.x, inst.y, &to_screen);
+                            }
                         }
                     }
                 }
             }
+            if let Some(stroke) = &self.current_stroke {
+                draw_stroke_pro(&painter, stroke, None, scale, 0.0, 0.0, &to_screen);
+            }
+
+            if self.is_drawing_lasso && self.lasso_polygon.len() > 1 {
+                let screen_pts: Vec<egui::Pos2> = self.lasso_polygon.iter().map(|&p| to_screen(p)).collect();
+                painter.add(egui::Shape::closed_line(
+                    screen_pts,
+                    egui::Stroke::new(1.5, egui::Color32::from_rgb(56, 189, 248)),
+                ));
+            }
+        });
+    }
+}
+
+fn draw_stroke_pro<F: Fn(egui::Pos2) -> egui::Pos2>(
+    painter: &egui::Painter,
+    stroke: &Stroke,
+    override_color: Option<[u8; 4]>,
+    scale: f32,
+    ox: f32,
+    oy: f32,
+    to_screen: &F,
+) {
+    if stroke.points.is_empty() {
+        return;
+    }
+
+    let c = override_color.unwrap_or(stroke.color);
+    let color = egui::Color32::from_rgba_unmultiplied(c[0], c[1], c[2], c[3]);
+
+    if stroke.points.len() == 1 {
+        let p = to_screen(egui::pos2(stroke.points[0].x + ox, stroke.points[0].y + oy));
+        let r = (stroke.base_width * stroke.points[0].pressure * scale) * 0.5;
+        painter.circle_filled(p, r.max(1.0), color);
+        return;
+    }
+
+    if let Some(fc) = stroke.fill_color {
+        let fill_c = override_color.unwrap_or(fc);
+        let pts: Vec<egui::Pos2> = stroke
+            .points
+            .iter()
+            .map(|p| to_screen(egui::pos2(p.x + ox, p.y + oy)))
+            .collect();
+        painter.add(egui::Shape::convex_polygon(
+            pts,
+            egui::Color32::from_rgba_unmultiplied(fill_c[0], fill_c[1], fill_c[2], fill_c[3]),
+            egui::Stroke::NONE,
+        ));
+    }
+
+    let total = stroke.points.len();
+    for (idx, w) in stroke.points.windows(2).enumerate() {
+        let p0 = to_screen(egui::pos2(w[0].x + ox, w[0].y + oy));
+        let p1 = to_screen(egui::pos2(w[1].x + ox, w[1].y + oy));
+
+        let taper = if stroke.is_vector {
+            1.0
+        } else {
+            let progress = idx as f32 / total as f32;
+            if progress < 0.08 {
+                (progress / 0.08).max(0.35)
+            } else if progress > 0.92 {
+                ((1.0 - progress) / 0.08).max(0.35)
+            } else {
+                1.0
+            }
+        };
+
+        let avg_pressure = ((w[0].pressure + w[1].pressure) * 0.5) * taper;
+        let width = (stroke.base_width * avg_pressure * scale).max(1.0);
+
+        painter.line_segment([p0, p1], egui::Stroke::new(width, color));
+        painter.circle_filled(p1, width * 0.5, color);
+    }
+}
+
+fn main() -> eframe::Result<()> {
+    let options = eframe::NativeOptions {
+        viewport: egui::ViewportBuilder::default()
+            .with_title("AniHady2D")
+            .with_inner_size([1366.0, 768.0])
+            .with_icon(generate_window_icon()),
+        renderer: eframe::Renderer::Wgpu,
+        wgpu_options: eframe::egui_wgpu::WgpuConfiguration {
+            power_preference: eframe::wgpu::PowerPreference::HighPerformance,
+            present_mode: eframe::wgpu::PresentMode::AutoNoVsync,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+
+    eframe::run_native(
+        "AniHady2D",
+        options,
+        Box::new(|cc| Ok(Box::new(AniHadyApp::new(cc)))),
+    )
+}
