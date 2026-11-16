@@ -4,14 +4,14 @@ use std::fs;
 use std::io::Read;
 use std::path::Path;
 
-pub const PROJECT_SCHEMA_VERSION: u32 = 4;
+pub const PROJECT_SCHEMA_VERSION: u32 = 5;
 
 #[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Debug)]
 pub enum KritaBrushPreset {
     GPenInk,
-    SoftAirbrush,
     Watercolor,
     ChiselMarker,
+    SoftAirbrush,
     SketchPencil,
 }
 
@@ -24,21 +24,21 @@ impl Default for KritaBrushPreset {
 impl KritaBrushPreset {
     pub fn label(&self) -> &'static str {
         match self {
-            KritaBrushPreset::GPenInk => "G-Pen (تحبير حريري)",
+            KritaBrushPreset::GPenInk => "G-Pen (حبر ثابت بدون ذيل)",
+            KritaBrushPreset::Watercolor => "Watercolor (ألوان مائية متصلة)",
+            KritaBrushPreset::ChiselMarker => "Marker (ماركر شفاف متراكم)",
             KritaBrushPreset::SoftAirbrush => "Airbrush (بخاخ ناعم)",
-            KritaBrushPreset::Watercolor => "Watercolor (ألوان مائية)",
-            KritaBrushPreset::ChiselMarker => "Marker (قلم تخطيط)",
-            KritaBrushPreset::SketchPencil => "Pencil (قلم سكتش)",
+            KritaBrushPreset::SketchPencil => "Pencil (قلم رصاص سكتش)",
         }
     }
 
     pub fn default_opacity(&self) -> f32 {
         match self {
             KritaBrushPreset::GPenInk => 1.0,
-            KritaBrushPreset::SoftAirbrush => 0.35,
-            KritaBrushPreset::Watercolor => 0.45,
-            KritaBrushPreset::ChiselMarker => 0.85,
-            KritaBrushPreset::SketchPencil => 0.70,
+            KritaBrushPreset::Watercolor => 0.55,
+            KritaBrushPreset::ChiselMarker => 0.42,
+            KritaBrushPreset::SoftAirbrush => 0.40,
+            KritaBrushPreset::SketchPencil => 0.75,
         }
     }
 }
@@ -150,7 +150,7 @@ fn default_width() -> f32 {
 }
 
 impl Stroke {
-    /// بناء منحنى Catmull-Rom / Cubic Bezier ناعم بدون أي تكسر في الزوايا (ميكانيك AniCraft)
+    /// تنعيم المنحنيات باستخدام Centripetal Catmull-Rom بدون إزاحة الخط عن مكانه الأصلي (حل مشكلة الثعبان)
     pub fn fit_cubic_bezier_spline(&mut self, subdivisions: usize) {
         if self.points.len() < 3 {
             return;
@@ -359,6 +359,7 @@ pub struct FrameData {
     pub easing: EasingCurve,
 }
 
+/// طبقة متقدمة تجمع خصائص Blender 2D (Grease Pencil) و Krita (Opacity, Lock, Guide)
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Layer {
     #[serde(default = "default_layer_name")]
@@ -369,6 +370,8 @@ pub struct Layer {
     pub locked: bool,
     #[serde(default)]
     pub is_guide: bool,
+    #[serde(default = "default_pressure")]
+    pub opacity: f32,
     #[serde(default)]
     pub keyframes: HashMap<usize, FrameData>,
 }
@@ -470,7 +473,6 @@ fn default_w() -> u32 { 1920 }
 fn default_h() -> u32 { 1080 }
 fn default_fps() -> u32 { 24 }
 
-/// مغلف حفظ متوافق للأبد يضمن عدم ضياع أي مشروع قديم أو جديد مهما تعددت التحديثات
 #[derive(Serialize, Deserialize)]
 struct StickProjectEnvelope {
     magic: String,
@@ -517,6 +519,7 @@ impl Default for AniProject {
                 visible: true,
                 locked: false,
                 is_guide: false,
+                opacity: 1.0,
                 keyframes,
             }],
             audio_tracks: Vec::new(),
@@ -646,12 +649,10 @@ impl AniProject {
         fs::write(path, compressed).map_err(|e| format!("Write error: {}", e))
     }
 
-    /// قارئ مشاريع شمولي: يدعم المغلف الحديث + جميع الإصدارات السابقة (.stick / .ah2d) في وضعي الرسم والأنيميشن
     pub fn load_from_file(path: &Path) -> Result<Self, String> {
         let raw = fs::read(path).map_err(|e| format!("Read error: {}", e))?;
         let decompressed = zstd::decode_all(&raw[..]).unwrap_or_else(|_| raw.clone());
 
-        // 1. محاولة القراءة من المغلف الحديث (StickProjectEnvelope)
         if let Ok(env) = serde_json::from_slice::<StickProjectEnvelope>(&decompressed) {
             return Ok(Self::normalize_loaded_project(env.project));
         }
@@ -659,14 +660,12 @@ impl AniProject {
             return Ok(Self::normalize_loaded_project(env.project));
         }
 
-        // 2. محاولة القراءة المباشرة للهيكل القياسي (JSON أو MessagePack)
         let mut loaded: Option<AniProject> = serde_json::from_slice::<AniProject>(&decompressed)
             .ok()
             .or_else(|| rmp_serde::from_slice::<AniProject>(&decompressed).ok())
             .or_else(|| serde_json::from_slice::<AniProject>(&raw).ok())
             .or_else(|| rmp_serde::from_slice::<AniProject>(&raw).ok());
 
-        // 3. محاولة قراءة أقدم إصدارات .ah2d (Legacy V1)
         if loaded.is_none() {
             let legacy_opt: Option<LegacyProjectV1> = serde_json::from_slice::<LegacyProjectV1>(&decompressed)
                 .ok()
@@ -691,6 +690,7 @@ impl AniProject {
                         visible: l.visible,
                         locked: l.locked,
                         is_guide: false,
+                        opacity: 1.0,
                         keyframes: kf_map,
                     });
                 }
@@ -723,6 +723,7 @@ impl AniProject {
                 visible: true,
                 locked: false,
                 is_guide: false,
+                opacity: 1.0,
                 keyframes: kf,
             });
         }
@@ -949,6 +950,7 @@ pub fn import_adobe_animate_project(path: &Path) -> Result<AniProject, String> {
                 visible: true,
                 locked: false,
                 is_guide: false,
+                opacity: 1.0,
                 keyframes: kf_map,
             });
         }
