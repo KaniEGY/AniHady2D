@@ -4,16 +4,43 @@ use std::fs;
 use std::io::Read;
 use std::path::Path;
 
+pub const PROJECT_SCHEMA_VERSION: u32 = 4;
+
 #[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Debug)]
-pub enum ToolType {
-    Select,
-    VectorPen,
-    Brush,
-    Eraser,
-    Bucket,
-    Eyedropper,
-    Text,
-    ShapeLine,
+pub enum KritaBrushPreset {
+    GPenInk,
+    SoftAirbrush,
+    Watercolor,
+    ChiselMarker,
+    SketchPencil,
+}
+
+impl Default for KritaBrushPreset {
+    fn default() -> Self {
+        KritaBrushPreset::GPenInk
+    }
+}
+
+impl KritaBrushPreset {
+    pub fn label(&self) -> &'static str {
+        match self {
+            KritaBrushPreset::GPenInk => "G-Pen (تحبير حريري)",
+            KritaBrushPreset::SoftAirbrush => "Airbrush (بخاخ ناعم)",
+            KritaBrushPreset::Watercolor => "Watercolor (ألوان مائية)",
+            KritaBrushPreset::ChiselMarker => "Marker (قلم تخطيط)",
+            KritaBrushPreset::SketchPencil => "Pencil (قلم سكتش)",
+        }
+    }
+
+    pub fn default_opacity(&self) -> f32 {
+        match self {
+            KritaBrushPreset::GPenInk => 1.0,
+            KritaBrushPreset::SoftAirbrush => 0.35,
+            KritaBrushPreset::Watercolor => 0.45,
+            KritaBrushPreset::ChiselMarker => 0.85,
+            KritaBrushPreset::SketchPencil => 0.70,
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Debug)]
@@ -107,6 +134,10 @@ pub struct Stroke {
     #[serde(default)]
     pub is_vector: bool,
     #[serde(default)]
+    pub brush_preset: KritaBrushPreset,
+    #[serde(default = "default_pressure")]
+    pub opacity: f32,
+    #[serde(default)]
     pub brush_texture_id: Option<String>,
 }
 
@@ -115,34 +146,46 @@ fn default_black() -> [u8; 4] {
 }
 
 fn default_width() -> f32 {
-    5.0
+    6.0
 }
 
 impl Stroke {
-    pub fn smooth_brush(&mut self) {
+    /// بناء منحنى Catmull-Rom / Cubic Bezier ناعم بدون أي تكسر في الزوايا (ميكانيك AniCraft)
+    pub fn fit_cubic_bezier_spline(&mut self, subdivisions: usize) {
         if self.points.len() < 3 {
             return;
         }
-        for _ in 0..2 {
-            let mut next_pts = Vec::with_capacity(self.points.len() * 2);
-            next_pts.push(self.points[0].clone());
-            for w in self.points.windows(2) {
-                let p0 = &w[0];
-                let p1 = &w[1];
-                next_pts.push(StrokePoint {
-                    x: p0.x * 0.75 + p1.x * 0.25,
-                    y: p0.y * 0.75 + p1.y * 0.25,
-                    pressure: p0.pressure * 0.75 + p1.pressure * 0.25,
-                });
-                next_pts.push(StrokePoint {
-                    x: p0.x * 0.25 + p1.x * 0.75,
-                    y: p0.y * 0.25 + p1.y * 0.75,
-                    pressure: p0.pressure * 0.25 + p1.pressure * 0.75,
-                });
+        let mut dense = Vec::with_capacity(self.points.len() * subdivisions);
+        let n = self.points.len();
+        dense.push(self.points[0].clone());
+
+        for i in 0..(n - 1) {
+            let p0 = &self.points[i.saturating_sub(1)];
+            let p1 = &self.points[i];
+            let p2 = &self.points[(i + 1).min(n - 1)];
+            let p3 = &self.points[(i + 2).min(n - 1)];
+
+            for step in 1..=subdivisions {
+                let t = step as f32 / subdivisions as f32;
+                let t2 = t * t;
+                let t3 = t2 * t;
+
+                let x = 0.5
+                    * ((2.0 * p1.x)
+                        + (-p0.x + p2.x) * t
+                        + (2.0 * p0.x - 5.0 * p1.x + 4.0 * p2.x - p3.x) * t2
+                        + (-p0.x + 3.0 * p1.x - 3.0 * p2.x + p3.x) * t3);
+                let y = 0.5
+                    * ((2.0 * p1.y)
+                        + (-p0.y + p2.y) * t
+                        + (2.0 * p0.y - 5.0 * p1.y + 4.0 * p2.y - p3.y) * t2
+                        + (-p0.y + 3.0 * p1.y - 3.0 * p2.y + p3.y) * t3);
+                let pressure = p1.pressure + (p2.pressure - p1.pressure) * t;
+
+                dense.push(StrokePoint { x, y, pressure });
             }
-            next_pts.push(self.points.last().unwrap().clone());
-            self.points = next_pts;
         }
+        self.points = dense;
     }
 
     pub fn simplify_vector_nodes(&mut self, tolerance: f32) {
@@ -152,7 +195,6 @@ impl Stroke {
         self.points = rdp_simplify(&self.points, tolerance);
     }
 
-    /// إعادة توزيع نقاط الخط لعدد محدد لدعم Shape Tween (Contour Morphing)
     pub fn resample_points(&self, target_count: usize) -> Vec<StrokePoint> {
         if self.points.is_empty() || target_count == 0 {
             return Vec::new();
@@ -267,7 +309,6 @@ fn default_media_dim() -> f32 {
     300.0
 }
 
-/// رمز يدعم التايم لاين الداخلي المتداخل (Nested Timeline)
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Symbol {
     #[serde(default)]
@@ -309,6 +350,8 @@ pub struct FrameData {
     #[serde(default)]
     pub text_items: Vec<TextItem>,
     #[serde(default)]
+    pub label: String,
+    #[serde(default)]
     pub motion_tween: bool,
     #[serde(default)]
     pub tween_mode: TweenMode,
@@ -324,6 +367,8 @@ pub struct Layer {
     pub visible: bool,
     #[serde(default)]
     pub locked: bool,
+    #[serde(default)]
+    pub is_guide: bool,
     #[serde(default)]
     pub keyframes: HashMap<usize, FrameData>,
 }
@@ -400,6 +445,8 @@ impl Default for OnionSkinSettings {
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct AniProject {
+    #[serde(default = "default_schema")]
+    pub schema_version: u32,
     #[serde(default = "default_w")]
     pub width: u32,
     #[serde(default = "default_h")]
@@ -418,9 +465,18 @@ pub struct AniProject {
     pub onion_skin: OnionSkinSettings,
 }
 
-fn default_w() -> u32 { 1280 }
-fn default_h() -> u32 { 720 }
+fn default_schema() -> u32 { PROJECT_SCHEMA_VERSION }
+fn default_w() -> u32 { 1920 }
+fn default_h() -> u32 { 1080 }
 fn default_fps() -> u32 { 24 }
+
+/// مغلف حفظ متوافق للأبد يضمن عدم ضياع أي مشروع قديم أو جديد مهما تعددت التحديثات
+#[derive(Serialize, Deserialize)]
+struct StickProjectEnvelope {
+    magic: String,
+    schema_version: u32,
+    project: AniProject,
+}
 
 #[derive(Deserialize)]
 struct LegacyLayerV1 {
@@ -451,14 +507,16 @@ impl Default for AniProject {
         let mut keyframes = HashMap::new();
         keyframes.insert(1, FrameData::default());
         Self {
-            width: 1280,
-            height: 720,
+            schema_version: PROJECT_SCHEMA_VERSION,
+            width: 1920,
+            height: 1080,
             fps: 24,
             total_frames: 1,
             layers: vec![Layer {
                 name: "Layer 1".to_string(),
                 visible: true,
                 locked: false,
+                is_guide: false,
                 keyframes,
             }],
             audio_tracks: Vec::new(),
@@ -469,8 +527,6 @@ impl Default for AniProject {
 }
 
 impl AniProject {
-    /// معمارية Time is a Function (من AniCraft):
-    /// تقييم المشهد رياضياً عند أي فريم مع دعم Shape Tween (Contour Morphing) و Classic Tween و Easing
     pub fn evaluate_layer_at_frame(&self, layer: &Layer, frame: usize) -> FrameData {
         let prev_k = match layer.keyframes.keys().filter(|&&k| k <= frame).max().copied() {
             Some(k) => k,
@@ -501,7 +557,6 @@ impl AniProject {
 
                     let mut evaluated = prev_fd.clone();
 
-                    // 1. Classic Tween للرموز (موقع، حجم، دوران)
                     let mut interp_syms = Vec::with_capacity(prev_fd.symbol_instances.len());
                     for (idx, inst) in prev_fd.symbol_instances.iter().enumerate() {
                         if let Some(target) = next_fd.symbol_instances.get(idx) {
@@ -522,7 +577,6 @@ impl AniProject {
                     }
                     evaluated.symbol_instances = interp_syms;
 
-                    // 2. Shape Tween (Contour Morphing) لتحويل الخطوط المرسومة إلى شكل الفريم التالي
                     if effective_tween == TweenMode::Shape {
                         let mut morphed_strokes = Vec::with_capacity(prev_fd.strokes.len());
                         for (idx, s0) in prev_fd.strokes.iter().enumerate() {
@@ -550,6 +604,8 @@ impl AniProject {
                                     fill_color: s0.fill_color.or(s1.fill_color),
                                     base_width: s0.base_width + (s1.base_width - s0.base_width) * t,
                                     is_vector: true,
+                                    brush_preset: s0.brush_preset,
+                                    opacity: s0.opacity + (s1.opacity - s0.opacity) * t,
                                     brush_texture_id: None,
                                 });
                             } else {
@@ -566,7 +622,6 @@ impl AniProject {
         prev_fd.clone()
     }
 
-    /// استخراج خطوط رمز معين عند فريم محدد (لدعم Nested Timelines داخل الرموز)
     pub fn evaluate_symbol_strokes<'a>(&'a self, sym: &'a Symbol, global_frame: usize) -> &'a [Stroke] {
         if sym.nested_keyframes.is_empty() {
             return &sym.strokes;
@@ -581,21 +636,37 @@ impl AniProject {
     }
 
     pub fn save_to_file(&self, path: &Path) -> Result<(), String> {
-        let json = serde_json::to_vec(self).map_err(|e| format!("Serialize error: {}", e))?;
+        let env = StickProjectEnvelope {
+            magic: "STICK_STUDIO_PROJECT".to_string(),
+            schema_version: PROJECT_SCHEMA_VERSION,
+            project: self.clone(),
+        };
+        let json = serde_json::to_vec(&env).map_err(|e| format!("Serialize error: {}", e))?;
         let compressed = zstd::encode_all(&json[..], 3).map_err(|e| format!("Compress error: {}", e))?;
         fs::write(path, compressed).map_err(|e| format!("Write error: {}", e))
     }
 
+    /// قارئ مشاريع شمولي: يدعم المغلف الحديث + جميع الإصدارات السابقة (.stick / .ah2d) في وضعي الرسم والأنيميشن
     pub fn load_from_file(path: &Path) -> Result<Self, String> {
         let raw = fs::read(path).map_err(|e| format!("Read error: {}", e))?;
         let decompressed = zstd::decode_all(&raw[..]).unwrap_or_else(|_| raw.clone());
 
+        // 1. محاولة القراءة من المغلف الحديث (StickProjectEnvelope)
+        if let Ok(env) = serde_json::from_slice::<StickProjectEnvelope>(&decompressed) {
+            return Ok(Self::normalize_loaded_project(env.project));
+        }
+        if let Ok(env) = serde_json::from_slice::<StickProjectEnvelope>(&raw) {
+            return Ok(Self::normalize_loaded_project(env.project));
+        }
+
+        // 2. محاولة القراءة المباشرة للهيكل القياسي (JSON أو MessagePack)
         let mut loaded: Option<AniProject> = serde_json::from_slice::<AniProject>(&decompressed)
             .ok()
             .or_else(|| rmp_serde::from_slice::<AniProject>(&decompressed).ok())
             .or_else(|| serde_json::from_slice::<AniProject>(&raw).ok())
             .or_else(|| rmp_serde::from_slice::<AniProject>(&raw).ok());
 
+        // 3. محاولة قراءة أقدم إصدارات .ah2d (Legacy V1)
         if loaded.is_none() {
             let legacy_opt: Option<LegacyProjectV1> = serde_json::from_slice::<LegacyProjectV1>(&decompressed)
                 .ok()
@@ -619,10 +690,12 @@ impl AniProject {
                         name: l.name,
                         visible: l.visible,
                         locked: l.locked,
+                        is_guide: false,
                         keyframes: kf_map,
                     });
                 }
                 loaded = Some(AniProject {
+                    schema_version: PROJECT_SCHEMA_VERSION,
                     width: leg.width,
                     height: leg.height,
                     fps: leg.fps,
@@ -636,32 +709,35 @@ impl AniProject {
         }
 
         match loaded {
-            Some(mut proj) => {
-                if proj.layers.is_empty() {
-                    let mut kf = HashMap::new();
-                    kf.insert(1, FrameData::default());
-                    proj.layers.push(Layer {
-                        name: "Layer 1".to_string(),
-                        visible: true,
-                        locked: false,
-                        keyframes: kf,
-                    });
-                }
-                let max_kf = proj
-                    .layers
-                    .iter()
-                    .flat_map(|l| l.keyframes.keys().copied())
-                    .max()
-                    .unwrap_or(1);
-                proj.total_frames = proj.total_frames.max(max_kf).max(1);
-                Ok(proj)
-            }
-            None => Err("تعذر قراءة ملف المشروع، تأكد من أن الملف غير تالف.".to_string()),
+            Some(proj) => Ok(Self::normalize_loaded_project(proj)),
+            None => Err("تعذر قراءة ملف المشروع، تأكد من سلامة الملف.".to_string()),
         }
+    }
+
+    fn normalize_loaded_project(mut proj: AniProject) -> Self {
+        if proj.layers.is_empty() {
+            let mut kf = HashMap::new();
+            kf.insert(1, FrameData::default());
+            proj.layers.push(Layer {
+                name: "Layer 1".to_string(),
+                visible: true,
+                locked: false,
+                is_guide: false,
+                keyframes: kf,
+            });
+        }
+        let max_kf = proj
+            .layers
+            .iter()
+            .flat_map(|l| l.keyframes.keys().copied())
+            .max()
+            .unwrap_or(1);
+        proj.total_frames = proj.total_frames.max(max_kf).max(1);
+        proj.schema_version = PROJECT_SCHEMA_VERSION;
+        proj
     }
 }
 
-/// استيراد مسارات SVG وتحويلها إلى خطوط فيكتور قابلة للتعديل داخل Stick
 pub fn parse_svg_to_strokes(svg_path: &Path) -> Result<Vec<Stroke>, String> {
     let content = fs::read_to_string(svg_path).map_err(|e| format!("SVG Read Error: {}", e))?;
     let doc = roxmltree::Document::parse(&content).map_err(|e| format!("SVG Parse Error: {}", e))?;
@@ -685,54 +761,12 @@ pub fn parse_svg_to_strokes(svg_path: &Path) -> Result<Vec<Stroke>, String> {
                         fill_color: fill_col,
                         base_width: width,
                         is_vector: true,
+                        brush_preset: KritaBrushPreset::GPenInk,
+                        opacity: 1.0,
                         brush_texture_id: None,
                     });
                 }
             }
-        } else if tag == "rect" {
-            let x = node.attribute("x").and_then(|v| v.parse::<f32>().ok()).unwrap_or(0.0);
-            let y = node.attribute("y").and_then(|v| v.parse::<f32>().ok()).unwrap_or(0.0);
-            let w = node.attribute("width").and_then(|v| v.parse::<f32>().ok()).unwrap_or(100.0);
-            let h = node.attribute("height").and_then(|v| v.parse::<f32>().ok()).unwrap_or(100.0);
-            let stroke_col = parse_hex_color(node.attribute("stroke")).unwrap_or([0, 0, 0, 255]);
-            let fill_col = parse_hex_color(node.attribute("fill"));
-            result.push(Stroke {
-                points: vec![
-                    StrokePoint { x, y, pressure: 1.0 },
-                    StrokePoint { x: x + w, y, pressure: 1.0 },
-                    StrokePoint { x: x + w, y: y + h, pressure: 1.0 },
-                    StrokePoint { x, y: y + h, pressure: 1.0 },
-                    StrokePoint { x, y, pressure: 1.0 },
-                ],
-                color: stroke_col,
-                fill_color: fill_col,
-                base_width: 3.0,
-                is_vector: true,
-                brush_texture_id: None,
-            });
-        } else if tag == "circle" {
-            let cx = node.attribute("cx").and_then(|v| v.parse::<f32>().ok()).unwrap_or(100.0);
-            let cy = node.attribute("cy").and_then(|v| v.parse::<f32>().ok()).unwrap_or(100.0);
-            let r = node.attribute("r").and_then(|v| v.parse::<f32>().ok()).unwrap_or(50.0);
-            let stroke_col = parse_hex_color(node.attribute("stroke")).unwrap_or([0, 0, 0, 255]);
-            let fill_col = parse_hex_color(node.attribute("fill"));
-            let mut pts = Vec::new();
-            for i in 0..=32 {
-                let ang = (i as f32 / 32.0) * std::f32::consts::TAU;
-                pts.push(StrokePoint {
-                    x: cx + ang.cos() * r,
-                    y: cy + ang.sin() * r,
-                    pressure: 1.0,
-                });
-            }
-            result.push(Stroke {
-                points: pts,
-                color: stroke_col,
-                fill_color: fill_col,
-                base_width: 3.0,
-                is_vector: true,
-                brush_texture_id: None,
-            });
         }
     }
 
@@ -823,85 +857,10 @@ fn parse_svg_path_d(d: &str) -> Vec<StrokePoint> {
                     idx += 1;
                 }
             }
-            'm' => {
-                if let (Some(dx), Some(dy)) = (read_f(&mut idx), read_f(&mut idx)) {
-                    cur_x += dx;
-                    cur_y += dy;
-                    start_x = cur_x;
-                    start_y = cur_y;
-                    pts.push(StrokePoint { x: cur_x, y: cur_y, pressure: 1.0 });
-                    cmd = 'l';
-                } else {
-                    idx += 1;
-                }
-            }
             'L' => {
                 if let (Some(x), Some(y)) = (read_f(&mut idx), read_f(&mut idx)) {
                     cur_x = x;
                     cur_y = y;
-                    pts.push(StrokePoint { x: cur_x, y: cur_y, pressure: 1.0 });
-                } else {
-                    idx += 1;
-                }
-            }
-            'l' => {
-                if let (Some(dx), Some(dy)) = (read_f(&mut idx), read_f(&mut idx)) {
-                    cur_x += dx;
-                    cur_y += dy;
-                    pts.push(StrokePoint { x: cur_x, y: cur_y, pressure: 1.0 });
-                } else {
-                    idx += 1;
-                }
-            }
-            'H' => {
-                if let Some(x) = read_f(&mut idx) {
-                    cur_x = x;
-                    pts.push(StrokePoint { x: cur_x, y: cur_y, pressure: 1.0 });
-                } else {
-                    idx += 1;
-                }
-            }
-            'h' => {
-                if let Some(dx) = read_f(&mut idx) {
-                    cur_x += dx;
-                    pts.push(StrokePoint { x: cur_x, y: cur_y, pressure: 1.0 });
-                } else {
-                    idx += 1;
-                }
-            }
-            'V' => {
-                if let Some(y) = read_f(&mut idx) {
-                    cur_y = y;
-                    pts.push(StrokePoint { x: cur_x, y: cur_y, pressure: 1.0 });
-                } else {
-                    idx += 1;
-                }
-            }
-            'v' => {
-                if let Some(dy) = read_f(&mut idx) {
-                    cur_y += dy;
-                    pts.push(StrokePoint { x: cur_x, y: cur_y, pressure: 1.0 });
-                } else {
-                    idx += 1;
-                }
-            }
-            'C' => {
-                if let (Some(_x1), Some(_y1), Some(_x2), Some(_y2), Some(x), Some(y)) = (
-                    read_f(&mut idx), read_f(&mut idx), read_f(&mut idx), read_f(&mut idx), read_f(&mut idx), read_f(&mut idx),
-                ) {
-                    cur_x = x;
-                    cur_y = y;
-                    pts.push(StrokePoint { x: cur_x, y: cur_y, pressure: 1.0 });
-                } else {
-                    idx += 1;
-                }
-            }
-            'c' => {
-                if let (Some(_dx1), Some(_dy1), Some(_dx2), Some(_dy2), Some(dx), Some(dy)) = (
-                    read_f(&mut idx), read_f(&mut idx), read_f(&mut idx), read_f(&mut idx), read_f(&mut idx), read_f(&mut idx),
-                ) {
-                    cur_x += dx;
-                    cur_y += dy;
                     pts.push(StrokePoint { x: cur_x, y: cur_y, pressure: 1.0 });
                 } else {
                     idx += 1;
@@ -915,7 +874,6 @@ fn parse_svg_path_d(d: &str) -> Vec<StrokePoint> {
     pts
 }
 
-/// استيراد ملفات Adobe Animate (.xfl / .fla) واستخراج المشاهد والطبقات
 pub fn import_adobe_animate_project(path: &Path) -> Result<AniProject, String> {
     let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
     let mut xml_content = String::new();
@@ -945,16 +903,15 @@ pub fn import_adobe_animate_project(path: &Path) -> Result<AniProject, String> {
 
     let doc = roxmltree::Document::parse(&xml_content).map_err(|e| e.to_string())?;
     let mut proj = AniProject::default();
-    if let Some(root) = doc.root_element().into() {
-        if let Some(w) = root.attribute("width").and_then(|v| v.parse::<u32>().ok()) {
-            proj.width = w;
-        }
-        if let Some(h) = root.attribute("height").and_then(|v| v.parse::<u32>().ok()) {
-            proj.height = h;
-        }
-        if let Some(fps) = root.attribute("frameRate").and_then(|v| v.parse::<u32>().ok()) {
-            proj.fps = fps;
-        }
+    let root = doc.root_element();
+    if let Some(w) = root.attribute("width").and_then(|v| v.parse::<u32>().ok()) {
+        proj.width = w;
+    }
+    if let Some(h) = root.attribute("height").and_then(|v| v.parse::<u32>().ok()) {
+        proj.height = h;
+    }
+    if let Some(fps) = root.attribute("frameRate").and_then(|v| v.parse::<u32>().ok()) {
+        proj.fps = fps;
     }
 
     let mut imported_layers = Vec::new();
@@ -975,6 +932,8 @@ pub fn import_adobe_animate_project(path: &Path) -> Result<AniProject, String> {
                                 fill_color: None,
                                 base_width: 3.0,
                                 is_vector: true,
+                                brush_preset: KritaBrushPreset::GPenInk,
+                                opacity: 1.0,
                                 brush_texture_id: None,
                             });
                         }
@@ -989,6 +948,7 @@ pub fn import_adobe_animate_project(path: &Path) -> Result<AniProject, String> {
                 name: l_name,
                 visible: true,
                 locked: false,
+                is_guide: false,
                 keyframes: kf_map,
             });
         }
