@@ -44,6 +44,7 @@ struct AniHadyApp {
     saved_path: Option<PathBuf>,
     status_message: String,
     audio_sink: Option<(OutputStream, Sink)>,
+    last_pointer_pos: Option<egui::Pos2>,
 }
 
 impl AniHadyApp {
@@ -54,7 +55,7 @@ impl AniHadyApp {
             undo_stack: Vec::new(),
             current_frame: 1,
             active_layer_idx: 0,
-            active_tool: ToolType::VectorPen,
+            active_tool: ToolType::Brush,
             brush_color: [0, 0, 0, 255],
             brush_size: 4.0,
             pen_pressure_enabled: true,
@@ -73,13 +74,14 @@ impl AniHadyApp {
             texture_cache: HashMap::new(),
             imported_brushes: Vec::new(),
             saved_path: None,
-            status_message: "Ready - AniHady2D".to_string(),
+            status_message: "GPU Ready - AniHady2D".to_string(),
             audio_sink: None,
+            last_pointer_pos: None,
         }
     }
 
     fn save_undo_state(&mut self) {
-        if self.undo_stack.len() > 30 {
+        if self.undo_stack.len() > 20 {
             self.undo_stack.remove(0);
         }
         self.undo_stack.push(self.project.clone());
@@ -151,13 +153,28 @@ impl AniHadyApp {
 
 impl eframe::App for AniHadyApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        if ctx.input(|i| i.modifiers.ctrl && i.key_pressed(egui::Key::Z)) {
+        let (ctrl_z, f8_pressed, del_pressed, space_down, scroll_y, close_req, pointer_down, pointer_pressed, pointer_released, pointer_pos) = ctx.input(|i| {
+            (
+                i.modifiers.ctrl && i.key_pressed(egui::Key::Z),
+                i.key_pressed(egui::Key::F8),
+                i.key_pressed(egui::Key::Delete),
+                i.key_down(egui::Key::Space),
+                i.raw_scroll_delta.y,
+                i.viewport().close_requested(),
+                i.pointer.primary_down(),
+                i.pointer.primary_pressed(),
+                i.pointer.primary_released(),
+                i.pointer.interact_pos(),
+            )
+        });
+
+        if ctrl_z {
             self.undo();
         }
-        if ctx.input(|i| i.key_pressed(egui::Key::F8)) {
+        if f8_pressed {
             self.show_symbol_dialog = true;
         }
-        if ctx.input(|i| i.key_pressed(egui::Key::Delete)) {
+        if del_pressed {
             if let Some(idx) = self.selected_stroke_idx.take() {
                 self.save_undo_state();
                 if let Some(layer) = self.project.layers.get_mut(self.active_layer_idx) {
@@ -224,7 +241,7 @@ impl eframe::App for AniHadyApp {
                 });
         }
 
-        if ctx.input(|i| i.viewport().close_requested()) && !self.allow_close {
+        if close_req && !self.allow_close {
             if self.has_unsaved_changes {
                 ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
                 self.show_exit_dialog = true;
@@ -289,34 +306,6 @@ impl eframe::App for AniHadyApp {
                                     height: 200.0,
                                 });
                                 self.has_unsaved_changes = true;
-                            }
-                        }
-                        ui.close_menu();
-                    }
-                    if ui.button("Import Video (MP4/MOV/AVI)").clicked() {
-                        if let Some(path) = rfd::FileDialog::new()
-                            .add_filter("Videos", &["mp4", "mov", "avi", "mkv"])
-                            .pick_file()
-                        {
-                            if let Ok(frames) = exporter::extract_video_frames(&path, self.project.fps) {
-                                self.save_undo_state();
-                                if let Some(layer) = self.project.layers.get_mut(self.active_layer_idx) {
-                                    for (i, f_path) in frames.iter().enumerate() {
-                                        let f_idx = self.current_frame + i;
-                                        if f_idx <= self.project.total_frames {
-                                            let frame = layer.keyframes.entry(f_idx).or_default();
-                                            frame.media_items.push(MediaItem {
-                                                path: f_path.to_string_lossy().to_string(),
-                                                media_type: MediaType::VideoFrame,
-                                                x: 0.0,
-                                                y: 0.0,
-                                                width: 800.0,
-                                                height: 450.0,
-                                            });
-                                        }
-                                    }
-                                    self.has_unsaved_changes = true;
-                                }
                             }
                         }
                         ui.close_menu();
@@ -486,15 +475,21 @@ impl eframe::App for AniHadyApp {
         });
 
         egui::CentralPanel::default().show(ctx, |ui| {
-            let (response, painter) = ui.allocate_painter(ui.available_size(), egui::Sense::click_and_drag());
-            let scroll_delta = ctx.input(|i| i.raw_scroll_delta.y);
-            if scroll_delta != 0.0 && response.hovered() {
-                self.zoom_level = (self.zoom_level + scroll_delta * 0.001).clamp(-2.0, 3.0);
+            let canvas_rect = ui.available_rect_before_wrap();
+            let painter = ui.painter_at(canvas_rect);
+            let is_over_canvas = pointer_pos.map_or(false, |p| canvas_rect.contains(p));
+
+            if scroll_y != 0.0 && is_over_canvas {
+                self.zoom_level = (self.zoom_level + scroll_y * 0.001).clamp(-2.0, 3.0);
             }
-            if ctx.input(|i| i.key_down(egui::Key::Space)) && response.dragged() {
-                self.pan_offset += response.drag_delta();
+
+            if space_down && pointer_down && is_over_canvas {
+                if let (Some(curr), Some(last)) = (pointer_pos, self.last_pointer_pos) {
+                    self.pan_offset += curr - last;
+                }
             }
-            let center = response.rect.center() + self.pan_offset;
+
+            let center = canvas_rect.center() + self.pan_offset;
             let scale = self.zoom_level.abs().max(0.1);
             let stage_size = egui::vec2(self.project.width as f32, self.project.height as f32) * scale;
             let stage_rect = egui::Rect::from_center_size(center, stage_size);
@@ -503,12 +498,14 @@ impl eframe::App for AniHadyApp {
             let to_stage = |p: egui::Pos2| egui::pos2((p.x - stage_rect.min.x) / scale, (p.y - stage_rect.min.y) / scale);
             let to_screen = |p: egui::Pos2| egui::pos2(stage_rect.min.x + p.x * scale, stage_rect.min.y + p.y * scale);
 
-            if !ctx.input(|i| i.key_down(egui::Key::Space)) {
-                if let Some(pos) = response.interact_pointer_pos() {
+            if !space_down && is_over_canvas {
+                if let Some(pos) = pointer_pos {
                     let stage_pos = to_stage(pos);
+                    let delta = self.last_pointer_pos.map_or(egui::Vec2::ZERO, |last| (pos - last) / scale);
+
                     match self.active_tool {
                         ToolType::Select => {
-                            if response.clicked() {
+                            if pointer_pressed {
                                 self.selected_stroke_idx = None;
                                 self.selected_symbol_inst_idx = None;
                                 if let Some(layer) = self.project.layers.get(self.active_layer_idx) {
@@ -529,8 +526,7 @@ impl eframe::App for AniHadyApp {
                                         }
                                     }
                                 }
-                            } else if response.dragged() {
-                                let delta = response.drag_delta() / scale;
+                            } else if pointer_down && delta.length_sq() > 0.0 {
                                 if let Some(layer) = self.project.layers.get_mut(self.active_layer_idx) {
                                     if let Some(frame) = layer.keyframes.get_mut(&self.current_frame) {
                                         if let Some(idx) = self.selected_symbol_inst_idx {
@@ -552,7 +548,7 @@ impl eframe::App for AniHadyApp {
                                 }
                             }
                         }
-                        ToolType::Bucket if response.clicked() => {
+                        ToolType::Bucket if pointer_pressed => {
                             if let Some(layer) = self.project.layers.get_mut(self.active_layer_idx) {
                                 if let Some(frame) = layer.keyframes.get_mut(&self.current_frame) {
                                     for s in frame.strokes.iter_mut().rev() {
@@ -565,7 +561,7 @@ impl eframe::App for AniHadyApp {
                                 }
                             }
                         }
-                        ToolType::Eraser if response.dragged() => {
+                        ToolType::Eraser if pointer_down => {
                             if let Some(layer) = self.project.layers.get_mut(self.active_layer_idx) {
                                 if let Some(frame) = layer.keyframes.get_mut(&self.current_frame) {
                                     let r = self.brush_size;
@@ -574,7 +570,7 @@ impl eframe::App for AniHadyApp {
                                 }
                             }
                         }
-                        ToolType::Eyedropper if response.clicked() => {
+                        ToolType::Eyedropper if pointer_pressed => {
                             if let Some(layer) = self.project.layers.get(self.active_layer_idx) {
                                 if let Some(frame) = layer.keyframes.get(&self.current_frame) {
                                     for s in &frame.strokes {
@@ -586,24 +582,25 @@ impl eframe::App for AniHadyApp {
                                 }
                             }
                         }
-                        ToolType::VectorPen | ToolType::Brush if response.dragged() => {
+                        ToolType::VectorPen | ToolType::Brush if pointer_down => {
+                            let speed = delta.length();
                             let pressure = if self.pen_pressure_enabled {
-                                ctx.input(|i| {
-                                    i.events
-                                        .iter()
-                                        .find_map(|e| if let egui::Event::Touch { force: Some(f), .. } = e { Some(*f) } else { None })
-                                        .unwrap_or_else(|| (1.0 - (response.drag_delta().length() * 0.015)).clamp(0.3, 1.0))
-                                })
+                                (1.0 - (speed * 0.015)).clamp(0.35, 1.0)
                             } else {
                                 1.0
                             };
-                            let point = StrokePoint { x: stage_pos.x, y: stage_pos.y, pressure };
+
                             if let Some(stroke) = &mut self.current_stroke {
-                                stroke.points.push(point);
+                                if let Some(last) = stroke.points.last() {
+                                    let dist = ((last.x - stage_pos.x).powi(2) + (last.y - stage_pos.y).powi(2)).sqrt();
+                                    if dist >= 2.0 {
+                                        stroke.points.push(StrokePoint { x: stage_pos.x, y: stage_pos.y, pressure });
+                                    }
+                                }
                             } else {
                                 self.save_undo_state();
                                 self.current_stroke = Some(Stroke {
-                                    points: vec![point],
+                                    points: vec![StrokePoint { x: stage_pos.x, y: stage_pos.y, pressure }],
                                     color: self.brush_color,
                                     fill_color: None,
                                     base_width: self.brush_size,
@@ -617,7 +614,7 @@ impl eframe::App for AniHadyApp {
                 }
             }
 
-            if response.drag_stopped() {
+            if pointer_released {
                 if let Some(mut stroke) = self.current_stroke.take() {
                     if stroke.is_vector {
                         stroke.smooth_vector();
@@ -629,13 +626,15 @@ impl eframe::App for AniHadyApp {
                 }
             }
 
+            self.last_pointer_pos = if pointer_down { pointer_pos } else { None };
+
             if self.project.onion_skin.enabled && !self.is_playing {
                 if let Some(layer) = self.project.layers.get(self.active_layer_idx) {
                     for offset in 1..=self.project.onion_skin.frames_before {
                         if self.current_frame > offset {
                             if let Some(fd) = layer.keyframes.get(&(self.current_frame - offset)) {
                                 for s in &fd.strokes {
-                                    draw_stroke_scaled(&painter, s, Some(self.project.onion_skin.color_before), scale, 0.0, 0.0, &to_screen);
+                                    draw_stroke_fast(&painter, s, Some(self.project.onion_skin.color_before), scale, 0.0, 0.0, &to_screen);
                                 }
                             }
                         }
@@ -643,7 +642,7 @@ impl eframe::App for AniHadyApp {
                     for offset in 1..=self.project.onion_skin.frames_after {
                         if let Some(fd) = layer.keyframes.get(&(self.current_frame + offset)) {
                             for s in &fd.strokes {
-                                draw_stroke_scaled(&painter, s, Some(self.project.onion_skin.color_after), scale, 0.0, 0.0, &to_screen);
+                                draw_stroke_fast(&painter, s, Some(self.project.onion_skin.color_after), scale, 0.0, 0.0, &to_screen);
                             }
                         }
                     }
@@ -673,12 +672,12 @@ impl eframe::App for AniHadyApp {
                 if layer.visible {
                     if let Some(fd) = layer.keyframes.get(&self.current_frame) {
                         for s in &fd.strokes {
-                            draw_stroke_scaled(&painter, s, None, scale, 0.0, 0.0, &to_screen);
+                            draw_stroke_fast(&painter, s, None, scale, 0.0, 0.0, &to_screen);
                         }
                         for inst in &fd.symbol_instances {
                             if let Some(sym) = self.project.library_symbols.get(&inst.symbol_name) {
                                 for s in &sym.strokes {
-                                    draw_stroke_scaled(&painter, s, None, scale * inst.scale, inst.x, inst.y, &to_screen);
+                                    draw_stroke_fast(&painter, s, None, scale * inst.scale, inst.x, inst.y, &to_screen);
                                 }
                             }
                         }
@@ -686,13 +685,13 @@ impl eframe::App for AniHadyApp {
                 }
             }
             if let Some(stroke) = &self.current_stroke {
-                draw_stroke_scaled(&painter, stroke, None, scale, 0.0, 0.0, &to_screen);
+                draw_stroke_fast(&painter, stroke, None, scale, 0.0, 0.0, &to_screen);
             }
         });
     }
 }
 
-fn draw_stroke_scaled<F: Fn(egui::Pos2) -> egui::Pos2>(
+fn draw_stroke_fast<F: Fn(egui::Pos2) -> egui::Pos2>(
     painter: &egui::Painter,
     stroke: &Stroke,
     override_color: Option<[u8; 4]>,
@@ -704,26 +703,24 @@ fn draw_stroke_scaled<F: Fn(egui::Pos2) -> egui::Pos2>(
     if stroke.points.len() < 2 {
         return;
     }
+    let pts: Vec<egui::Pos2> = stroke
+        .points
+        .iter()
+        .map(|p| to_screen(egui::pos2(p.x + ox, p.y + oy)))
+        .collect();
+
     if let Some(fc) = stroke.fill_color {
         let fill_c = override_color.unwrap_or(fc);
-        let pts: Vec<egui::Pos2> = stroke.points.iter().map(|p| to_screen(egui::pos2(p.x + ox, p.y + oy))).collect();
         painter.add(egui::Shape::convex_polygon(
-            pts,
+            pts.clone(),
             egui::Color32::from_rgba_unmultiplied(fill_c[0], fill_c[1], fill_c[2], fill_c[3]),
             egui::Stroke::NONE,
         ));
     }
+
     let c = override_color.unwrap_or(stroke.color);
     let color = egui::Color32::from_rgba_unmultiplied(c[0], c[1], c[2], c[3]);
-    for w in stroke.points.windows(2) {
-        painter.line_segment(
-            [
-                to_screen(egui::pos2(w[0].x + ox, w[0].y + oy)),
-                to_screen(egui::pos2(w[1].x + ox, w[1].y + oy)),
-            ],
-            egui::Stroke::new(stroke.base_width * w[1].pressure * scale, color),
-        );
-    }
+    painter.add(egui::Shape::line(pts, egui::Stroke::new(stroke.base_width * scale, color)));
 }
 
 fn main() -> eframe::Result<()> {
@@ -734,6 +731,7 @@ fn main() -> eframe::Result<()> {
         renderer: eframe::Renderer::Wgpu,
         wgpu_options: eframe::egui_wgpu::WgpuConfiguration {
             power_preference: eframe::wgpu::PowerPreference::HighPerformance,
+            present_mode: eframe::wgpu::PresentMode::AutoNoVsync,
             ..Default::default()
         },
         ..Default::default()
