@@ -150,7 +150,6 @@ fn default_width() -> f32 {
 }
 
 impl Stroke {
-    /// تنعيم المنحنيات باستخدام Centripetal Catmull-Rom بدون إزاحة الخط عن مكانه الأصلي (حل مشكلة الثعبان)
     pub fn fit_cubic_bezier_spline(&mut self, subdivisions: usize) {
         if self.points.len() < 3 {
             return;
@@ -359,7 +358,6 @@ pub struct FrameData {
     pub easing: EasingCurve,
 }
 
-/// طبقة متقدمة تجمع خصائص Blender 2D (Grease Pencil) و Krita (Opacity, Lock, Guide)
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Layer {
     #[serde(default = "default_layer_name")]
@@ -472,37 +470,6 @@ fn default_schema() -> u32 { PROJECT_SCHEMA_VERSION }
 fn default_w() -> u32 { 1920 }
 fn default_h() -> u32 { 1080 }
 fn default_fps() -> u32 { 24 }
-
-#[derive(Serialize, Deserialize)]
-struct StickProjectEnvelope {
-    magic: String,
-    schema_version: u32,
-    project: AniProject,
-}
-
-#[derive(Deserialize)]
-struct LegacyLayerV1 {
-    #[serde(default = "default_layer_name")]
-    name: String,
-    #[serde(default = "default_true")]
-    visible: bool,
-    #[serde(default)]
-    locked: bool,
-    #[serde(default)]
-    frames: Vec<FrameData>,
-}
-
-#[derive(Deserialize)]
-struct LegacyProjectV1 {
-    #[serde(default = "default_w")]
-    width: u32,
-    #[serde(default = "default_h")]
-    height: u32,
-    #[serde(default = "default_fps")]
-    fps: u32,
-    #[serde(default)]
-    layers: Vec<LegacyLayerV1>,
-}
 
 impl Default for AniProject {
     fn default() -> Self {
@@ -639,103 +606,11 @@ impl AniProject {
     }
 
     pub fn save_to_file(&self, path: &Path) -> Result<(), String> {
-        let env = StickProjectEnvelope {
-            magic: "STICK_STUDIO_PROJECT".to_string(),
-            schema_version: PROJECT_SCHEMA_VERSION,
-            project: self.clone(),
-        };
-        let json = serde_json::to_vec(&env).map_err(|e| format!("Serialize error: {}", e))?;
-        let compressed = zstd::encode_all(&json[..], 3).map_err(|e| format!("Compress error: {}", e))?;
-        fs::write(path, compressed).map_err(|e| format!("Write error: {}", e))
+        crate::persistence::save_project_safe(self, path)
     }
 
     pub fn load_from_file(path: &Path) -> Result<Self, String> {
-        let raw = fs::read(path).map_err(|e| format!("Read error: {}", e))?;
-        let decompressed = zstd::decode_all(&raw[..]).unwrap_or_else(|_| raw.clone());
-
-        if let Ok(env) = serde_json::from_slice::<StickProjectEnvelope>(&decompressed) {
-            return Ok(Self::normalize_loaded_project(env.project));
-        }
-        if let Ok(env) = serde_json::from_slice::<StickProjectEnvelope>(&raw) {
-            return Ok(Self::normalize_loaded_project(env.project));
-        }
-
-        let mut loaded: Option<AniProject> = serde_json::from_slice::<AniProject>(&decompressed)
-            .ok()
-            .or_else(|| rmp_serde::from_slice::<AniProject>(&decompressed).ok())
-            .or_else(|| serde_json::from_slice::<AniProject>(&raw).ok())
-            .or_else(|| rmp_serde::from_slice::<AniProject>(&raw).ok());
-
-        if loaded.is_none() {
-            let legacy_opt: Option<LegacyProjectV1> = serde_json::from_slice::<LegacyProjectV1>(&decompressed)
-                .ok()
-                .or_else(|| rmp_serde::from_slice::<LegacyProjectV1>(&decompressed).ok())
-                .or_else(|| serde_json::from_slice::<LegacyProjectV1>(&raw).ok())
-                .or_else(|| rmp_serde::from_slice::<LegacyProjectV1>(&raw).ok());
-
-            if let Some(leg) = legacy_opt {
-                let mut converted_layers = Vec::new();
-                let mut max_len = 1usize;
-                for l in leg.layers {
-                    let mut kf_map = HashMap::new();
-                    for (idx, fd) in l.frames.into_iter().enumerate() {
-                        kf_map.insert(idx + 1, fd);
-                    }
-                    if kf_map.is_empty() {
-                        kf_map.insert(1, FrameData::default());
-                    }
-                    max_len = max_len.max(kf_map.len());
-                    converted_layers.push(Layer {
-                        name: l.name,
-                        visible: l.visible,
-                        locked: l.locked,
-                        is_guide: false,
-                        opacity: 1.0,
-                        keyframes: kf_map,
-                    });
-                }
-                loaded = Some(AniProject {
-                    schema_version: PROJECT_SCHEMA_VERSION,
-                    width: leg.width,
-                    height: leg.height,
-                    fps: leg.fps,
-                    total_frames: max_len,
-                    layers: converted_layers,
-                    audio_tracks: Vec::new(),
-                    library_symbols: HashMap::new(),
-                    onion_skin: OnionSkinSettings::default(),
-                });
-            }
-        }
-
-        match loaded {
-            Some(proj) => Ok(Self::normalize_loaded_project(proj)),
-            None => Err("تعذر قراءة ملف المشروع، تأكد من سلامة الملف.".to_string()),
-        }
-    }
-
-    fn normalize_loaded_project(mut proj: AniProject) -> Self {
-        if proj.layers.is_empty() {
-            let mut kf = HashMap::new();
-            kf.insert(1, FrameData::default());
-            proj.layers.push(Layer {
-                name: "Layer 1".to_string(),
-                visible: true,
-                locked: false,
-                is_guide: false,
-                opacity: 1.0,
-                keyframes: kf,
-            });
-        }
-        let max_kf = proj
-            .layers
-            .iter()
-            .flat_map(|l| l.keyframes.keys().copied())
-            .max()
-            .unwrap_or(1);
-        proj.total_frames = proj.total_frames.max(max_kf).max(1);
-        proj.schema_version = PROJECT_SCHEMA_VERSION;
-        proj
+        crate::persistence::open_project_safe(path).map(|o| o.project)
     }
 }
 
