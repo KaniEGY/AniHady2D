@@ -19,14 +19,25 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Run Compatibility & Unit Tests
+        run: cargo test
+
       - name: Build Release EXE
         run: cargo build --release
 
+      - name: Extract Unified APP_VERSION from Cargo.toml
+        id: meta
+        shell: pwsh
+        run: |
+          $ver = (Select-String -Path Cargo.toml -Pattern '^version\s*=\s*"([^"]+)"').Matches[0].Groups[1].Value
+          echo "version=$ver" >> $env:GITHUB_OUTPUT
+
       - name: Package Clean Folder
+        shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path dist
           Copy-Item target/release/Stick.exe dist/Stick.exe
-          "2.2.0" | Out-File -FilePath dist/version.txt -Encoding ascii -NoNewline
+          "${{ steps.meta.outputs.version }}" | Out-File -FilePath dist/version.txt -Encoding ascii -NoNewline
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
@@ -37,8 +48,8 @@ jobs:
       - name: Publish Direct Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v2.2.${{ github.run_number }}
-          name: Stick v2.2.${{ github.run_number }}
+          tag_name: v${{ steps.meta.outputs.version }}.${{ github.run_number }}
+          name: Stick v${{ steps.meta.outputs.version }} (Build ${{ github.run_number }})
           files: |
             dist/Stick.exe
             dist/version.txt
