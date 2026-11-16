@@ -1,62 +1,85 @@
-﻿use image::{Rgba, RgbaImage};
-use std::f32::consts::PI;
-use std::fs::{self, File};
-use std::io::Write;
+use image::{ImageBuffer, Rgba};
+use std::fs;
 use std::path::Path;
 
-fn generate_wav(path: &Path, freqs: &[f32], duration_sec: f32) {
-    let sample_rate = 44100u32;
-    let num_samples = (sample_rate as f32 * duration_sec) as u32;
-    let mut data = Vec::with_capacity((num_samples * 2) as usize);
-    for i in 0..num_samples {
-        let t = i as f32 / sample_rate as f32;
-        let progress = t / duration_sec;
-        let freq_idx = ((progress * freqs.len() as f32) as usize).min(freqs.len() - 1);
-        let freq = freqs[freq_idx];
-        let envelope = (1.0 - progress).powf(1.5);
-        let sample = ((2.0 * PI * freq * t).sin() * envelope * 16000.0) as i16;
-        data.extend_from_slice(&sample.to_le_bytes());
-    }
-    let data_size = data.len() as u32;
-    let file_size = 36 + data_size;
-    let mut file = File::create(path).unwrap();
-    file.write_all(b"RIFF").unwrap();
-    file.write_all(&file_size.to_le_bytes()).unwrap();
-    file.write_all(b"WAVEfmt ").unwrap();
-    file.write_all(&16u32.to_le_bytes()).unwrap();
-    file.write_all(&1u16.to_le_bytes()).unwrap();
-    file.write_all(&1u16.to_le_bytes()).unwrap();
-    file.write_all(&sample_rate.to_le_bytes()).unwrap();
-    file.write_all(&(sample_rate * 2).to_le_bytes()).unwrap();
-    file.write_all(&2u16.to_le_bytes()).unwrap();
-    file.write_all(&16u16.to_le_bytes()).unwrap();
-    file.write_all(b"data").unwrap();
-    file.write_all(&data_size.to_le_bytes()).unwrap();
-    file.write_all(&data).unwrap();
-}
-
 fn main() {
-    fs::create_dir_all("assets").unwrap();
-    let ico_path = Path::new("assets/icon.ico");
-    if !ico_path.exists() {
-        let mut img = RgbaImage::from_pixel(64, 64, Rgba([18, 22, 33, 255]));
-        let accent = Rgba([0, 210, 255, 255]);
-        for y in 16..48 { for x in 15..22 { img.put_pixel(x, y, accent); } }
-        for y in 16..48 {
-            for x in 29..35 { img.put_pixel(x, y, accent); }
-            for x in 44..50 { img.put_pixel(x, y, accent); }
-        }
-        for y in 29..35 { for x in 29..50 { img.put_pixel(x, y, accent); } }
-        img.save(ico_path).unwrap();
-    }
-    let startup_wav = Path::new("assets/startup.wav");
-    if !startup_wav.exists() { generate_wav(startup_wav, &[440.0, 554.37, 659.25, 880.0], 0.45); }
-    let shutdown_wav = Path::new("assets/shutdown.wav");
-    if !shutdown_wav.exists() { generate_wav(shutdown_wav, &[659.25, 554.37, 440.0], 0.35); }
-    #[cfg(target_os = "windows")]
-    {
+    let out_dir = std::env::var("OUT_DIR").unwrap();
+    let ico_path = Path::new(&out_dir).join("app_icon.ico");
+    generate_pro_icon(&ico_path);
+
+    if std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default() == "windows" {
         let mut res = winres::WindowsResource::new();
-        res.set_icon("assets/icon.ico");
+        res.set_icon(ico_path.to_str().unwrap());
         res.compile().unwrap();
     }
+}
+
+fn generate_pro_icon(path: &Path) {
+    let size = 256u32;
+    let mut img: ImageBuffer<Rgba<u8>, Vec<u8>> = ImageBuffer::new(size, size);
+
+    for y in 0..size {
+        for x in 0..size {
+            let nx = (x as f32 / size as f32) * 2.0 - 1.0;
+            let ny = (y as f32 / size as f32) * 2.0 - 1.0;
+            // حواف دائرية ناعمة (Squircle) مثل أيقونات Adobe
+            let dist = (nx.abs().powf(4.0) + ny.abs().powf(4.0)).powf(0.25);
+
+            if dist <= 0.94 {
+                let t = (x + y) as f32 / (2.0 * size as f32);
+                // تدرج لوني من الأزرق الملكي إلى البنفسجي النيون
+                let r = (25.0 + t * 115.0) as u8;
+                let g = (40.0 + (1.0 - t) * 140.0) as u8;
+                let b = (210.0 + t * 45.0) as u8;
+
+                // إطار داخلي مضيء
+                if dist > 0.87 {
+                    img.put_pixel(x, y, Rgba([120, 210, 255, 255]));
+                } else {
+                    img.put_pixel(x, y, Rgba([r, g, b, 255]));
+                }
+            } else {
+                img.put_pixel(x, y, Rgba([0, 0, 0, 0]));
+            }
+        }
+    }
+
+    let white = Rgba([255, 255, 255, 255]);
+    let accent = Rgba([100, 230, 255, 255]);
+
+    // رسم حرف A هندسي احترافي + رمز حركة
+    let mut draw_rect = |x0: u32, y0: u32, w: u32, h: u32, col: Rgba<u8>| {
+        for py in y0..(y0 + h).min(size) {
+            for px in x0..(x0 + w).min(size) {
+                img.put_pixel(px, py, col);
+            }
+        }
+    };
+
+    // حرف A (أو H مدمج بشكل فني)
+    draw_rect(64, 64, 24, 128, white);
+    draw_rect(168, 64, 24, 128, white);
+    draw_rect(64, 116, 128, 22, accent);
+    // لمسة قمة A
+    draw_rect(88, 64, 80, 20, white);
+
+    let mut png_bytes = Vec::new();
+    let dyn_img = image::DynamicImage::ImageRgba8(img);
+    dyn_img.write_to(&mut std::io::Cursor::new(&mut png_bytes), image::ImageFormat::Png).unwrap();
+
+    let mut ico = Vec::new();
+    ico.extend_from_slice(&0u16.to_le_bytes());
+    ico.extend_from_slice(&1u16.to_le_bytes());
+    ico.extend_from_slice(&1u16.to_le_bytes());
+    ico.push(0); // 256px
+    ico.push(0); // 256px
+    ico.push(0);
+    ico.push(0);
+    ico.extend_from_slice(&1u16.to_le_bytes());
+    ico.extend_from_slice(&32u16.to_le_bytes());
+    ico.extend_from_slice(&(png_bytes.len() as u32).to_le_bytes());
+    ico.extend_from_slice(&22u32.to_le_bytes());
+    ico.extend_from_slice(&png_bytes);
+
+    fs::write(path, ico).unwrap();
 }
