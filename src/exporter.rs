@@ -1,5 +1,6 @@
 use crate::project::AniProject;
 use std::fs;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use tiny_skia::{Color, Paint, PathBuilder, Pixmap, Stroke, Transform};
@@ -38,8 +39,8 @@ impl VideoExportFormat {
     }
 }
 
-/// البحث الذكي عن أداة FFmpeg في النظام أو بجانب البرنامج
-fn find_ffmpeg_executable() -> Option<PathBuf> {
+/// البحث عن FFmpeg في مجلد البرنامج أو النظام
+pub fn find_ffmpeg_executable() -> Option<PathBuf> {
     if let Ok(exe) = std::env::current_exe() {
         let local_ffmpeg = exe.with_file_name("ffmpeg.exe");
         if local_ffmpeg.exists() {
@@ -63,7 +64,38 @@ fn find_ffmpeg_executable() -> Option<PathBuf> {
     None
 }
 
-/// البحث الذكي عن برنامج Blender لاستيراد ملفات .blend
+/// تحميل أداة FFmpeg تلقائياً داخل مجلد التسطيب إذا لم تكن موجودة
+pub fn ensure_ffmpeg_installed(target_dir: &Path) -> Result<PathBuf, String> {
+    if let Some(existing) = find_ffmpeg_executable() {
+        return Ok(existing);
+    }
+    let target_exe = target_dir.join("ffmpeg.exe");
+    if target_exe.exists() {
+        return Ok(target_exe);
+    }
+
+    // تحميل نسخة ffmpeg.exe جاهزة ومباشرة من مستودع موثوق
+    let url = "https://github.com/eugeneware/ffmpeg-static/releases/latest/download/win32-x64";
+    let resp = ureq::get(url)
+        .set("User-Agent", "Stick-Installer")
+        .call()
+        .map_err(|e| format!("فشل تحميل محرك الفيديو FFmpeg: {}", e))?;
+
+    let mut bytes = Vec::new();
+    resp.into_reader()
+        .read_to_end(&mut bytes)
+        .map_err(|e| format!("خطأ أثناء قراءة FFmpeg: {}", e))?;
+
+    if bytes.len() < 1_000_000 {
+        return Err("ملف FFmpeg المحمل غير مكتمل.".to_string());
+    }
+
+    fs::create_dir_all(target_dir).map_err(|e| e.to_string())?;
+    let mut f = fs::File::create(&target_exe).map_err(|e| format!("فشل حفظ ffmpeg.exe: {}", e))?;
+    f.write_all(&bytes).map_err(|e| e.to_string())?;
+    Ok(target_exe)
+}
+
 fn find_blender_executable() -> Option<PathBuf> {
     if Command::new("blender").arg("--version").output().is_ok() {
         return Some(PathBuf::from("blender"));
@@ -103,7 +135,13 @@ pub fn render_frame_pixmap(project: &AniProject, frame_idx: usize, transparent_b
             if let Some(fd) = layer.keyframes.get(&k) {
                 for m in &fd.media_items {
                     if let Ok(img) = image::open(&m.path) {
-                        let resized = img.resize_exact(m.width.max(1.0) as u32, m.height.max(1.0) as u32, image::imageops::FilterType::Triangle).to_rgba8();
+                        let resized = img
+                            .resize_exact(
+                                m.width.max(1.0) as u32,
+                                m.height.max(1.0) as u32,
+                                image::imageops::FilterType::Triangle,
+                            )
+                            .to_rgba8();
                         if let Some(mut sub_pix) = Pixmap::new(resized.width(), resized.height()) {
                             sub_pix.data_mut().copy_from_slice(resized.as_raw());
                             pixmap.draw_pixmap(
@@ -128,7 +166,11 @@ pub fn render_frame_pixmap(project: &AniProject, frame_idx: usize, transparent_b
 
                     if s.points.len() == 1 {
                         let mut pb = PathBuilder::new();
-                        pb.push_circle(s.points[0].x, s.points[0].y, (s.base_width * s.points[0].pressure * 0.5).max(1.0));
+                        pb.push_circle(
+                            s.points[0].x,
+                            s.points[0].y,
+                            (s.base_width * s.points[0].pressure * 0.5).max(1.0),
+                        );
                         if let Some(path) = pb.finish() {
                             pixmap.fill_path(&path, &paint, tiny_skia::FillRule::Winding, Transform::identity(), None);
                         }
@@ -173,6 +215,7 @@ pub fn render_frame_pixmap(project: &AniProject, frame_idx: usize, transparent_b
                                 let mut stroke = Stroke::default();
                                 stroke.width = s.base_width * inst.scale;
                                 stroke.line_cap = tiny_skia::LineCap::Round;
+                                stroke.line_join = tiny_skia::LineJoin::Round;
                                 pixmap.stroke_path(&path, &paint, &stroke, Transform::identity(), None);
                             }
                         }
@@ -201,9 +244,13 @@ pub fn export_video_multi_format(
     format: VideoExportFormat,
     bg_rgba: [u8; 4],
 ) -> Result<(), String> {
-    let ffmpeg_bin = find_ffmpeg_executable().ok_or_else(|| {
-        "FFmpeg غير مثبت! ضع ملف ffmpeg.exe بجانب البرنامج أو استخدم تصدير PNG Sequence.".to_string()
-    })?;
+    let exe_dir = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|d| d.to_path_buf()))
+        .unwrap_or_else(|| PathBuf::from("."));
+
+    // إذا لم يكن FFmpeg موجوداً يقوم بتحميله تلقائياً فوراً
+    let ffmpeg_bin = ensure_ffmpeg_installed(&exe_dir)?;
 
     let temp_dir = std::env::temp_dir().join(format!("stick_export_{}", std::process::id()));
     let _ = fs::remove_dir_all(&temp_dir);
@@ -276,7 +323,12 @@ pub fn export_video_multi_format(
 }
 
 pub fn extract_video_frames(video_path: &Path, fps: u32) -> Result<Vec<PathBuf>, String> {
-    let ffmpeg_bin = find_ffmpeg_executable().ok_or_else(|| "FFmpeg غير موجود لاستيراد الفيديو.".to_string())?;
+    let exe_dir = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|d| d.to_path_buf()))
+        .unwrap_or_else(|| PathBuf::from("."));
+    let ffmpeg_bin = ensure_ffmpeg_installed(&exe_dir)?;
+
     let out_dir = std::env::temp_dir().join(format!("stick_vid_{}", std::process::id()));
     let _ = fs::remove_dir_all(&out_dir);
     fs::create_dir_all(&out_dir).map_err(|e| e.to_string())?;
@@ -306,7 +358,6 @@ pub fn extract_video_frames(video_path: &Path, fps: u32) -> Result<Vec<PathBuf>,
     Ok(files)
 }
 
-/// استيراد مشروع بلندر (.blend) وتحويل مشاهد الـ 2D / Grease Pencil إلى فريمات قابلة للتعديل داخل Stick
 pub fn import_blender_project_frames(blend_path: &Path) -> Result<Vec<PathBuf>, String> {
     let blender_bin = find_blender_executable().ok_or_else(|| {
         "برنامج Blender غير مثبت على الجهاز! قم بتثبيت Blender لفتح ملفات .blend مباشرة.".to_string()
