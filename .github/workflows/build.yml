@@ -1,7 +1,9 @@
-name: Build and Release AniHady2D
+name: Build and Release Stick
+
 on:
   push:
-    branches: [ main ]
+    branches: [ "main" ]
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -9,26 +11,34 @@ permissions:
 jobs:
   build:
     runs-on: windows-latest
+
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout code
+        uses: actions/checkout@v4
+
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
+
       - name: Build Release EXE
         run: cargo build --release
+
       - name: Package Clean Folder
-        shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path dist
-          Copy-Item target/release/AniHady2D.exe dist/
-          if (Test-Path assets) { Copy-Item -Recurse assets dist/assets }
+          Copy-Item target/release/Stick.exe dist/Stick.exe
+          "2.2.0" | Out-File -FilePath dist/version.txt -Encoding ascii -NoNewline
+
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: AniHady2D-Windows
+          name: Stick-Windows
           path: dist/
+
       - name: Publish Direct Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v1.1.${{ github.run_number }}
-          name: AniHady2D v1.1.${{ github.run_number }}
-          files: dist/AniHady2D.exe
+          tag_name: v2.2.${{ github.run_number }}
+          name: Stick v2.2.${{ github.run_number }}
+          files: |
+            dist/Stick.exe
+            dist/version.txt
