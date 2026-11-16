@@ -3210,157 +3210,61 @@ impl eframe::App for AniHadyApp {
                 }
             }
 
-            for (l_idx, layer) in self.project.layers.iter().enumerate().rev() {
-                if layer.visible {
-                    if let Some(fd) = Self::get_effective_frame_data(layer, self.current_frame) {
-                        for m in &fd.media_items {
-                            if let Some(tex) = self.load_texture_if_needed(ctx, &m.path) {
-                                painter.image(
-                                    tex.id(),
-                                    egui::Rect::from_min_max(to_screen(egui::pos2(m.x, m.y)), to_screen(egui::pos2(m.x + m.width, m.y + m.height))),
-                                    egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
-                                    egui::Color32::WHITE,
-                                );
-                            }
-                        }
-                        for (s_idx, s) in fd.strokes.iter().enumerate() {
-                            draw_stroke_pro(&painter, s, None, scale, 0.0, 0.0, &to_screen);
-                            if l_idx == self.active_layer_idx && self.selected_stroke_indices.contains(&s_idx) && !s.points.is_empty() {
-                                let mut min_p = egui::pos2(f32::MAX, f32::MAX);
-                                let mut max_p = egui::pos2(f32::MIN, f32::MIN);
-                                for p in &s.points {
-                                    let sp = to_screen(egui::pos2(p.x, p.y));
-                                    min_p = min_p.min(sp);
-                                    max_p = max_p.max(sp);
-                                }
-                                let sel_rect = egui::Rect::from_min_max(min_p - egui::vec2(5.0, 5.0), max_p + egui::vec2(5.0, 5.0));
-                                painter.rect_stroke(
-                                    sel_rect,
-                                    2.0,
-                                    egui::Stroke::new(1.5, egui::Color32::from_rgb(56, 189, 248)),
-                                );
-                                let handle_rect = egui::Rect::from_center_size(sel_rect.right_bottom(), egui::vec2(10.0, 10.0));
-                                painter.rect_filled(handle_rect, 2.0, egui::Color32::from_rgb(56, 189, 248));
-                            }
-                        }
-                        for txt in &fd.text_items {
-                            let shaped = fix_ar(&txt.content);
-                            let col = egui::Color32::from_rgba_unmultiplied(txt.color[0], txt.color[1], txt.color[2], txt.color[3]);
-                            painter.text(
-                                to_screen(egui::pos2(txt.x, txt.y)),
-                                egui::Align2::LEFT_TOP,
-                                shaped,
-                                egui::FontId::proportional(txt.font_size * scale),
-                                col,
+            let layers_count = self.project.layers.len();
+            for l_idx in (0..layers_count).rev() {
+                if !self.project.layers[l_idx].visible {
+                    continue;
+                }
+                let fd_opt = Self::get_effective_frame_data(&self.project.layers[l_idx], self.current_frame).cloned();
+                if let Some(fd) = fd_opt {
+                    for m in &fd.media_items {
+                        if let Some(tex) = self.load_texture_if_needed(ctx, &m.path) {
+                            painter.image(
+                                tex.id(),
+                                egui::Rect::from_min_max(to_screen(egui::pos2(m.x, m.y)), to_screen(egui::pos2(m.x + m.width, m.y + m.height))),
+                                egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+                                egui::Color32::WHITE,
                             );
                         }
                     }
-                    let interp_symbols = Self::get_interpolated_symbols(layer, self.current_frame);
-                    for inst in &interp_symbols {
-                        if let Some(sym) = self.project.library_symbols.get(&inst.symbol_name) {
-                            for s in &sym.strokes {
-                                draw_stroke_pro(&painter, s, None, scale * inst.scale, inst.x, inst.y, &to_screen);
+                    for (s_idx, s) in fd.strokes.iter().enumerate() {
+                        draw_stroke_pro(&painter, s, None, scale, 0.0, 0.0, &to_screen);
+                        if l_idx == self.active_layer_idx && self.selected_stroke_indices.contains(&s_idx) && !s.points.is_empty() {
+                            let mut min_p = egui::pos2(f32::MAX, f32::MAX);
+                            let mut max_p = egui::pos2(f32::MIN, f32::MIN);
+                            for p in &s.points {
+                                let sp = to_screen(egui::pos2(p.x, p.y));
+                                min_p = min_p.min(sp);
+                                max_p = max_p.max(sp);
                             }
+                            let sel_rect = egui::Rect::from_min_max(min_p - egui::vec2(5.0, 5.0), max_p + egui::vec2(5.0, 5.0));
+                            painter.rect_stroke(
+                                sel_rect,
+                                2.0,
+                                egui::Stroke::new(1.5, egui::Color32::from_rgb(56, 189, 248)),
+                            );
+                            let handle_rect = egui::Rect::from_center_size(sel_rect.right_bottom(), egui::vec2(10.0, 10.0));
+                            painter.rect_filled(handle_rect, 2.0, egui::Color32::from_rgb(56, 189, 248));
+                        }
+                    }
+                    for txt in &fd.text_items {
+                        let shaped = fix_ar(&txt.content);
+                        let col = egui::Color32::from_rgba_unmultiplied(txt.color[0], txt.color[1], txt.color[2], txt.color[3]);
+                        painter.text(
+                            to_screen(egui::pos2(txt.x, txt.y)),
+                            egui::Align2::LEFT_TOP,
+                            shaped,
+                            egui::FontId::proportional(txt.font_size * scale),
+                            col,
+                        );
+                    }
+                }
+                let interp_symbols = Self::get_interpolated_symbols(&self.project.layers[l_idx], self.current_frame);
+                for inst in &interp_symbols {
+                    if let Some(sym) = self.project.library_symbols.get(&inst.symbol_name) {
+                        for s in &sym.strokes {
+                            draw_stroke_pro(&painter, s, None, scale * inst.scale, inst.x, inst.y, &to_screen);
                         }
                     }
                 }
             }
-            if let Some(stroke) = &self.current_stroke {
-                draw_stroke_pro(&painter, stroke, None, scale, 0.0, 0.0, &to_screen);
-            }
-
-            if self.is_drawing_lasso && self.lasso_polygon.len() > 1 {
-                let screen_pts: Vec<egui::Pos2> = self.lasso_polygon.iter().map(|&p| to_screen(p)).collect();
-                painter.add(egui::Shape::closed_line(
-                    screen_pts,
-                    egui::Stroke::new(1.5, egui::Color32::from_rgb(56, 189, 248)),
-                ));
-            }
-        });
-    }
-}
-
-fn draw_stroke_pro<F: Fn(egui::Pos2) -> egui::Pos2>(
-    painter: &egui::Painter,
-    stroke: &Stroke,
-    override_color: Option<[u8; 4]>,
-    scale: f32,
-    ox: f32,
-    oy: f32,
-    to_screen: &F,
-) {
-    if stroke.points.is_empty() {
-        return;
-    }
-
-    let c = override_color.unwrap_or(stroke.color);
-    let color = egui::Color32::from_rgba_unmultiplied(c[0], c[1], c[2], c[3]);
-
-    if stroke.points.len() == 1 {
-        let p = to_screen(egui::pos2(stroke.points[0].x + ox, stroke.points[0].y + oy));
-        let r = (stroke.base_width * stroke.points[0].pressure * scale) * 0.5;
-        painter.circle_filled(p, r.max(1.0), color);
-        return;
-    }
-
-    if let Some(fc) = stroke.fill_color {
-        let fill_c = override_color.unwrap_or(fc);
-        let pts: Vec<egui::Pos2> = stroke
-            .points
-            .iter()
-            .map(|p| to_screen(egui::pos2(p.x + ox, p.y + oy)))
-            .collect();
-        painter.add(egui::Shape::convex_polygon(
-            pts,
-            egui::Color32::from_rgba_unmultiplied(fill_c[0], fill_c[1], fill_c[2], fill_c[3]),
-            egui::Stroke::NONE,
-        ));
-    }
-
-    let total = stroke.points.len();
-    for (idx, w) in stroke.points.windows(2).enumerate() {
-        let p0 = to_screen(egui::pos2(w[0].x + ox, w[0].y + oy));
-        let p1 = to_screen(egui::pos2(w[1].x + ox, w[1].y + oy));
-
-        let taper = if stroke.is_vector {
-            1.0
-        } else {
-            let progress = idx as f32 / total as f32;
-            if progress < 0.08 {
-                (progress / 0.08).max(0.35)
-            } else if progress > 0.92 {
-                ((1.0 - progress) / 0.08).max(0.35)
-            } else {
-                1.0
-            }
-        };
-
-        let avg_pressure = ((w[0].pressure + w[1].pressure) * 0.5) * taper;
-        let width = (stroke.base_width * avg_pressure * scale).max(1.0);
-
-        painter.line_segment([p0, p1], egui::Stroke::new(width, color));
-        painter.circle_filled(p1, width * 0.5, color);
-    }
-}
-
-fn main() -> eframe::Result<()> {
-    let options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default()
-            .with_title("AniHady2D")
-            .with_inner_size([1366.0, 768.0])
-            .with_icon(generate_window_icon()),
-        renderer: eframe::Renderer::Wgpu,
-        wgpu_options: eframe::egui_wgpu::WgpuConfiguration {
-            power_preference: eframe::wgpu::PowerPreference::HighPerformance,
-            present_mode: eframe::wgpu::PresentMode::AutoNoVsync,
-            ..Default::default()
-        },
-        ..Default::default()
-    };
-
-    eframe::run_native(
-        "AniHady2D",
-        options,
-        Box::new(|cc| Ok(Box::new(AniHadyApp::new(cc)))),
-    )
-}
