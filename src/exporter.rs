@@ -1,5 +1,7 @@
 use crate::project::AniProject;
-use image::ImageFormat;
+use image::codecs::gif::{GifEncoder, Repeat};
+use image::{Delay, Frame, ImageFormat, RgbaImage};
+use rayon::prelude::*;
 use std::fs;
 use std::io::{Cursor, Read};
 use std::path::{Path, PathBuf};
@@ -13,7 +15,7 @@ pub enum VideoExportFormat {
     Avi,
     Mkv,
     Webm,
-    Gif,
+    GifInstant,
 }
 
 impl VideoExportFormat {
@@ -24,7 +26,7 @@ impl VideoExportFormat {
             VideoExportFormat::Avi => "avi",
             VideoExportFormat::Mkv => "mkv",
             VideoExportFormat::Webm => "webm",
-            VideoExportFormat::Gif => "gif",
+            VideoExportFormat::GifInstant => "gif",
         }
     }
 
@@ -35,7 +37,7 @@ impl VideoExportFormat {
             VideoExportFormat::Avi => "AVI (Windows Video)",
             VideoExportFormat::Mkv => "MKV (Matroska)",
             VideoExportFormat::Webm => "WebM (VP9 - شفافية/ويب)",
-            VideoExportFormat::Gif => "GIF (صورة متحركة)",
+            VideoExportFormat::GifInstant => "GIF متحرك (فوري - بدون الحاجة لـ FFmpeg!)",
         }
     }
 }
@@ -77,7 +79,6 @@ impl ImageExportFormat {
     }
 }
 
-/// البحث عن FFmpeg في مجلد البرنامج أو النظام
 pub fn find_ffmpeg_executable() -> Option<PathBuf> {
     if let Ok(exe) = std::env::current_exe() {
         let local_ffmpeg = exe.with_file_name("ffmpeg.exe");
@@ -102,7 +103,6 @@ pub fn find_ffmpeg_executable() -> Option<PathBuf> {
     None
 }
 
-/// تحميل حزمة FFmpeg وفك ضغط ffmpeg.exe تلقائياً (تُستدعى في خيط خلفي حتى لا يتجمد البرنامج)
 pub fn ensure_ffmpeg_installed(target_dir: &Path) -> Result<PathBuf, String> {
     if let Some(existing) = find_ffmpeg_executable() {
         return Ok(existing);
@@ -140,6 +140,7 @@ pub fn ensure_ffmpeg_installed(target_dir: &Path) -> Result<PathBuf, String> {
     Err("لم يتم العثور على ffmpeg.exe داخل الحزمة المحملة.".to_string())
 }
 
+/// مصير فيكتور سريع (Analytic Anti-Aliasing) يعتمد على معمارية Time is a Function
 pub fn render_frame_pixmap(project: &AniProject, frame_idx: usize, transparent_bg: bool, bg_rgba: [u8; 4]) -> Pixmap {
     let w = project.width.max(1);
     let h = project.height.max(1);
@@ -153,96 +154,44 @@ pub fn render_frame_pixmap(project: &AniProject, frame_idx: usize, transparent_b
         if !layer.visible {
             continue;
         }
-        let eff_key = layer.keyframes.keys().filter(|&&k| k <= frame_idx).max().copied();
-        if let Some(k) = eff_key {
-            if let Some(fd) = layer.keyframes.get(&k) {
-                for m in &fd.media_items {
-                    if let Ok(img) = image::open(&m.path) {
-                        let resized = img
-                            .resize_exact(
-                                m.width.max(1.0) as u32,
-                                m.height.max(1.0) as u32,
-                                image::imageops::FilterType::Triangle,
-                            )
-                            .to_rgba8();
-                        if let Some(mut sub_pix) = Pixmap::new(resized.width(), resized.height()) {
-                            sub_pix.data_mut().copy_from_slice(resized.as_raw());
-                            pixmap.draw_pixmap(
-                                m.x as i32,
-                                m.y as i32,
-                                sub_pix.as_ref(),
-                                &tiny_skia::PixmapPaint::default(),
-                                Transform::identity(),
-                                None,
-                            );
-                        }
-                    }
+        let fd = project.evaluate_layer_at_frame(layer, frame_idx);
+
+        for m in &fd.media_items {
+            if let Ok(img) = image::open(&m.path) {
+                let resized = img
+                    .resize_exact(
+                        m.width.max(1.0) as u32,
+                        m.height.max(1.0) as u32,
+                        image::imageops::FilterType::Triangle,
+                    )
+                    .to_rgba8();
+                if let Some(mut sub_pix) = Pixmap::new(resized.width(), resized.height()) {
+                    sub_pix.data_mut().copy_from_slice(resized.as_raw());
+                    pixmap.draw_pixmap(
+                        m.x as i32,
+                        m.y as i32,
+                        sub_pix.as_ref(),
+                        &tiny_skia::PixmapPaint::default(),
+                        Transform::identity(),
+                        None,
+                    );
                 }
+            }
+        }
 
-                for s in &fd.strokes {
-                    if s.points.is_empty() {
-                        continue;
-                    }
-                    let mut paint = Paint::default();
-                    paint.set_color_rgba8(s.color[0], s.color[1], s.color[2], s.color[3]);
-                    paint.anti_alias = true;
+        for s in &fd.strokes {
+            draw_skia_stroke(&mut pixmap, s, Transform::identity(), 1.0);
+        }
 
-                    if s.points.len() == 1 {
-                        let mut pb = PathBuilder::new();
-                        pb.push_circle(
-                            s.points[0].x,
-                            s.points[0].y,
-                            (s.base_width * s.points[0].pressure * 0.5).max(1.0),
-                        );
-                        if let Some(path) = pb.finish() {
-                            pixmap.fill_path(&path, &paint, tiny_skia::FillRule::Winding, Transform::identity(), None);
-                        }
-                        continue;
-                    }
-
-                    let mut pb = PathBuilder::new();
-                    pb.move_to(s.points[0].x, s.points[0].y);
-                    for p in &s.points[1..] {
-                        pb.line_to(p.x, p.y);
-                    }
-                    if let Some(path) = pb.finish() {
-                        if let Some(fc) = s.fill_color {
-                            let mut fill_paint = Paint::default();
-                            fill_paint.set_color_rgba8(fc[0], fc[1], fc[2], fc[3]);
-                            fill_paint.anti_alias = true;
-                            pixmap.fill_path(&path, &fill_paint, tiny_skia::FillRule::Winding, Transform::identity(), None);
-                        }
-                        let mut stroke = Stroke::default();
-                        stroke.width = s.base_width;
-                        stroke.line_cap = tiny_skia::LineCap::Round;
-                        stroke.line_join = tiny_skia::LineJoin::Round;
-                        pixmap.stroke_path(&path, &paint, &stroke, Transform::identity(), None);
-                    }
-                }
-
-                for inst in &fd.symbol_instances {
-                    if let Some(sym) = project.library_symbols.get(&inst.symbol_name) {
-                        for s in &sym.strokes {
-                            if s.points.len() < 2 {
-                                continue;
-                            }
-                            let mut pb = PathBuilder::new();
-                            pb.move_to(s.points[0].x * inst.scale + inst.x, s.points[0].y * inst.scale + inst.y);
-                            for p in &s.points[1..] {
-                                pb.line_to(p.x * inst.scale + inst.x, p.y * inst.scale + inst.y);
-                            }
-                            if let Some(path) = pb.finish() {
-                                let mut paint = Paint::default();
-                                paint.set_color_rgba8(s.color[0], s.color[1], s.color[2], s.color[3]);
-                                paint.anti_alias = true;
-                                let mut stroke = Stroke::default();
-                                stroke.width = s.base_width * inst.scale;
-                                stroke.line_cap = tiny_skia::LineCap::Round;
-                                stroke.line_join = tiny_skia::LineJoin::Round;
-                                pixmap.stroke_path(&path, &paint, &stroke, Transform::identity(), None);
-                            }
-                        }
-                    }
+        for inst in &fd.symbol_instances {
+            if let Some(sym) = project.library_symbols.get(&inst.symbol_name) {
+                let sym_strokes = project.evaluate_symbol_strokes(sym, frame_idx);
+                let ts = Transform::from_translate(-inst.anchor_offset_x, -inst.anchor_offset_y)
+                    .post_scale(inst.scale, inst.scale)
+                    .post_rotate(inst.rotation_deg)
+                    .post_translate(inst.x + inst.anchor_offset_x, inst.y + inst.anchor_offset_y);
+                for s in sym_strokes {
+                    draw_skia_stroke(&mut pixmap, s, ts, inst.scale);
                 }
             }
         }
@@ -250,19 +199,50 @@ pub fn render_frame_pixmap(project: &AniProject, frame_idx: usize, transparent_b
     pixmap
 }
 
-/// تصدير الرسمة أو الفريم الحالي بأشهر صيغ الصور (PNG, JPG, WebP, BMP, TIFF)
-pub fn export_single_image_format(
-    project: &AniProject,
-    frame_idx: usize,
-    out_path: &Path,
-    format: ImageExportFormat,
-    bg_rgba: [u8; 4],
-) -> Result<(), String> {
-    let pixmap = render_frame_pixmap(project, frame_idx, format.is_transparent(), bg_rgba);
+fn draw_skia_stroke(pixmap: &mut Pixmap, s: &crate::project::Stroke, ts: Transform, width_scale: f32) {
+    if s.points.is_empty() {
+        return;
+    }
+    let mut paint = Paint::default();
+    paint.set_color_rgba8(s.color[0], s.color[1], s.color[2], s.color[3]);
+    paint.anti_alias = true;
+
+    if s.points.len() == 1 {
+        let mut pb = PathBuilder::new();
+        pb.push_circle(
+            s.points[0].x,
+            s.points[0].y,
+            (s.base_width * s.points[0].pressure * 0.5).max(1.0),
+        );
+        if let Some(path) = pb.finish() {
+            pixmap.fill_path(&path, &paint, tiny_skia::FillRule::Winding, ts, None);
+        }
+        return;
+    }
+
+    let mut pb = PathBuilder::new();
+    pb.move_to(s.points[0].x, s.points[0].y);
+    for p in &s.points[1..] {
+        pb.line_to(p.x, p.y);
+    }
+    if let Some(path) = pb.finish() {
+        if let Some(fc) = s.fill_color {
+            let mut fill_paint = Paint::default();
+            fill_paint.set_color_rgba8(fc[0], fc[1], fc[2], fc[3]);
+            fill_paint.anti_alias = true;
+            pixmap.fill_path(&path, &fill_paint, tiny_skia::FillRule::Winding, ts, None);
+        }
+        let mut stroke = Stroke::default();
+        stroke.width = (s.base_width * width_scale).max(1.0);
+        stroke.line_cap = tiny_skia::LineCap::Round;
+        stroke.line_join = tiny_skia::LineJoin::Round;
+        pixmap.stroke_path(&path, &paint, &stroke, ts, None);
+    }
+}
+
+fn pixmap_to_rgba_image(pixmap: &Pixmap) -> RgbaImage {
     let w = pixmap.width();
     let h = pixmap.height();
-
-    // فك ضرب الألفا (Unpremultiply) لاستخراج ألوان RGBA دقيقة
     let mut raw_rgba = Vec::with_capacity((w * h * 4) as usize);
     for px in pixmap.pixels() {
         let c = px.demultiply();
@@ -271,9 +251,18 @@ pub fn export_single_image_format(
         raw_rgba.push(c.blue());
         raw_rgba.push(c.alpha());
     }
+    RgbaImage::from_raw(w, h, raw_rgba).unwrap_or_else(|| RgbaImage::new(w, h))
+}
 
-    let img_buf = image::RgbaImage::from_raw(w, h, raw_rgba)
-        .ok_or_else(|| "فشل تجهيز بيانات الصورة.".to_string())?;
+pub fn export_single_image_format(
+    project: &AniProject,
+    frame_idx: usize,
+    out_path: &Path,
+    format: ImageExportFormat,
+    bg_rgba: [u8; 4],
+) -> Result<(), String> {
+    let pixmap = render_frame_pixmap(project, frame_idx, format.is_transparent(), bg_rgba);
+    let img_buf = pixmap_to_rgba_image(&pixmap);
     let dyn_img = image::DynamicImage::ImageRgba8(img_buf);
 
     match format {
@@ -299,15 +288,149 @@ pub fn export_single_image_format(
     }
 }
 
+/// تصدير متسلسل فائق السرعة بالتوازي (Rayon Parallel Rendering)
 pub fn export_transparent_png_sequence(project: &AniProject, folder: &Path) -> Result<usize, String> {
     fs::create_dir_all(folder).map_err(|e| format!("Failed to create folder: {}", e))?;
     let total = project.total_frames.max(1);
-    for f in 1..=total {
+    let frames: Vec<usize> = (1..=total).collect();
+
+    frames.par_iter().try_for_each(|&f| {
         let pixmap = render_frame_pixmap(project, f, true, [255, 255, 255, 255]);
         let file_path = folder.join(format!("stick_frame_{:04}.png", f));
-        pixmap.save_png(&file_path).map_err(|e| format!("PNG save error: {}", e))?;
-    }
+        pixmap.save_png(&file_path).map_err(|e| format!("PNG save error: {}", e))
+    })?;
+
     Ok(total)
+}
+
+/// تصدير Sprite Sheet أفقي احترافي لمطوري الألعاب (Unity / Godot / GameMaker)
+pub fn export_sprite_sheet(project: &AniProject, out_path: &Path) -> Result<usize, String> {
+    let total = project.total_frames.max(1);
+    let fw = project.width.max(1);
+    let fh = project.height.max(1);
+
+    let frames: Vec<RgbaImage> = (1..=total)
+        .into_par_iter()
+        .map(|f| {
+            let pix = render_frame_pixmap(project, f, true, [255, 255, 255, 255]);
+            pixmap_to_rgba_image(&pix)
+        })
+        .collect();
+
+    let mut sheet = RgbaImage::new(fw * (total as u32), fh);
+    for (idx, frame_img) in frames.iter().enumerate() {
+        image::imageops::overlay(&mut sheet, frame_img, (idx as i64) * (fw as i64), 0);
+    }
+    sheet.save_with_format(out_path, ImageFormat::Png).map_err(|e| e.to_string())?;
+    Ok(total)
+}
+
+/// تصدير Lottie JSON للويب وتطبيقات الموبايل (Bodymovin Standard)
+pub fn export_lottie_json(project: &AniProject, out_path: &Path) -> Result<(), String> {
+    let total = project.total_frames.max(1);
+    let fps = project.fps.max(1);
+    let mut layers_json = Vec::new();
+
+    for (l_idx, layer) in project.layers.iter().enumerate() {
+        if !layer.visible {
+            continue;
+        }
+        let fd = project.evaluate_layer_at_frame(layer, 1);
+        let mut shapes = Vec::new();
+        for s in &fd.strokes {
+            if s.points.len() < 2 {
+                continue;
+            }
+            let vertices: Vec<[f32; 2]> = s.points.iter().map(|p| [p.x, p.y]).collect();
+            let in_tangents: Vec<[f32; 2]> = vec![[0.0, 0.0]; vertices.len()];
+            let out_tangents: Vec<[f32; 2]> = vec![[0.0, 0.0]; vertices.len()];
+            shapes.push(serde_json::json!({
+                "ty": "gr",
+                "it": [
+                    {
+                        "ty": "sh",
+                        "ks": {
+                            "a": 0,
+                            "k": {
+                                "i": in_tangents,
+                                "o": out_tangents,
+                                "v": vertices,
+                                "c": false
+                            }
+                        }
+                    },
+                    {
+                        "ty": "st",
+                        "c": { "a": 0, "k": [s.color[0] as f32 / 255.0, s.color[1] as f32 / 255.0, s.color[2] as f32 / 255.0, 1.0] },
+                        "o": { "a": 0, "k": 100 },
+                        "w": { "a": 0, "k": s.base_width },
+                        "lc": 2,
+                        "lj": 2
+                    }
+                ]
+            }));
+        }
+
+        layers_json.push(serde_json::json!({
+            "ddd": 0,
+            "ind": l_idx + 1,
+            "ty": 4,
+            "nm": layer.name,
+            "sr": 1,
+            "ks": {
+                "o": { "a": 0, "k": 100 },
+                "r": { "a": 0, "k": 0 },
+                "p": { "a": 0, "k": [0, 0, 0] },
+                "a": { "a": 0, "k": [0, 0, 0] },
+                "s": { "a": 0, "k": [100, 100, 100] }
+            },
+            "shapes": shapes,
+            "ip": 0,
+            "op": total,
+            "st": 0
+        }));
+    }
+
+    let lottie = serde_json::json!({
+        "v": "5.7.4",
+        "fr": fps,
+        "ip": 0,
+        "op": total,
+        "w": project.width,
+        "h": project.height,
+        "nm": "Stick_Animation",
+        "ddd": 0,
+        "assets": [],
+        "layers": layers_json
+    });
+
+    let serialized = serde_json::to_string_pretty(&lottie).map_err(|e| e.to_string())?;
+    fs::write(out_path, serialized).map_err(|e| e.to_string())
+}
+
+/// تصدير GIF متحرك مدمج وفوري بدون الحاجة لأي برامج خارجية (0 ثانية انتظار)
+pub fn export_instant_gif(project: &AniProject, out_path: &Path, bg_rgba: [u8; 4]) -> Result<(), String> {
+    let total = project.total_frames.max(1);
+    let fps = project.fps.max(1);
+    let delay_ms = (1000 / fps).max(15);
+
+    let frames_rgba: Vec<RgbaImage> = (1..=total)
+        .into_par_iter()
+        .map(|f| {
+            let pix = render_frame_pixmap(project, f, false, bg_rgba);
+            pixmap_to_rgba_image(&pix)
+        })
+        .collect();
+
+    let file = fs::File::create(out_path).map_err(|e| e.to_string())?;
+    let mut encoder = GifEncoder::new_with_speed(file, 10);
+    encoder.set_repeat(Repeat::Infinite).map_err(|e| e.to_string())?;
+
+    for img in frames_rgba {
+        let frame = Frame::from_parts(img, 0, 0, Delay::from_numer_denom_ms(delay_ms, 1));
+        encoder.encode_frame(frame).map_err(|e| e.to_string())?;
+    }
+    Ok(())
 }
 
 pub fn export_video_multi_format(
@@ -316,6 +439,10 @@ pub fn export_video_multi_format(
     format: VideoExportFormat,
     bg_rgba: [u8; 4],
 ) -> Result<(), String> {
+    if format == VideoExportFormat::GifInstant {
+        return export_instant_gif(project, output_path, bg_rgba);
+    }
+
     let exe_dir = std::env::current_exe()
         .ok()
         .and_then(|p| p.parent().map(|d| d.to_path_buf()))
@@ -329,11 +456,14 @@ pub fn export_video_multi_format(
 
     let total = project.total_frames.max(1);
     let is_transparent = format == VideoExportFormat::Webm;
-    for f in 1..=total {
+
+    // تصدير الفريمات بالتوازي فائق السرعة عبر جميع أنوية المعالج
+    let indices: Vec<usize> = (1..=total).collect();
+    indices.par_iter().try_for_each(|&f| {
         let pixmap = render_frame_pixmap(project, f, is_transparent, bg_rgba);
         let file_path = temp_dir.join(format!("frame_{:04}.png", f));
-        pixmap.save_png(&file_path).map_err(|e| e.to_string())?;
-    }
+        pixmap.save_png(&file_path).map_err(|e| e.to_string())
+    })?;
 
     let input_pattern = temp_dir.join("frame_%04d.png");
     let fps_str = project.fps.max(1).to_string();
@@ -348,8 +478,8 @@ pub fn export_video_multi_format(
             cmd.args([
                 "-vf", "pad=ceil(iw/2)*2:ceil(ih/2)*2",
                 "-c:v", "libx264",
-                "-preset", "fast",
-                "-crf", "18",
+                "-preset", "ultrafast",
+                "-crf", "20",
                 "-pix_fmt", "yuv420p",
                 out_str,
             ]);
@@ -358,6 +488,7 @@ pub fn export_video_multi_format(
             cmd.args([
                 "-vf", "pad=ceil(iw/2)*2:ceil(ih/2)*2",
                 "-c:v", "libx264",
+                "-preset", "ultrafast",
                 "-pix_fmt", "yuv420p",
                 "-f", "mov",
                 out_str,
@@ -370,16 +501,15 @@ pub fn export_video_multi_format(
             cmd.args([
                 "-vf", "pad=ceil(iw/2)*2:ceil(ih/2)*2",
                 "-c:v", "libx264",
+                "-preset", "ultrafast",
                 "-pix_fmt", "yuv420p",
                 out_str,
             ]);
         }
         VideoExportFormat::Webm => {
-            cmd.args(["-c:v", "libvpx-vp9", "-pix_fmt", "yuva420p", out_str]);
+            cmd.args(["-c:v", "libvpx-vp9", "-deadline", "realtime", "-pix_fmt", "yuva420p", out_str]);
         }
-        VideoExportFormat::Gif => {
-            cmd.args(["-vf", "split[s0][s1];[s0]palettegen[p];[s1][p]paletteuse", out_str]);
-        }
+        VideoExportFormat::GifInstant => {}
     }
 
     let output = cmd.output().map_err(|e| format!("FFmpeg launch error: {}", e))?;
