@@ -112,6 +112,77 @@ impl AniHadyApp {
         false
     }
 
+    fn import_image_dialog(&mut self) {
+        if let Some(path) = rfd::FileDialog::new()
+            .add_filter("Images", &["png", "jpg", "jpeg", "webp", "bmp"])
+            .pick_file()
+        {
+            self.save_undo_state();
+            if let Some(layer) = self.project.layers.get_mut(self.active_layer_idx) {
+                let frame = layer.keyframes.entry(self.current_frame).or_default();
+                frame.media_items.push(MediaItem {
+                    path: path.to_string_lossy().to_string(),
+                    media_type: MediaType::Image,
+                    x: 100.0,
+                    y: 50.0,
+                    width: 400.0,
+                    height: 300.0,
+                });
+                self.has_unsaved_changes = true;
+                self.status_message = "Image Imported!".to_string();
+            }
+        }
+    }
+
+    fn import_video_dialog(&mut self) {
+        if let Some(path) = rfd::FileDialog::new()
+            .add_filter("Videos", &["mp4", "mov", "avi", "mkv"])
+            .pick_file()
+        {
+            self.status_message = "Extracting video frames...".to_string();
+            match exporter::extract_video_frames(&path, self.project.fps) {
+                Ok(frames) => {
+                    self.save_undo_state();
+                    if let Some(layer) = self.project.layers.get_mut(self.active_layer_idx) {
+                        for (i, f_path) in frames.iter().enumerate() {
+                            let f_idx = self.current_frame + i;
+                            if f_idx <= self.project.total_frames {
+                                let frame = layer.keyframes.entry(f_idx).or_default();
+                                frame.media_items.push(MediaItem {
+                                    path: f_path.to_string_lossy().to_string(),
+                                    media_type: MediaType::VideoFrame,
+                                    x: 0.0,
+                                    y: 0.0,
+                                    width: self.project.width as f32,
+                                    height: self.project.height as f32,
+                                });
+                            }
+                        }
+                        self.has_unsaved_changes = true;
+                        self.status_message = format!("Imported {} video frames!", frames.len());
+                    }
+                }
+                Err(e) => self.status_message = e,
+            }
+        }
+    }
+
+    fn import_audio_dialog(&mut self) {
+        if let Some(path) = rfd::FileDialog::new()
+            .add_filter("Audio", &["mp3", "wav"])
+            .pick_file()
+        {
+            let name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
+            self.project.audio_tracks.push(AudioTrack {
+                name: name.clone(),
+                file_path: path.to_string_lossy().to_string(),
+                start_frame: self.current_frame,
+            });
+            self.has_unsaved_changes = true;
+            self.status_message = format!("Audio added: {}", name);
+        }
+    }
+
     fn start_audio_playback(&mut self) {
         if let Some(track) = self.project.audio_tracks.first() {
             if let Ok((stream, handle)) = OutputStream::try_default() {
@@ -190,7 +261,7 @@ impl eframe::App for AniHadyApp {
 
         if self.is_playing {
             let now = ctx.input(|i| i.time);
-            if now - self.last_frame_time >= 1.0 / (self.project.fps as f64) {
+            if now - self.last_frame_time >= 1.0 / (self.project.fps.max(1) as f64) {
                 self.current_frame += 1;
                 if self.current_frame > self.project.total_frames {
                     self.current_frame = 1;
@@ -269,6 +340,7 @@ impl eframe::App for AniHadyApp {
                 });
         }
 
+        // الشريط العلوي السريع
         egui::TopBottomPanel::top("top_bar").show(ctx, |ui| {
             egui::menu::bar(ui, |ui| {
                 ui.menu_button("File", |ui| {
@@ -289,43 +361,6 @@ impl eframe::App for AniHadyApp {
                         ui.close_menu();
                     }
                     ui.separator();
-                    if ui.button("Import Image (PNG/JPG/WebP)").clicked() {
-                        if let Some(path) = rfd::FileDialog::new()
-                            .add_filter("Images", &["png", "jpg", "jpeg", "webp", "bmp"])
-                            .pick_file()
-                        {
-                            self.save_undo_state();
-                            if let Some(layer) = self.project.layers.get_mut(self.active_layer_idx) {
-                                let frame = layer.keyframes.entry(self.current_frame).or_default();
-                                frame.media_items.push(MediaItem {
-                                    path: path.to_string_lossy().to_string(),
-                                    media_type: MediaType::Image,
-                                    x: 100.0,
-                                    y: 50.0,
-                                    width: 300.0,
-                                    height: 200.0,
-                                });
-                                self.has_unsaved_changes = true;
-                            }
-                        }
-                        ui.close_menu();
-                    }
-                    if ui.button("Import Audio (MP3/WAV)").clicked() {
-                        if let Some(path) = rfd::FileDialog::new()
-                            .add_filter("Audio", &["mp3", "wav"])
-                            .pick_file()
-                        {
-                            let name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
-                            self.project.audio_tracks.push(AudioTrack {
-                                name,
-                                file_path: path.to_string_lossy().to_string(),
-                                start_frame: self.current_frame,
-                            });
-                            self.has_unsaved_changes = true;
-                        }
-                        ui.close_menu();
-                    }
-                    ui.separator();
                     if ui.button("Export Video (MP4)").clicked() {
                         if let Some(path) = rfd::FileDialog::new()
                             .add_filter("MP4 Video", &["mp4"])
@@ -341,7 +376,17 @@ impl eframe::App for AniHadyApp {
                     }
                 });
                 ui.separator();
-                if ui.button("Undo (Ctrl+Z)").clicked() {
+                if ui.button("+ Image").clicked() {
+                    self.import_image_dialog();
+                }
+                if ui.button("+ Video").clicked() {
+                    self.import_video_dialog();
+                }
+                if ui.button("+ Audio").clicked() {
+                    self.import_audio_dialog();
+                }
+                ui.separator();
+                if ui.button("Undo").clicked() {
                     self.undo();
                 }
                 if ui.button("Symbol (F8)").clicked() {
@@ -349,7 +394,7 @@ impl eframe::App for AniHadyApp {
                 }
                 ui.separator();
                 ui.label(format!("Zoom: {:.0}%", self.zoom_level * 100.0));
-                if ui.button("Zoom Default (100%)").clicked() {
+                if ui.button("100%").clicked() {
                     self.zoom_level = 1.0;
                     self.pan_offset = egui::Vec2::ZERO;
                 }
@@ -358,6 +403,7 @@ impl eframe::App for AniHadyApp {
             });
         });
 
+        // لوحة الأدوات اليسرى
         egui::SidePanel::left("tools_panel").exact_width(155.0).show(ctx, |ui| {
             ui.heading("Tools");
             ui.separator();
@@ -393,33 +439,13 @@ impl eframe::App for AniHadyApp {
             ui.checkbox(&mut self.pen_pressure_enabled, "Pen Pressure");
         });
 
-        egui::SidePanel::right("right_panel").exact_width(190.0).show(ctx, |ui| {
-            ui.heading("Layers");
-            if ui.button("+ New Layer").clicked() {
-                self.save_undo_state();
-                let count = self.project.layers.len() + 1;
-                let mut kf = HashMap::new();
-                kf.insert(1, Default::default());
-                self.project.layers.push(Layer {
-                    name: format!("Layer {}", count),
-                    visible: true,
-                    locked: false,
-                    keyframes: kf,
-                });
-            }
-            ui.separator();
-            for (idx, layer) in self.project.layers.iter_mut().enumerate() {
-                ui.horizontal(|ui| {
-                    ui.checkbox(&mut layer.visible, "");
-                    if ui.selectable_label(self.active_layer_idx == idx, &layer.name).clicked() {
-                        self.active_layer_idx = idx;
-                    }
-                });
-            }
-            ui.add_space(15.0);
-            ui.separator();
+        // لوحة مكتبة الرموز والملفات الصوتية اليمنى
+        egui::SidePanel::right("right_panel").exact_width(195.0).show(ctx, |ui| {
             ui.heading("Symbols Library");
             let sym_names: Vec<String> = self.project.library_symbols.keys().cloned().collect();
+            if sym_names.is_empty() {
+                ui.label("Draw & press F8 to create symbol");
+            }
             for s_name in sym_names {
                 ui.horizontal(|ui| {
                     ui.label(&s_name);
@@ -438,11 +464,39 @@ impl eframe::App for AniHadyApp {
                     }
                 });
             }
+            ui.add_space(15.0);
+            ui.separator();
+            ui.heading("Audio Tracks");
+            if ui.button("+ Add Audio Track").clicked() {
+                self.import_audio_dialog();
+            }
+            let mut remove_audio_idx = None;
+            for (idx, track) in self.project.audio_tracks.iter().enumerate() {
+                ui.horizontal(|ui| {
+                    ui.label(format!("🎵 {}", track.name));
+                    if ui.button("X").clicked() {
+                        remove_audio_idx = Some(idx);
+                    }
+                });
+            }
+            if let Some(idx) = remove_audio_idx {
+                self.project.audio_tracks.remove(idx);
+            }
         });
 
-        egui::TopBottomPanel::bottom("timeline_panel").exact_height(160.0).show(ctx, |ui| {
+        // التايم لاين الاحترافي السفلي (طبقات + فريمات + تحكم تشغيل كامل)
+        egui::TopBottomPanel::bottom("timeline_panel").exact_height(210.0).show(ctx, |ui| {
+            // شريط أزرار التشغيل والـ FPS والـ Onion Skin
             ui.horizontal(|ui| {
-                if ui.button(if self.is_playing { "Pause" } else { "Play" }).clicked() {
+                if ui.button("|<").on_hover_text("First Frame").clicked() {
+                    self.current_frame = 1;
+                }
+                if ui.button("<").on_hover_text("Previous Frame").clicked() {
+                    if self.current_frame > 1 {
+                        self.current_frame -= 1;
+                    }
+                }
+                if ui.button(if self.is_playing { "⏸ Pause" } else { "▶ Play" }).clicked() {
                     self.is_playing = !self.is_playing;
                     if self.is_playing {
                         self.start_audio_playback();
@@ -450,7 +504,20 @@ impl eframe::App for AniHadyApp {
                         self.stop_audio_playback();
                     }
                 }
+                if ui.button(">").on_hover_text("Next Frame").clicked() {
+                    if self.current_frame < self.project.total_frames {
+                        self.current_frame += 1;
+                    }
+                }
+                if ui.button(">|").on_hover_text("Last Frame").clicked() {
+                    self.current_frame = self.project.total_frames;
+                }
+
+                ui.separator();
                 ui.label(format!("Frame: {} / {}", self.current_frame, self.project.total_frames));
+                ui.label("FPS:");
+                ui.add(egui::DragValue::new(&mut self.project.fps).range(1..=60));
+
                 ui.separator();
                 ui.checkbox(&mut self.project.onion_skin.enabled, "Onion Skin");
                 if self.project.onion_skin.enabled {
@@ -461,19 +528,123 @@ impl eframe::App for AniHadyApp {
                     ui.add(egui::DragValue::new(&mut self.project.onion_skin.frames_after).range(0..=10));
                     ui.color_edit_button_srgba_unmultiplied(&mut self.project.onion_skin.color_after);
                 }
+
+                ui.separator();
+                if ui.button("+ Layer").clicked() {
+                    self.save_undo_state();
+                    let count = self.project.layers.len() + 1;
+                    let mut kf = HashMap::new();
+                    kf.insert(1, Default::default());
+                    self.project.layers.push(Layer {
+                        name: format!("Layer {}", count),
+                        visible: true,
+                        locked: false,
+                        keyframes: kf,
+                    });
+                }
+                if ui.button("Clear Frame").clicked() {
+                    self.save_undo_state();
+                    if let Some(layer) = self.project.layers.get_mut(self.active_layer_idx) {
+                        layer.keyframes.remove(&self.current_frame);
+                        self.has_unsaved_changes = true;
+                    }
+                }
             });
+
             ui.separator();
-            egui::ScrollArea::horizontal().show(ui, |ui| {
+
+            // شبكة الطبقات والفريمات (Layers & Frames Grid)
+            egui::ScrollArea::both().show(ui, |ui| {
+                // صف أرقام الفريمات العلوي
                 ui.horizontal(|ui| {
+                    ui.allocate_ui(egui::vec2(130.0, 20.0), |ui| {
+                        ui.strong("Layers / Frames");
+                    });
                     for f in 1..=self.project.total_frames {
-                        if ui.selectable_label(self.current_frame == f, format!("{}", f)).clicked() {
+                        let is_curr = self.current_frame == f;
+                        let btn = egui::Button::new(format!("{:02}", f))
+                            .min_size(egui::vec2(26.0, 20.0))
+                            .fill(if is_curr { egui::Color32::from_rgb(200, 50, 50) } else { egui::Color32::from_gray(45) });
+                        if ui.add(btn).clicked() {
                             self.current_frame = f;
                         }
                     }
                 });
+
+                // صفوف الطبقات (Layers)
+                let mut delete_layer_idx = None;
+                let layers_len = self.project.layers.len();
+                for (l_idx, layer) in self.project.layers.iter_mut().enumerate() {
+                    ui.horizontal(|ui| {
+                        ui.allocate_ui(egui::vec2(130.0, 24.0), |ui| {
+                            ui.horizontal(|ui| {
+                                ui.checkbox(&mut layer.visible, "");
+                                if ui.selectable_label(self.active_layer_idx == l_idx, &layer.name).clicked() {
+                                    self.active_layer_idx = l_idx;
+                                }
+                                if layers_len > 1 && ui.small_button("🗑").clicked() {
+                                    delete_layer_idx = Some(l_idx);
+                                }
+                            });
+                        });
+
+                        for f in 1..=self.project.total_frames {
+                            let has_content = layer.keyframes.get(&f).map_or(false, |fd| {
+                                !fd.strokes.is_empty() || !fd.media_items.is_empty() || !fd.symbol_instances.is_empty()
+                            });
+                            let is_selected = self.active_layer_idx == l_idx && self.current_frame == f;
+                            let symbol = if has_content { "●" } else { "·" };
+                            let fill = if is_selected {
+                                egui::Color32::from_rgb(40, 110, 200)
+                            } else if has_content {
+                                egui::Color32::from_gray(85)
+                            } else {
+                                egui::Color32::from_gray(32)
+                            };
+                            let cell = egui::Button::new(symbol)
+                                .min_size(egui::vec2(26.0, 22.0))
+                                .fill(fill);
+                            if ui.add(cell).clicked() {
+                                self.active_layer_idx = l_idx;
+                                self.current_frame = f;
+                            }
+                        }
+                    });
+                }
+
+                if let Some(idx) = delete_layer_idx {
+                    self.project.layers.remove(idx);
+                    if self.active_layer_idx >= self.project.layers.len() {
+                        self.active_layer_idx = self.project.layers.len().saturating_sub(1);
+                    }
+                }
+
+                // صفوف الطبقات الصوتية (Audio Layers)
+                for track in &self.project.audio_tracks {
+                    ui.horizontal(|ui| {
+                        ui.allocate_ui(egui::vec2(130.0, 22.0), |ui| {
+                            ui.colored_label(egui::Color32::LIGHT_BLUE, format!("🎵 {}", track.name));
+                        });
+                        for f in 1..=self.project.total_frames {
+                            let active = f >= track.start_frame;
+                            let fill = if active {
+                                egui::Color32::from_rgb(30, 120, 140)
+                            } else {
+                                egui::Color32::from_gray(28)
+                            };
+                            let cell = egui::Button::new(if active { "~" } else { " " })
+                                .min_size(egui::vec2(26.0, 20.0))
+                                .fill(fill);
+                            if ui.add(cell).clicked() {
+                                self.current_frame = f;
+                            }
+                        }
+                    });
+                }
             });
         });
 
+        // مساحة الرسم الرئيسية (Canvas)
         egui::CentralPanel::default().show(ctx, |ui| {
             let canvas_rect = ui.available_rect_before_wrap();
             let painter = ui.painter_at(canvas_rect);
