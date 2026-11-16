@@ -3,9 +3,9 @@
 mod brushes;
 mod changelog;
 mod exporter;
+mod persistence;
 mod profile;
 mod project;
-
 
 use arabic_reshaper::arabic_reshape;
 use brushes::{draw_brush_preset_icon, draw_stroke_pro};
@@ -14,9 +14,9 @@ use exporter::{ImageExportFormat, VideoExportFormat};
 use profile::UserProfile;
 use project::{
     AniProject, AudioSyncMode, AudioTrack, EasingCurve, FrameData, KritaBrushPreset, Layer, MediaItem, MediaType,
-    Stroke, StrokePoint, Symbol, SymbolInstance, TextItem, TweenMode,
+    Stroke, StrokePoint, Symbol, SymbolInstance, TextItem, TweenMode, PROJECT_SCHEMA_VERSION,
 };
-use rodio::source::{SineWave, TakeDuration};
+use rodio::source::SineWave;
 use rodio::{Decoder, OutputStream, Sink, Source};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -258,6 +258,8 @@ struct AppConfig {
     timeline_cell_color: [u8; 4],
     #[serde(default = "default_tl_head")]
     timeline_playhead_color: [u8; 4],
+    #[serde(default = "default_autosave_mins")]
+    autosave_interval_minutes: u64,
     tool_select: String,
     #[serde(default = "default_lasso_key")]
     tool_lasso: String,
@@ -294,6 +296,7 @@ struct AppConfig {
 
 fn default_true_val() -> bool { true }
 fn default_grid_size() -> f32 { 40.0 }
+fn default_autosave_mins() -> u64 { 5 }
 fn default_tl_bg() -> [u8; 4] { [28, 29, 34, 255] }
 fn default_tl_cell() -> [u8; 4] { [40, 42, 48, 255] }
 fn default_tl_head() -> [u8; 4] { [225, 55, 55, 255] }
@@ -317,6 +320,7 @@ impl Default for AppConfig {
             timeline_bg_color: default_tl_bg(),
             timeline_cell_color: default_tl_cell(),
             timeline_playhead_color: default_tl_head(),
+            autosave_interval_minutes: 5,
             tool_select: "V".to_string(),
             tool_lasso: "L".to_string(),
             tool_free_transform: "Q".to_string(),
@@ -584,20 +588,6 @@ struct HistorySnapshot {
     active_layer_idx: usize,
 }
 
-fn point_in_polygon(pt: egui::Pos2, poly: &[egui::Pos2]) -> bool {
-    if poly.len() < 3 { return false; }
-    let mut inside = false;
-    let mut j = poly.len() - 1;
-    for i in 0..poly.len() {
-        let (pi, pj) = (poly[i], poly[j]);
-        if ((pi.y > pt.y) != (pj.y > pt.y)) && (pt.x < (pj.x - pi.x) * (pt.y - pi.y) / ((pj.y - pi.y) + 1e-6) + pi.x) {
-            inside = !inside;
-        }
-        j = i;
-    }
-    inside
-}
-
 fn erase_partial_from_strokes(strokes: &mut Vec<Stroke>, center: egui::Pos2, radius: f32) {
     let mut new_strokes = Vec::with_capacity(strokes.len());
     for s in strokes.drain(..) {
@@ -688,6 +678,14 @@ struct StickApp {
     install_target_dir: String,
     install_status_text: String,
     project: AniProject,
+    current_project_path: Option<PathBuf>,
+    last_autosave_time: f64,
+    is_fullscreen: bool,
+    show_project_notice: bool,
+    project_notice_title: String,
+    project_notice_body: String,
+    show_recovery_dialog: bool,
+    show_project_details: bool,
     timeline_length: usize,
     timeline_cell_width: f32,
     loop_enabled: bool,
@@ -710,21 +708,11 @@ struct StickApp {
     stabilized_cursor: Option<egui::Pos2>,
     shape_drag_start: Option<egui::Pos2>,
     shape_drag_current: Option<egui::Pos2>,
-    editing_vector_node: Option<(usize, usize)>,
-    lasso_polygon: Vec<egui::Pos2>,
-    is_drawing_lasso: bool,
     selected_stroke_indices: Vec<usize>,
-    selected_text_idx: Option<usize>,
-    selected_symbol_inst_idx: Option<usize>,
     custom_anchor_offset: egui::Vec2,
-    is_dragging_anchor: bool,
-    is_resizing_selection: bool,
-    is_rotating_selection: bool,
     brush_color: [u8; 4],
     stage_bg_color: [u8; 4],
     brush_size: f32,
-    pen_pressure_enabled: bool,
-    pressure_sensitivity: f32,
     zoom_level: f32,
     pan_offset: egui::Vec2,
     canvas_rotation_deg: f32,
@@ -732,7 +720,6 @@ struct StickApp {
     canvas_flip_v: bool,
     is_playing: bool,
     last_frame_time: f64,
-    last_sfx_time: f64,
     last_xp_tick_time: f64,
     frames_drawn_counter: u64,
     level_up_banner_timer: f64,
@@ -744,8 +731,6 @@ struct StickApp {
     show_export_studio: bool,
     export_studio_tab: usize,
     show_command_palette: bool,
-    command_search_query: String,
-    show_timeline_settings: bool,
     selected_export_format: VideoExportFormat,
     selected_image_format: ImageExportFormat,
     export_task_state: Arc<Mutex<ExportTaskState>>,
@@ -756,16 +741,10 @@ struct StickApp {
     show_patch_notes_dialog: bool,
     show_settings_dialog: bool,
     show_credits_dialog: bool,
-    renaming_layer_idx: Option<usize>,
-    rename_layer_buf: String,
-    trimming_audio_idx: Option<usize>,
-    dragged_layer_idx: Option<usize>,
-    dragged_frame: Option<(usize, usize)>,
     settings_tab: usize,
     listening_shortcut_idx: Option<usize>,
     config: AppConfig,
     user_profile: UserProfile,
-    avatar_texture: Option<egui::TextureHandle>,
     installed_version: String,
     update_state: Arc<Mutex<UpdateState>>,
     new_symbol_name: String,
@@ -775,8 +754,6 @@ struct StickApp {
     status_message: String,
     audio_sink: Option<(OutputStream, Sink)>,
     last_pointer_pos: Option<egui::Pos2>,
-    last_stage_cursor: egui::Pos2,
-    right_tab: usize,
 }
 
 impl StickApp {
@@ -786,14 +763,6 @@ impl StickApp {
         let mut proj = AniProject::default();
         proj.total_frames = 1;
         let profile = UserProfile::load();
-        let mut avatar_tex = None;
-        if let Some(ref path) = profile.avatar_path {
-            if let Ok(img) = image::open(path) {
-                let rgba = img.to_rgba8();
-                let color_image = egui::ColorImage::from_rgba_unmultiplied([rgba.width() as usize, rgba.height() as usize], rgba.as_raw());
-                avatar_tex = Some(cc.egui_ctx.load_texture("user_avatar", color_image, egui::TextureOptions::LINEAR));
-            }
-        }
         let default_install_path = std::env::var("LOCALAPPDATA").map(|p| format!("{}\\StickStudio", p)).unwrap_or_else(|_| "C:\\StickStudio".to_string());
         let initial_mode = if is_running_from_installed_dir() { WorkspaceMode::Launcher } else { WorkspaceMode::InstallerSetup };
 
@@ -802,6 +771,14 @@ impl StickApp {
             install_target_dir: default_install_path,
             install_status_text: String::new(),
             project: proj,
+            current_project_path: None,
+            last_autosave_time: 0.0,
+            is_fullscreen: false,
+            show_project_notice: false,
+            project_notice_title: String::new(),
+            project_notice_body: String::new(),
+            show_recovery_dialog: false,
+            show_project_details: false,
             timeline_length: 1,
             timeline_cell_width: 24.0,
             loop_enabled: false,
@@ -824,21 +801,11 @@ impl StickApp {
             stabilized_cursor: None,
             shape_drag_start: None,
             shape_drag_current: None,
-            editing_vector_node: None,
-            lasso_polygon: Vec::new(),
-            is_drawing_lasso: false,
             selected_stroke_indices: Vec::new(),
-            selected_text_idx: None,
-            selected_symbol_inst_idx: None,
             custom_anchor_offset: egui::Vec2::ZERO,
-            is_dragging_anchor: false,
-            is_resizing_selection: false,
-            is_rotating_selection: false,
             brush_color: [0, 0, 0, 255],
             stage_bg_color: [255, 255, 255, 255],
             brush_size: 7.0,
-            pen_pressure_enabled: true,
-            pressure_sensitivity: 1.0,
             zoom_level: 0.75,
             pan_offset: egui::Vec2::ZERO,
             canvas_rotation_deg: 0.0,
@@ -846,7 +813,6 @@ impl StickApp {
             canvas_flip_v: false,
             is_playing: false,
             last_frame_time: 0.0,
-            last_sfx_time: 0.0,
             last_xp_tick_time: 0.0,
             frames_drawn_counter: 0,
             level_up_banner_timer: 0.0,
@@ -858,8 +824,6 @@ impl StickApp {
             show_export_studio: false,
             export_studio_tab: 0,
             show_command_palette: false,
-            command_search_query: String::new(),
-            show_timeline_settings: false,
             selected_export_format: VideoExportFormat::GifInstant,
             selected_image_format: ImageExportFormat::PngTransparent,
             export_task_state: Arc::new(Mutex::new(ExportTaskState::Idle)),
@@ -870,16 +834,10 @@ impl StickApp {
             show_patch_notes_dialog: AppConfig::load().last_seen_patch_version != FALLBACK_VERSION,
             show_settings_dialog: false,
             show_credits_dialog: false,
-            renaming_layer_idx: None,
-            rename_layer_buf: String::new(),
-            trimming_audio_idx: None,
-            dragged_layer_idx: None,
-            dragged_frame: None,
             settings_tab: 0,
             listening_shortcut_idx: None,
             config: AppConfig::load(),
             user_profile: profile,
-            avatar_texture: avatar_tex,
             installed_version: get_installed_version(),
             update_state: Arc::new(Mutex::new(UpdateState::Idle)),
             new_symbol_name: "Symbol_1".to_string(),
@@ -889,8 +847,6 @@ impl StickApp {
             status_message: "Stick Studio Ready".to_string(),
             audio_sink: None,
             last_pointer_pos: None,
-            last_stage_cursor: egui::Pos2::ZERO,
-            right_tab: 0,
         }
     }
 
@@ -981,8 +937,6 @@ impl StickApp {
         self.current_frame = snap.current_frame.clamp(1, self.timeline_length);
         self.active_layer_idx = snap.active_layer_idx.min(self.project.layers.len().saturating_sub(1));
         self.selected_stroke_indices.clear();
-        self.selected_text_idx = None;
-        self.selected_symbol_inst_idx = None;
     }
 
     fn save_undo_state(&mut self) {
@@ -1160,15 +1114,6 @@ impl StickApp {
         }
     }
 
-    fn clear_frame_content(&mut self, layer_idx: usize, frame_idx: usize) {
-        self.save_undo_state();
-        if let Some(layer) = self.project.layers.get_mut(layer_idx) {
-            layer.keyframes.insert(frame_idx, FrameData::default());
-            self.has_unsaved_changes = true;
-            self.play_sfx(SfxType::EraserRub);
-        }
-    }
-
     fn remove_frame_completely(&mut self, layer_idx: usize, frame_idx: usize) {
         self.save_undo_state();
         if let Some(layer) = self.project.layers.get_mut(layer_idx) {
@@ -1237,7 +1182,28 @@ impl StickApp {
         if let Some((_, sink)) = self.audio_sink.take() { sink.stop(); }
     }
 
-fn trigger_save(&mut self) -> bool {
+    fn trigger_save(&mut self) -> bool {
+        if let Some(existing_path) = self.current_project_path.clone() {
+            self.project.total_frames = self.timeline_length;
+            match persistence::save_project_safe(&self.project, &existing_path) {
+                Ok(_) => {
+                    self.has_unsaved_changes = false;
+                    self.play_sfx(SfxType::NewFrame);
+                    self.status_message = tr(self.config.lang, "Saved atomically!", "تم الحفظ الذري الآمن!");
+                    return true;
+                }
+                Err(err) => {
+                    self.project_notice_title = "فشل حفظ المشروع".to_string();
+                    self.project_notice_body = err;
+                    self.show_project_notice = true;
+                    return false;
+                }
+            }
+        }
+        self.trigger_save_as()
+    }
+
+    fn trigger_save_as(&mut self) -> bool {
         self.project.total_frames = self.timeline_length;
         if let Some(mut path) = rfd::FileDialog::new()
             .add_filter("Stick Project", &["stick", "ah2d"])
@@ -1247,14 +1213,78 @@ fn trigger_save(&mut self) -> bool {
             if path.extension().is_none() {
                 path.set_extension("stick");
             }
-            if self.project.save_to_file(&path).is_ok() {
-                self.has_unsaved_changes = false;
-                self.play_sfx(SfxType::NewFrame);
-                self.status_message = tr(self.config.lang, "Project Saved!", "تم حفظ المشروع بالكامل!");
-                return true;
+            match persistence::save_project_safe(&self.project, &path) {
+                Ok(_) => {
+                    self.current_project_path = Some(path);
+                    self.has_unsaved_changes = false;
+                    self.play_sfx(SfxType::NewFrame);
+                    self.status_message = tr(self.config.lang, "Project Saved!", "تم حفظ المشروع بالكامل!");
+                    return true;
+                }
+                Err(err) => {
+                    self.project_notice_title = "فشل حفظ المشروع".to_string();
+                    self.project_notice_body = err;
+                    self.show_project_notice = true;
+                }
             }
         }
         false
+    }
+
+    fn trigger_open_project(&mut self) {
+        if let Some(p) = rfd::FileDialog::new().add_filter("Stick", &["stick", "ah2d"]).pick_file() {
+            match persistence::open_project_safe(&p) {
+                Ok(outcome) => {
+                    self.save_undo_state();
+                    self.timeline_length = outcome.project.total_frames.max(1);
+                    self.current_frame = 1;
+                    self.active_layer_idx = 0;
+                    self.project = outcome.project;
+                    self.has_unsaved_changes = false;
+                    self.play_sfx(SfxType::NewFrame);
+
+                    if outcome.report.was_migrated {
+                        // لا نكتب فوق الملف القديم تلقائياً؛ ننشئ نسخة محدثة مستقلة أو نترك المستخدم يختار مكان الحفظ
+                        let migrated_path = p.with_file_name(format!(
+                            "{}_v{}.stick",
+                            p.file_stem().and_then(|s| s.to_str()).unwrap_or("project"),
+                            PROJECT_SCHEMA_VERSION
+                        ));
+                        self.current_project_path = Some(migrated_path);
+                        self.has_unsaved_changes = true;
+                        let mut msg = format!(
+                            "تم إنشاء هذا المشروع بإصدار قديم من Stick ({}).\nتم فتح نسخة متوافقة مع الإصدار الحالي (Schema v{}) مع الاحتفاظ بالملف الأصلي سليماً دون تعديل.",
+                            outcome.report.source_format_label, outcome.report.new_schema
+                        );
+                        if let Some(bak) = outcome.legacy_backup_path {
+                            msg.push_str(&format!("\n\nتم حفظ نسخة احتياطية إضافية في:\n{}", bak.display()));
+                        }
+                        if !outcome.missing_assets.is_empty() {
+                            msg.push_str(&format!("\n\nتنبيه: يوجد {} ملفات صور/صوت خارجية غير موجودة في مسارها القديم، لكن الرسومات والفريمات سليمة 100%.", outcome.missing_assets.len()));
+                        }
+                        self.project_notice_title = "تمت ترقية المشروع القديم بأمان".to_string();
+                        self.project_notice_body = msg;
+                        self.show_project_notice = true;
+                    } else {
+                        self.current_project_path = Some(p);
+                        if !outcome.missing_assets.is_empty() {
+                            self.project_notice_title = "تنبيه: ملفات وسائط مفقودة".to_string();
+                            self.project_notice_body = format!(
+                                "تم فتح المشروع بنجاح والرسومات سليمة، ولكن تعذر العثور على {} ملفات صور/صوت خارجية:\n{}",
+                                outcome.missing_assets.len(),
+                                outcome.missing_assets.join("\n")
+                            );
+                            self.show_project_notice = true;
+                        }
+                    }
+                }
+                Err(err_msg) => {
+                    self.project_notice_title = "تعذر فتح ملف المشروع (مشروعك الحالي سليم)".to_string();
+                    self.project_notice_body = err_msg;
+                    self.show_project_notice = true;
+                }
+            }
+        }
     }
 
     fn import_image_dialog(&mut self) {
@@ -1431,10 +1461,6 @@ fn trigger_save(&mut self) -> bool {
                     if ui.selectable_label(self.active_tool_ui == ActiveToolUI::FreeTransform, tr(lang, "Transform (Q)", "تحويل حر (Q)")).clicked() { self.active_tool_ui = ActiveToolUI::FreeTransform; }
                 });
                 ui.horizontal(|ui| {
-                    if ui.selectable_label(self.active_tool_ui == ActiveToolUI::SelectLasso, tr(lang, "Lasso (L)", "حرة (L)")).clicked() { self.active_tool_ui = ActiveToolUI::SelectLasso; }
-                    if ui.selectable_label(self.active_tool_ui == ActiveToolUI::VectorDirectSelect, tr(lang, "Vector Pts (G)", "نقاط فيكتور (G)")).clicked() { self.active_tool_ui = ActiveToolUI::VectorDirectSelect; }
-                });
-                ui.horizontal(|ui| {
                     if ui.button(" -10% ").clicked() { self.save_undo_state(); self.transform_selected_items(0.90, 0.0, false, false); }
                     if ui.button(" +10% ").clicked() { self.save_undo_state(); self.transform_selected_items(1.10, 0.0, false, false); }
                     if ui.button(" ↻ 15° ").clicked() { self.save_undo_state(); self.transform_selected_items(1.0, 15.0, false, false); }
@@ -1459,7 +1485,6 @@ fn trigger_save(&mut self) -> bool {
                     (KritaBrushPreset::SoftAirbrush, "Airbrush"),
                     (KritaBrushPreset::SketchPencil, "Pencil"),
                 ];
-                // شبكة أزرار للفرش ولكل فرشة أيقونة مخصصة لها
                 ui.horizontal_wrapped(|ui| {
                     for (preset, short_name) in presets {
                         let is_sel = self.active_krita_brush == preset;
@@ -1530,6 +1555,20 @@ impl eframe::App for StickApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         let lang = self.config.lang;
         let now_time = ctx.input(|i| i.time);
+
+        // الحفظ التلقائي الدوري (Auto-Save Recovery) كل 5 دقائق عند وجود تعديلات
+        let autosave_secs = (self.config.autosave_interval_minutes.max(1) * 60) as f64;
+        if self.last_autosave_time == 0.0 {
+            self.last_autosave_time = now_time;
+        } else if self.has_unsaved_changes && (now_time - self.last_autosave_time >= autosave_secs) {
+            self.last_autosave_time = now_time;
+            let label = self.current_project_path
+                .as_ref()
+                .and_then(|p| p.file_stem())
+                .and_then(|s| s.to_str())
+                .unwrap_or("unsaved_project");
+            let _ = persistence::atomic_save::write_recovery_snapshot(&self.project, label);
+        }
 
         if self.workspace_mode == WorkspaceMode::InstallerSetup {
             egui::CentralPanel::default().show(ctx, |ui| {
@@ -1608,7 +1647,8 @@ impl eframe::App for StickApp {
             });
             return;
         }
-let mut patch_acknowledged = false;
+
+        let mut patch_acknowledged = false;
         changelog::render_whats_new_modal(
             ctx,
             lang,
@@ -1621,23 +1661,19 @@ let mut patch_acknowledged = false;
             self.play_sfx(SfxType::NewFrame);
         }
 
-        
         let mut typing_in_textbox = ctx.wants_keyboard_input();
         let (
-            now, ctrl_z, ctrl_y, ctrl_s, ctrl_c, ctrl_v, ctrl_k, shift_f5, del_pressed,
+            now, ctrl_z, ctrl_y, ctrl_s, ctrl_shift_s, ctrl_c, ctrl_v, ctrl_k, shift_f5, del_pressed, f10_pressed,
             space_down, ctrl_down, alt_down, zoom_in_nav, zoom_out_nav, pan_right_nav, pan_left_nav,
-            scroll_y, close_req, pointer_down, pointer_pressed, pointer_released, pointer_pos, touch_force,
+            scroll_y, close_req, pointer_down, pointer_pressed, pointer_released, pointer_pos,
             sc_select, sc_lasso, sc_free_tr, sc_vec_sel, sc_pen, sc_brush, sc_eraser, sc_eraser_partial,
             sc_bucket, sc_eyedropper, sc_text, sc_shape, sc_hand, sc_del_frame, sc_f5, sc_f6, sc_f7, sc_f8,
             sc_play, sc_prev, sc_next, sc_smaller, sc_larger, sc_reset_canvas, pressed_key_name,
         ) = ctx.input(|i| {
             let mut captured_key = None;
-            let mut stylus_force = None;
             for event in &i.events {
-                match event {
-                    egui::Event::Key { key, pressed: true, .. } => captured_key = Some(key.name().to_string()),
-                    egui::Event::Touch { force: Some(f), .. } => stylus_force = Some(*f),
-                    _ => {}
+                if let egui::Event::Key { key, pressed: true, .. } = event {
+                    captured_key = Some(key.name().to_string());
                 }
             }
             if captured_key.is_none() && i.modifiers.shift { captured_key = Some("Shift".to_string()); }
@@ -1649,12 +1685,14 @@ let mut patch_acknowledged = false;
                 i.time,
                 i.modifiers.ctrl && !i.modifiers.shift && i.key_pressed(egui::Key::Z),
                 (i.modifiers.ctrl && i.key_pressed(egui::Key::Y)) || (i.modifiers.ctrl && i.modifiers.shift && i.key_pressed(egui::Key::Z)),
-                i.modifiers.ctrl && i.key_pressed(egui::Key::S),
+                i.modifiers.ctrl && !i.modifiers.shift && i.key_pressed(egui::Key::S),
+                i.modifiers.ctrl && i.modifiers.shift && i.key_pressed(egui::Key::S),
                 i.modifiers.ctrl && i.key_pressed(egui::Key::C),
                 i.modifiers.ctrl && i.key_pressed(egui::Key::V),
                 i.modifiers.ctrl && i.key_pressed(egui::Key::K),
                 i.modifiers.shift && i.key_pressed(egui::Key::F5),
                 i.key_pressed(egui::Key::Delete),
+                i.key_pressed(egui::Key::F10),
                 i.key_down(egui::Key::Space),
                 i.modifiers.ctrl,
                 i.modifiers.alt,
@@ -1665,7 +1703,6 @@ let mut patch_acknowledged = false;
                 i.pointer.primary_pressed(),
                 i.pointer.primary_released(),
                 i.pointer.interact_pos(),
-                stylus_force,
                 is_shortcut_pressed(i, &self.config.tool_select),
                 is_shortcut_pressed(i, &self.config.tool_lasso),
                 is_shortcut_pressed(i, &self.config.tool_free_transform),
@@ -1694,6 +1731,12 @@ let mut patch_acknowledged = false;
             )
         });
 
+        // اختصار F10: التبديل لوضع ملء الشاشة الحقيقي بدون ظهور Taskbar والرجوع للوضع الطبيعي عند الضغط عليه مرة ثانية
+        if f10_pressed {
+            self.is_fullscreen = !self.is_fullscreen;
+            ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(self.is_fullscreen));
+        }
+
         if ctrl_k { self.show_command_palette = !self.show_command_palette; }
 
         if let (Some(idx), Some(k_name)) = (self.listening_shortcut_idx, pressed_key_name) {
@@ -1720,14 +1763,15 @@ let mut patch_acknowledged = false;
 
         let any_modal_open = self.show_symbol_dialog || self.show_text_dialog || self.show_export_studio
             || self.show_command_palette || self.show_exit_dialog || self.show_update_dialog
-            || self.show_settings_dialog || self.show_timeline_settings || self.show_credits_dialog
-            || self.renaming_layer_idx.is_some() || self.trimming_audio_idx.is_some();
+            || self.show_settings_dialog || self.show_credits_dialog || self.show_project_notice
+            || self.show_recovery_dialog || self.show_project_details;
         if any_modal_open { typing_in_textbox = true; }
 
         if !typing_in_textbox {
             if ctrl_z { self.undo(); }
             if ctrl_y { self.redo(); }
-            if ctrl_s { self.trigger_save(); }
+            if ctrl_shift_s { self.trigger_save_as(); }
+            else if ctrl_s { self.trigger_save(); }
             if ctrl_c { self.copy_frame(self.active_layer_idx, self.current_frame); }
             if ctrl_v { self.paste_frame(self.active_layer_idx, self.current_frame); }
             if zoom_in_nav { self.zoom_level = (self.zoom_level * 1.045).clamp(0.1, 6.0); ctx.request_repaint(); }
@@ -1789,6 +1833,97 @@ let mut patch_acknowledged = false;
                 self.last_frame_time = now;
             }
             ctx.request_repaint();
+        }
+
+        // نافذة تنبيهات وتقارير توافق المشاريع والأخطاء
+        if self.show_project_notice {
+            egui::Window::new(fix_ar(&self.project_notice_title))
+                .collapsible(false)
+                .resizable(false)
+                .default_width(470.0)
+                .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+                .show(ctx, |ui| {
+                    ui.label(fix_ar(&self.project_notice_body));
+                    ui.add_space(10.0);
+                    if ui.button(tr(lang, "OK", "حسناً")).clicked() {
+                        self.show_project_notice = false;
+                    }
+                });
+        }
+
+        // نافذة استرجاع النسخ الاحتياطية (File -> Recover Project)
+        if self.show_recovery_dialog {
+            let snapshots = persistence::atomic_save::list_recovery_snapshots();
+            egui::Window::new(tr(lang, "Recover Project (Auto-Saves)", "استعادة مشروع من النسخ الاحتياطية"))
+                .collapsible(false)
+                .resizable(false)
+                .default_width(500.0)
+                .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+                .show(ctx, |ui| {
+                    ui.label(tr(
+                        lang,
+                        "Select a recovery snapshot to open safely without overwriting your original file:",
+                        "اختر نسخة استرجاع لفتحها بأمان دون استبدال ملف المشروع الأصلي:",
+                    ));
+                    ui.separator();
+                    if snapshots.is_empty() {
+                        ui.label(tr(lang, "No recovery snapshots found yet.", "لا توجد نسخ استرجاع تلقائية محفوظة حالياً."));
+                    } else {
+                        egui::ScrollArea::vertical().max_height(260.0).show(ui, |ui| {
+                            for entry in &snapshots {
+                                ui.horizontal(|ui| {
+                                    ui.label(format!("📄 {} ({} KB)", entry.file_name, (entry.size_bytes / 1024).max(1)));
+                                    if ui.button(tr(lang, "Restore", "استعادة")).clicked() {
+                                        if let Ok(outcome) = persistence::open_project_safe(&entry.path) {
+                                            self.save_undo_state();
+                                            self.timeline_length = outcome.project.total_frames.max(1);
+                                            self.current_frame = 1;
+                                            self.active_layer_idx = 0;
+                                            self.project = outcome.project;
+                                            // نمسح المسار النشط حتى يطلب Save As ولا يكتب فوق الأصل
+                                            self.current_project_path = None;
+                                            self.has_unsaved_changes = true;
+                                            self.show_recovery_dialog = false;
+                                            self.play_sfx(SfxType::NewFrame);
+                                        }
+                                    }
+                                });
+                            }
+                        });
+                    }
+                    ui.separator();
+                    if ui.button(tr(lang, "Close", "إغلاق")).clicked() {
+                        self.show_recovery_dialog = false;
+                    }
+                });
+        }
+
+        // نافذة تفاصيل إصدار المشروع (Project Version Details)
+        if self.show_project_details {
+            let inv = persistence::migration::ProjectInventory::from_project(&self.project);
+            egui::Window::new(tr(lang, "Project Version & Integrity Details", "تفاصيل إصدار المشروع وسلامة البيانات"))
+                .collapsible(false)
+                .resizable(false)
+                .default_width(430.0)
+                .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+                .show(ctx, |ui| {
+                    ui.label(format!("App Version: v{}", self.installed_version));
+                    ui.label(format!("Project Schema Version: v{}", self.project.schema_version));
+                    ui.label(format!("Canvas: {}x{} @ {} FPS", self.project.width, self.project.height, self.project.fps));
+                    ui.separator();
+                    ui.label(format!("Layers: {} | Keyframes: {}", inv.layer_count, inv.keyframe_count));
+                    ui.label(format!("Strokes: {} | Total Points: {}", inv.stroke_count, inv.total_points));
+                    ui.label(format!("Audio Tracks: {} | Symbols: {}", inv.audio_count, inv.symbol_count));
+                    if let Some(ref p) = self.current_project_path {
+                        ui.label(format!("Active Path: {}", p.display()));
+                    } else {
+                        ui.label("Active Path: (Unsaved / New Copy)");
+                    }
+                    ui.separator();
+                    if ui.button(tr(lang, "Close", "إغلاق")).clicked() {
+                        self.show_project_details = false;
+                    }
+                });
         }
 
         if self.show_export_studio {
@@ -1881,6 +2016,7 @@ let mut patch_acknowledged = false;
                             self.ensure_editable_keyframe();
                             if let Some(l) = self.project.layers.get_mut(self.active_layer_idx) {
                                 l.keyframes.entry(self.current_frame).or_default().text_items.push(TextItem { content: self.text_input_buf.clone(), x: self.pending_text_pos.x, y: self.pending_text_pos.y, font_size: self.text_font_size, color: self.brush_color });
+                                self.has_unsaved_changes = true;
                             }
                         }
                         self.text_input_buf.clear();
@@ -1894,7 +2030,7 @@ let mut patch_acknowledged = false;
         if self.show_settings_dialog {
             egui::Window::new(tr(lang, "Settings & System", "الإعدادات والنظام")).collapsible(false).resizable(false).default_width(460.0).anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0]).show(ctx, |ui| {
                 ui.horizontal(|ui| {
-                    ui.selectable_value(&mut self.settings_tab, 0, tr(lang, "General & Grid", "عام والشبكة"));
+                    ui.selectable_value(&mut self.settings_tab, 0, tr(lang, "General & Auto-Save", "عام والحفظ التلقائي"));
                     ui.selectable_value(&mut self.settings_tab, 1, "[ SYSTEM ] Status");
                 });
                 ui.separator();
@@ -1905,6 +2041,12 @@ let mut patch_acknowledged = false;
                     });
                     if ui.checkbox(&mut self.config.sound_effects_enabled, tr(lang, "Sound Effects", "المؤثرات الصوتية")).changed() { self.config.save(); }
                     if ui.checkbox(&mut self.config.show_grid, tr(lang, "Show Grid", "إظهار المربعات")).changed() { self.config.save(); }
+                    ui.horizontal(|ui| {
+                        ui.label(tr(lang, "Auto-Save Interval (mins):", "فترة الحفظ التلقائي (دقائق):"));
+                        if ui.add(egui::DragValue::new(&mut self.config.autosave_interval_minutes).range(1..=60)).changed() {
+                            self.config.save();
+                        }
+                    });
                 } else {
                     let (lvl, cxp, rxp) = self.user_profile.get_level_progress();
                     ui.heading(format!("LEVEL {} / 100  ({})", lvl, self.user_profile.get_hunter_rank()));
@@ -1952,6 +2094,7 @@ let mut patch_acknowledged = false;
                             self.project.library_symbols.insert(self.new_symbol_name.clone(), Symbol { name: self.new_symbol_name.clone(), strokes: f.strokes.clone(), nested_keyframes: nested, nested_total_frames: 1 });
                             f.strokes.clear();
                             f.symbol_instances.push(SymbolInstance { symbol_name: self.new_symbol_name.clone(), x: 0.0, y: 0.0, scale: 1.0, rotation_deg: 0.0, anchor_offset_x: 0.0, anchor_offset_y: 0.0 });
+                            self.has_unsaved_changes = true;
                         }
                     }
                     self.show_symbol_dialog = false;
@@ -1991,17 +2134,12 @@ let mut patch_acknowledged = false;
                 }
                 ui.separator();
                 ui.menu_button(tr(lang, "File", "ملف"), |ui| {
-                    if ui.button(tr(lang, "Save (Ctrl+S)", "حفظ")).clicked() { self.trigger_save(); ui.close_menu(); }
-                    if ui.button(tr(lang, "Open (.stick / .ah2d)", "فتح مشروع")).clicked() {
-                        if let Some(p) = rfd::FileDialog::new().add_filter("Stick", &["stick", "ah2d"]).pick_file() {
-                            if let Ok(proj) = AniProject::load_from_file(&p) {
-                                self.timeline_length = proj.total_frames.max(1);
-                                self.current_frame = 1;
-                                self.project = proj;
-                            }
-                        }
-                        ui.close_menu();
-                    }
+                    if ui.button(tr(lang, "Save (Ctrl+S)", "حفظ (Ctrl+S)")).clicked() { self.trigger_save(); ui.close_menu(); }
+                    if ui.button(tr(lang, "Save As... (Ctrl+Shift+S)", "حفظ باسم...")).clicked() { self.trigger_save_as(); ui.close_menu(); }
+                    if ui.button(tr(lang, "Open (.stick / .ah2d)", "فتح مشروع")).clicked() { self.trigger_open_project(); ui.close_menu(); }
+                    if ui.button(tr(lang, "Recover Project...", "استعادة نسخة احتياطية...")).clicked() { self.show_recovery_dialog = true; ui.close_menu(); }
+                    if ui.button(tr(lang, "Project Details", "تفاصيل إصدار المشروع")).clicked() { self.show_project_details = true; ui.close_menu(); }
+                    ui.separator();
                     if ui.button(tr(lang, "Import Image...", "استيراد صورة")).clicked() { self.import_image_dialog(); ui.close_menu(); }
                     if ui.button(tr(lang, "Import SVG...", "استيراد SVG")).clicked() { self.import_svg_dialog(); ui.close_menu(); }
                     if ui.button(tr(lang, "Import Adobe Animate...", "استيراد Animate")).clicked() { self.import_animate_dialog(); ui.close_menu(); }
@@ -2033,6 +2171,10 @@ let mut patch_acknowledged = false;
                     let (gr, gresp) = ui.allocate_exact_size(egui::vec2(24.0, 22.0), egui::Sense::click());
                     draw_gear_icon(ui.painter(), gr, 1.0);
                     if gresp.clicked() { self.show_settings_dialog = true; }
+                    if ui.small_button("F10 Fullscreen").clicked() {
+                        self.is_fullscreen = !self.is_fullscreen;
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(self.is_fullscreen));
+                    }
                     if ui.small_button("+15%").clicked() { self.zoom_level = (self.zoom_level * 1.15).clamp(0.1, 6.0); }
                     ui.label(format!("{:.0}%", self.zoom_level * 100.0));
                     if ui.small_button("-15%").clicked() { self.zoom_level = (self.zoom_level / 1.15).clamp(0.1, 6.0); }
@@ -2091,6 +2233,7 @@ let mut patch_acknowledged = false;
                     kf.insert(1, Default::default());
                     self.project.layers.insert(0, Layer { name: format!("Layer_{}", self.project.layers.len() + 1), visible: true, locked: false, is_guide: false, opacity: 1.0, keyframes: kf });
                     self.active_layer_idx = 0;
+                    self.has_unsaved_changes = true;
                 }
                 if self.project.layers.len() > 1 && self.active_layer_idx + 1 < self.project.layers.len() {
                     if ui.small_button("Merge ↓").clicked() {
@@ -2099,6 +2242,7 @@ let mut patch_acknowledged = false;
                         if let Some(below) = self.project.layers.get_mut(self.active_layer_idx) {
                             if let Some(tfd) = top.keyframes.get(&1) { below.keyframes.entry(1).or_default().strokes.extend(tfd.strokes.clone()); }
                         }
+                        self.has_unsaved_changes = true;
                     }
                 }
             });
@@ -2241,6 +2385,7 @@ let mut patch_acknowledged = false;
                                     for s in f.strokes.iter_mut().rev() {
                                         if s.points.iter().any(|p| ((p.x - stage_pos.x).powi(2) + (p.y - stage_pos.y).powi(2)).sqrt() < 35.0) {
                                             s.fill_color = Some(self.brush_color);
+                                            self.has_unsaved_changes = true;
                                             break;
                                         }
                                     }
@@ -2258,6 +2403,7 @@ let mut patch_acknowledged = false;
                                     } else {
                                         erase_partial_from_strokes(&mut f.strokes, stage_pos, r);
                                     }
+                                    self.has_unsaved_changes = true;
                                 }
                             }
                         }
@@ -2322,6 +2468,7 @@ let mut patch_acknowledged = false;
                                                 for p in &mut s.points { p.x += delta.x; p.y += delta.y; }
                                             }
                                         }
+                                        self.has_unsaved_changes = true;
                                     }
                                 }
                             }
