@@ -6,8 +6,23 @@ use project::{AniProject, AudioTrack, Layer, MediaItem, MediaType, Stroke, Strok
 use rodio::{Decoder, OutputStream, Sink};
 use std::collections::HashMap;
 use std::fs::File;
-use std::io::BufReader;
+use std::io::{BufReader, Read, Write};
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
+
+const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
+const GITHUB_REPO: &str = "KaniEGY/AniHady2D";
+
+#[derive(Clone, PartialEq)]
+enum UpdateState {
+    Idle,
+    Checking,
+    UpToDate,
+    UpdateAvailable { version: String, download_url: String },
+    Downloading(String),
+    ReadyToRestart,
+    Error(String),
+}
 
 fn setup_custom_fonts(ctx: &egui::Context) {
     let mut fonts = egui::FontDefinitions::default();
@@ -34,6 +49,8 @@ struct AniHadyApp {
     has_unsaved_changes: bool,
     show_exit_dialog: bool,
     show_symbol_dialog: bool,
+    show_update_dialog: bool,
+    update_state: Arc<Mutex<UpdateState>>,
     new_symbol_name: String,
     allow_close: bool,
     current_stroke: Option<Stroke>,
@@ -66,6 +83,8 @@ impl AniHadyApp {
             has_unsaved_changes: false,
             show_exit_dialog: false,
             show_symbol_dialog: false,
+            show_update_dialog: false,
+            update_state: Arc::new(Mutex::new(UpdateState::Idle)),
             new_symbol_name: "Symbol_1".to_string(),
             allow_close: false,
             current_stroke: None,
@@ -74,9 +93,124 @@ impl AniHadyApp {
             texture_cache: HashMap::new(),
             imported_brushes: Vec::new(),
             saved_path: None,
-            status_message: "GPU Ready - AniHady2D".to_string(),
+            status_message: format!("GPU Ready - AniHady2D v{}", CURRENT_VERSION),
             audio_sink: None,
             last_pointer_pos: None,
+        }
+    }
+
+    fn check_for_updates(&mut self, ctx: egui::Context) {
+        self.show_update_dialog = true;
+        {
+            let mut st = self.update_state.lock().unwrap();
+            *st = UpdateState::Checking;
+        }
+        let state_clone = Arc::clone(&self.update_state);
+
+        std::thread::spawn(move || {
+            let api_url = format!("https://api.github.com/repos/{}/releases/latest", GITHUB_REPO);
+            let resp = ureq::get(&api_url)
+                .set("User-Agent", "AniHady2D-Updater")
+                .call();
+
+            match resp {
+                Ok(response) => {
+                    if let Ok(json) = response.into_json::<serde_json::Value>() {
+                        let tag = json["tag_name"].as_str().unwrap_or("").trim_start_matches('v').to_string();
+                        let mut exe_url = String::new();
+
+                        if let Some(assets) = json["assets"].as_array() {
+                            for asset in assets {
+                                if let Some(name) = asset["name"].as_str() {
+                                    if name.ends_with(".exe") {
+                                        exe_url = asset["browser_download_url"].as_str().unwrap_or("").to_string();
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+
+                        let mut st = state_clone.lock().unwrap();
+                        if !tag.is_empty() && tag != CURRENT_VERSION && !exe_url.is_empty() {
+                            *st = UpdateState::UpdateAvailable {
+                                version: tag,
+                                download_url: exe_url,
+                            };
+                        } else {
+                            *st = UpdateState::UpToDate;
+                        }
+                    } else {
+                        let mut st = state_clone.lock().unwrap();
+                        *st = UpdateState::Error("Failed to parse GitHub release data.".to_string());
+                    }
+                }
+                Err(e) => {
+                    let mut st = state_clone.lock().unwrap();
+                    *st = UpdateState::Error(format!("No releases found or network error: {}", e));
+                }
+            }
+            ctx.request_repaint();
+        });
+    }
+
+    fn download_and_apply_update(&mut self, download_url: String, ctx: egui::Context) {
+        {
+            let mut st = self.update_state.lock().unwrap();
+            *st = UpdateState::Downloading("Downloading update from GitHub...".to_string());
+        }
+        let state_clone = Arc::clone(&self.update_state);
+
+        std::thread::spawn(move || {
+            let resp = ureq::get(&download_url)
+                .set("User-Agent", "AniHady2D-Updater")
+                .call();
+
+            match resp {
+                Ok(response) => {
+                    let mut bytes = Vec::new();
+                    if response.into_reader().read_to_end(&mut bytes).is_ok() {
+                        if let Ok(current_exe) = std::env::current_exe() {
+                            let new_exe = current_exe.with_file_name("AniHady2D_new.exe");
+                            if let Ok(mut file) = File::create(&new_exe) {
+                                if file.write_all(&bytes).is_ok() {
+                                    let mut st = state_clone.lock().unwrap();
+                                    *st = UpdateState::ReadyToRestart;
+                                    ctx.request_repaint();
+                                    return;
+                                }
+                            }
+                        }
+                    }
+                    let mut st = state_clone.lock().unwrap();
+                    *st = UpdateState::Error("Failed to save the downloaded update file.".to_string());
+                }
+                Err(e) => {
+                    let mut st = state_clone.lock().unwrap();
+                    *st = UpdateState::Error(format!("Download failed: {}", e));
+                }
+            }
+            ctx.request_repaint();
+        });
+    }
+
+    fn restart_with_new_exe(&mut self) {
+        if let Ok(current_exe) = std::env::current_exe() {
+            let new_exe = current_exe.with_file_name("AniHady2D_new.exe");
+            let bat_path = current_exe.with_file_name("update_anihady.bat");
+
+            let bat_content = format!(
+                "@echo off\r\ntimeout /t 2 /nobreak > NUL\r\nmove /y \"{}\" \"{}\"\r\nstart \"\" \"{}\"\r\ndel \"%~f0\"\r\n",
+                new_exe.display(),
+                current_exe.display(),
+                current_exe.display()
+            );
+
+            if std::fs::write(&bat_path, bat_content).is_ok() {
+                let _ = std::process::Command::new("cmd")
+                    .args(["/C", &bat_path.to_string_lossy()])
+                    .spawn();
+                std::process::exit(0);
+            }
         }
     }
 
@@ -273,644 +407,58 @@ impl eframe::App for AniHadyApp {
             ctx.request_repaint();
         }
 
-        if self.show_symbol_dialog {
-            egui::Window::new("Create Symbol (F8)")
+        // نافذة التحديث التلقائي (Check for Updates)
+        if self.show_update_dialog {
+            let current_st = self.update_state.lock().unwrap().clone();
+            egui::Window::new("AniHady2D Updater")
                 .collapsible(false)
                 .resizable(false)
                 .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
                 .show(ctx, |ui| {
-                    ui.label("Symbol Name:");
-                    ui.text_edit_singleline(&mut self.new_symbol_name);
-                    ui.horizontal(|ui| {
-                        if ui.button("Save to Library").clicked() {
-                            self.save_undo_state();
-                            if let Some(layer) = self.project.layers.get_mut(self.active_layer_idx) {
-                                if let Some(frame) = layer.keyframes.get_mut(&self.current_frame) {
-                                    if !frame.strokes.is_empty() {
-                                        let sym = Symbol {
-                                            name: self.new_symbol_name.clone(),
-                                            strokes: frame.strokes.clone(),
-                                        };
-                                        self.project.library_symbols.insert(self.new_symbol_name.clone(), sym);
-                                        frame.strokes.clear();
-                                        frame.symbol_instances.push(SymbolInstance {
-                                            symbol_name: self.new_symbol_name.clone(),
-                                            x: 0.0,
-                                            y: 0.0,
-                                            scale: 1.0,
-                                        });
-                                        self.has_unsaved_changes = true;
-                                    }
-                                }
-                            }
-                            self.show_symbol_dialog = false;
-                        }
-                        if ui.button("Cancel").clicked() {
-                            self.show_symbol_dialog = false;
-                        }
-                    });
-                });
-        }
-
-        if close_req && !self.allow_close {
-            if self.has_unsaved_changes {
-                ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-                self.show_exit_dialog = true;
-            }
-        }
-
-        if self.show_exit_dialog {
-            egui::Window::new("Save Project?")
-                .collapsible(false)
-                .resizable(false)
-                .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
-                .show(ctx, |ui| {
-                    ui.label("Do you want to save your project before exiting?");
-                    ui.add_space(8.0);
-                    ui.horizontal(|ui| {
-                        if ui.button("Yes (Save)").clicked() && self.trigger_save() {
-                            self.allow_close = true;
-                            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-                        }
-                        if ui.button("No (Exit)").clicked() {
-                            self.allow_close = true;
-                            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-                        }
-                    });
-                });
-        }
-
-        // الشريط العلوي السريع
-        egui::TopBottomPanel::top("top_bar").show(ctx, |ui| {
-            egui::menu::bar(ui, |ui| {
-                ui.menu_button("File", |ui| {
-                    if ui.button("Save Project (.ah2d)").clicked() {
-                        self.trigger_save();
-                        ui.close_menu();
-                    }
-                    if ui.button("Open Project (.ah2d)").clicked() {
-                        if let Some(path) = rfd::FileDialog::new()
-                            .add_filter("AniHady2D Project", &["ah2d"])
-                            .pick_file()
-                        {
-                            if let Ok(proj) = AniProject::load_from_file(&path) {
-                                self.project = proj;
-                                self.has_unsaved_changes = false;
-                            }
-                        }
-                        ui.close_menu();
-                    }
+                    ui.label(format!("Current Version: v{}", CURRENT_VERSION));
                     ui.separator();
-                    if ui.button("Export Video (MP4)").clicked() {
-                        if let Some(path) = rfd::FileDialog::new()
-                            .add_filter("MP4 Video", &["mp4"])
-                            .set_file_name("AniHady2D_Output.mp4")
-                            .save_file()
-                        {
-                            match exporter::export_to_mp4(&self.project, &path) {
-                                Ok(_) => self.status_message = "Exported MP4 Successfully!".to_string(),
-                                Err(e) => self.status_message = e,
-                            }
-                        }
-                        ui.close_menu();
-                    }
-                });
-                ui.separator();
-                if ui.button("+ Image").clicked() {
-                    self.import_image_dialog();
-                }
-                if ui.button("+ Video").clicked() {
-                    self.import_video_dialog();
-                }
-                if ui.button("+ Audio").clicked() {
-                    self.import_audio_dialog();
-                }
-                ui.separator();
-                if ui.button("Undo").clicked() {
-                    self.undo();
-                }
-                if ui.button("Symbol (F8)").clicked() {
-                    self.show_symbol_dialog = true;
-                }
-                ui.separator();
-                ui.label(format!("Zoom: {:.0}%", self.zoom_level * 100.0));
-                if ui.button("100%").clicked() {
-                    self.zoom_level = 1.0;
-                    self.pan_offset = egui::Vec2::ZERO;
-                }
-                ui.separator();
-                ui.label(&self.status_message);
-            });
-        });
-
-        // لوحة الأدوات اليسرى
-        egui::SidePanel::left("tools_panel").exact_width(155.0).show(ctx, |ui| {
-            ui.heading("Tools");
-            ui.separator();
-            ui.selectable_value(&mut self.active_tool, ToolType::VectorPen, "Vector Pen");
-            ui.selectable_value(&mut self.active_tool, ToolType::Brush, "Brush");
-            ui.selectable_value(&mut self.active_tool, ToolType::Eraser, "Eraser");
-            ui.selectable_value(&mut self.active_tool, ToolType::Bucket, "Paint Bucket");
-            ui.selectable_value(&mut self.active_tool, ToolType::Select, "Select / Move");
-            ui.selectable_value(&mut self.active_tool, ToolType::Eyedropper, "Eyedropper");
-            ui.separator();
-            if ui.button("+ Import Brush").clicked() {
-                if let Some(path) = rfd::FileDialog::new()
-                    .add_filter("Brush", &["png", "abr"])
-                    .pick_file()
-                {
-                    self.imported_brushes.push(
-                        path.file_name()
-                            .unwrap_or_default()
-                            .to_string_lossy()
-                            .to_string(),
-                    );
-                }
-            }
-            for b in &self.imported_brushes {
-                ui.label(format!("• {}", b));
-            }
-            ui.separator();
-            ui.label("Size:");
-            ui.add(egui::Slider::new(&mut self.brush_size, 1.0..=100.0));
-            ui.label("Color:");
-            ui.color_edit_button_srgba_unmultiplied(&mut self.brush_color);
-            ui.separator();
-            ui.checkbox(&mut self.pen_pressure_enabled, "Pen Pressure");
-        });
-
-        // لوحة مكتبة الرموز والملفات الصوتية اليمنى
-        egui::SidePanel::right("right_panel").exact_width(195.0).show(ctx, |ui| {
-            ui.heading("Symbols Library");
-            let sym_names: Vec<String> = self.project.library_symbols.keys().cloned().collect();
-            if sym_names.is_empty() {
-                ui.label("Draw & press F8 to create symbol");
-            }
-            for s_name in sym_names {
-                ui.horizontal(|ui| {
-                    ui.label(&s_name);
-                    if ui.button("+ Insert").clicked() {
-                        self.save_undo_state();
-                        if let Some(layer) = self.project.layers.get_mut(self.active_layer_idx) {
-                            let frame = layer.keyframes.entry(self.current_frame).or_default();
-                            frame.symbol_instances.push(SymbolInstance {
-                                symbol_name: s_name.clone(),
-                                x: 50.0,
-                                y: 50.0,
-                                scale: 1.0,
-                            });
-                            self.has_unsaved_changes = true;
-                        }
-                    }
-                });
-            }
-            ui.add_space(15.0);
-            ui.separator();
-            ui.heading("Audio Tracks");
-            if ui.button("+ Add Audio Track").clicked() {
-                self.import_audio_dialog();
-            }
-            let mut remove_audio_idx = None;
-            for (idx, track) in self.project.audio_tracks.iter().enumerate() {
-                ui.horizontal(|ui| {
-                    ui.label(format!("🎵 {}", track.name));
-                    if ui.button("X").clicked() {
-                        remove_audio_idx = Some(idx);
-                    }
-                });
-            }
-            if let Some(idx) = remove_audio_idx {
-                self.project.audio_tracks.remove(idx);
-            }
-        });
-
-        // التايم لاين الاحترافي السفلي (طبقات + فريمات + تحكم تشغيل كامل)
-        egui::TopBottomPanel::bottom("timeline_panel").exact_height(210.0).show(ctx, |ui| {
-            // شريط أزرار التشغيل والـ FPS والـ Onion Skin
-            ui.horizontal(|ui| {
-                if ui.button("|<").on_hover_text("First Frame").clicked() {
-                    self.current_frame = 1;
-                }
-                if ui.button("<").on_hover_text("Previous Frame").clicked() {
-                    if self.current_frame > 1 {
-                        self.current_frame -= 1;
-                    }
-                }
-                if ui.button(if self.is_playing { "⏸ Pause" } else { "▶ Play" }).clicked() {
-                    self.is_playing = !self.is_playing;
-                    if self.is_playing {
-                        self.start_audio_playback();
-                    } else {
-                        self.stop_audio_playback();
-                    }
-                }
-                if ui.button(">").on_hover_text("Next Frame").clicked() {
-                    if self.current_frame < self.project.total_frames {
-                        self.current_frame += 1;
-                    }
-                }
-                if ui.button(">|").on_hover_text("Last Frame").clicked() {
-                    self.current_frame = self.project.total_frames;
-                }
-
-                ui.separator();
-                ui.label(format!("Frame: {} / {}", self.current_frame, self.project.total_frames));
-                ui.label("FPS:");
-                ui.add(egui::DragValue::new(&mut self.project.fps).range(1..=60));
-
-                ui.separator();
-                ui.checkbox(&mut self.project.onion_skin.enabled, "Onion Skin");
-                if self.project.onion_skin.enabled {
-                    ui.label("Before:");
-                    ui.add(egui::DragValue::new(&mut self.project.onion_skin.frames_before).range(0..=10));
-                    ui.color_edit_button_srgba_unmultiplied(&mut self.project.onion_skin.color_before);
-                    ui.label("After:");
-                    ui.add(egui::DragValue::new(&mut self.project.onion_skin.frames_after).range(0..=10));
-                    ui.color_edit_button_srgba_unmultiplied(&mut self.project.onion_skin.color_after);
-                }
-
-                ui.separator();
-                if ui.button("+ Layer").clicked() {
-                    self.save_undo_state();
-                    let count = self.project.layers.len() + 1;
-                    let mut kf = HashMap::new();
-                    kf.insert(1, Default::default());
-                    self.project.layers.push(Layer {
-                        name: format!("Layer {}", count),
-                        visible: true,
-                        locked: false,
-                        keyframes: kf,
-                    });
-                }
-                if ui.button("Clear Frame").clicked() {
-                    self.save_undo_state();
-                    if let Some(layer) = self.project.layers.get_mut(self.active_layer_idx) {
-                        layer.keyframes.remove(&self.current_frame);
-                        self.has_unsaved_changes = true;
-                    }
-                }
-            });
-
-            ui.separator();
-
-            // شبكة الطبقات والفريمات (Layers & Frames Grid)
-            egui::ScrollArea::both().show(ui, |ui| {
-                // صف أرقام الفريمات العلوي
-                ui.horizontal(|ui| {
-                    ui.allocate_ui(egui::vec2(130.0, 20.0), |ui| {
-                        ui.strong("Layers / Frames");
-                    });
-                    for f in 1..=self.project.total_frames {
-                        let is_curr = self.current_frame == f;
-                        let btn = egui::Button::new(format!("{:02}", f))
-                            .min_size(egui::vec2(26.0, 20.0))
-                            .fill(if is_curr { egui::Color32::from_rgb(200, 50, 50) } else { egui::Color32::from_gray(45) });
-                        if ui.add(btn).clicked() {
-                            self.current_frame = f;
-                        }
-                    }
-                });
-
-                // صفوف الطبقات (Layers)
-                let mut delete_layer_idx = None;
-                let layers_len = self.project.layers.len();
-                for (l_idx, layer) in self.project.layers.iter_mut().enumerate() {
-                    ui.horizontal(|ui| {
-                        ui.allocate_ui(egui::vec2(130.0, 24.0), |ui| {
+                    match current_st {
+                        UpdateState::Idle => {}
+                        UpdateState::Checking => {
                             ui.horizontal(|ui| {
-                                ui.checkbox(&mut layer.visible, "");
-                                if ui.selectable_label(self.active_layer_idx == l_idx, &layer.name).clicked() {
-                                    self.active_layer_idx = l_idx;
+                                ui.spinner();
+                                ui.label("Checking GitHub for updates...");
+                            });
+                        }
+                        UpdateState::UpToDate => {
+                            ui.colored_label(egui::Color32::GREEN, "You are using the latest version!");
+                            ui.add_space(8.0);
+                            if ui.button("Close").clicked() {
+                                self.show_update_dialog = false;
+                            }
+                        }
+                        UpdateState::UpdateAvailable { version, download_url } => {
+                            ui.colored_label(egui::Color32::LIGHT_BLUE, format!("New Update Available: v{}", version));
+                            ui.add_space(8.0);
+                            ui.horizontal(|ui| {
+                                if ui.button("Download & Install Now").clicked() {
+                                    self.download_and_apply_update(download_url, ctx.clone());
                                 }
-                                if layers_len > 1 && ui.small_button("🗑").clicked() {
-                                    delete_layer_idx = Some(l_idx);
+                                if ui.button("Later").clicked() {
+                                    self.show_update_dialog = false;
                                 }
                             });
-                        });
-
-                        for f in 1..=self.project.total_frames {
-                            let has_content = layer.keyframes.get(&f).map_or(false, |fd| {
-                                !fd.strokes.is_empty() || !fd.media_items.is_empty() || !fd.symbol_instances.is_empty()
+                        }
+                        UpdateState::Downloading(msg) => {
+                            ui.horizontal(|ui| {
+                                ui.spinner();
+                                ui.label(msg);
                             });
-                            let is_selected = self.active_layer_idx == l_idx && self.current_frame == f;
-                            let symbol = if has_content { "●" } else { "·" };
-                            let fill = if is_selected {
-                                egui::Color32::from_rgb(40, 110, 200)
-                            } else if has_content {
-                                egui::Color32::from_gray(85)
-                            } else {
-                                egui::Color32::from_gray(32)
-                            };
-                            let cell = egui::Button::new(symbol)
-                                .min_size(egui::vec2(26.0, 22.0))
-                                .fill(fill);
-                            if ui.add(cell).clicked() {
-                                self.active_layer_idx = l_idx;
-                                self.current_frame = f;
+                        }
+                        UpdateState::ReadyToRestart => {
+                            ui.colored_label(egui::Color32::GREEN, "Update downloaded! Ready to restart.");
+                            ui.add_space(8.0);
+                            if ui.button("Restart & Apply Update").clicked() {
+                                self.restart_with_new_exe();
                             }
                         }
-                    });
-                }
-
-                if let Some(idx) = delete_layer_idx {
-                    self.project.layers.remove(idx);
-                    if self.active_layer_idx >= self.project.layers.len() {
-                        self.active_layer_idx = self.project.layers.len().saturating_sub(1);
-                    }
-                }
-
-                // صفوف الطبقات الصوتية (Audio Layers)
-                for track in &self.project.audio_tracks {
-                    ui.horizontal(|ui| {
-                        ui.allocate_ui(egui::vec2(130.0, 22.0), |ui| {
-                            ui.colored_label(egui::Color32::LIGHT_BLUE, format!("🎵 {}", track.name));
-                        });
-                        for f in 1..=self.project.total_frames {
-                            let active = f >= track.start_frame;
-                            let fill = if active {
-                                egui::Color32::from_rgb(30, 120, 140)
-                            } else {
-                                egui::Color32::from_gray(28)
-                            };
-                            let cell = egui::Button::new(if active { "~" } else { " " })
-                                .min_size(egui::vec2(26.0, 20.0))
-                                .fill(fill);
-                            if ui.add(cell).clicked() {
-                                self.current_frame = f;
-                            }
-                        }
-                    });
-                }
-            });
-        });
-
-        // مساحة الرسم الرئيسية (Canvas)
-        egui::CentralPanel::default().show(ctx, |ui| {
-            let canvas_rect = ui.available_rect_before_wrap();
-            let painter = ui.painter_at(canvas_rect);
-            let is_over_canvas = pointer_pos.map_or(false, |p| canvas_rect.contains(p));
-
-            if scroll_y != 0.0 && is_over_canvas {
-                self.zoom_level = (self.zoom_level + scroll_y * 0.001).clamp(-2.0, 3.0);
-            }
-
-            if space_down && pointer_down && is_over_canvas {
-                if let (Some(curr), Some(last)) = (pointer_pos, self.last_pointer_pos) {
-                    self.pan_offset += curr - last;
-                }
-            }
-
-            let center = canvas_rect.center() + self.pan_offset;
-            let scale = self.zoom_level.abs().max(0.1);
-            let stage_size = egui::vec2(self.project.width as f32, self.project.height as f32) * scale;
-            let stage_rect = egui::Rect::from_center_size(center, stage_size);
-            painter.rect_filled(stage_rect, 0.0, egui::Color32::WHITE);
-
-            let to_stage = |p: egui::Pos2| egui::pos2((p.x - stage_rect.min.x) / scale, (p.y - stage_rect.min.y) / scale);
-            let to_screen = |p: egui::Pos2| egui::pos2(stage_rect.min.x + p.x * scale, stage_rect.min.y + p.y * scale);
-
-            if !space_down && is_over_canvas {
-                if let Some(pos) = pointer_pos {
-                    let stage_pos = to_stage(pos);
-                    let delta = self.last_pointer_pos.map_or(egui::Vec2::ZERO, |last| (pos - last) / scale);
-
-                    match self.active_tool {
-                        ToolType::Select => {
-                            if pointer_pressed {
-                                self.selected_stroke_idx = None;
-                                self.selected_symbol_inst_idx = None;
-                                if let Some(layer) = self.project.layers.get(self.active_layer_idx) {
-                                    if let Some(frame) = layer.keyframes.get(&self.current_frame) {
-                                        for (i, inst) in frame.symbol_instances.iter().enumerate() {
-                                            if ((inst.x - stage_pos.x).powi(2) + (inst.y - stage_pos.y).powi(2)).sqrt() < 60.0 {
-                                                self.selected_symbol_inst_idx = Some(i);
-                                                break;
-                                            }
-                                        }
-                                        if self.selected_symbol_inst_idx.is_none() {
-                                            for (i, s) in frame.strokes.iter().enumerate() {
-                                                if s.points.iter().any(|p| ((p.x - stage_pos.x).powi(2) + (p.y - stage_pos.y).powi(2)).sqrt() < 20.0) {
-                                                    self.selected_stroke_idx = Some(i);
-                                                    break;
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            } else if pointer_down && delta.length_sq() > 0.0 {
-                                if let Some(layer) = self.project.layers.get_mut(self.active_layer_idx) {
-                                    if let Some(frame) = layer.keyframes.get_mut(&self.current_frame) {
-                                        if let Some(idx) = self.selected_symbol_inst_idx {
-                                            if let Some(inst) = frame.symbol_instances.get_mut(idx) {
-                                                inst.x += delta.x;
-                                                inst.y += delta.y;
-                                                self.has_unsaved_changes = true;
-                                            }
-                                        } else if let Some(idx) = self.selected_stroke_idx {
-                                            if let Some(stroke) = frame.strokes.get_mut(idx) {
-                                                for p in &mut stroke.points {
-                                                    p.x += delta.x;
-                                                    p.y += delta.y;
-                                                }
-                                                self.has_unsaved_changes = true;
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        ToolType::Bucket if pointer_pressed => {
-                            if let Some(layer) = self.project.layers.get_mut(self.active_layer_idx) {
-                                if let Some(frame) = layer.keyframes.get_mut(&self.current_frame) {
-                                    for s in frame.strokes.iter_mut().rev() {
-                                        if s.points.iter().any(|p| ((p.x - stage_pos.x).powi(2) + (p.y - stage_pos.y).powi(2)).sqrt() < 35.0) {
-                                            s.fill_color = Some(self.brush_color);
-                                            self.has_unsaved_changes = true;
-                                            break;
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        ToolType::Eraser if pointer_down => {
-                            if let Some(layer) = self.project.layers.get_mut(self.active_layer_idx) {
-                                if let Some(frame) = layer.keyframes.get_mut(&self.current_frame) {
-                                    let r = self.brush_size;
-                                    frame.strokes.retain(|s| !s.points.iter().any(|p| ((p.x - stage_pos.x).powi(2) + (p.y - stage_pos.y).powi(2)).sqrt() < r));
-                                    self.has_unsaved_changes = true;
-                                }
-                            }
-                        }
-                        ToolType::Eyedropper if pointer_pressed => {
-                            if let Some(layer) = self.project.layers.get(self.active_layer_idx) {
-                                if let Some(frame) = layer.keyframes.get(&self.current_frame) {
-                                    for s in &frame.strokes {
-                                        if s.points.iter().any(|p| ((p.x - stage_pos.x).powi(2) + (p.y - stage_pos.y).powi(2)).sqrt() < 15.0) {
-                                            self.brush_color = s.color;
-                                            break;
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        ToolType::VectorPen | ToolType::Brush if pointer_down => {
-                            let speed = delta.length();
-                            let pressure = if self.pen_pressure_enabled {
-                                (1.0 - (speed * 0.015)).clamp(0.35, 1.0)
-                            } else {
-                                1.0
-                            };
-
-                            if let Some(stroke) = &mut self.current_stroke {
-                                if let Some(last) = stroke.points.last() {
-                                    let dist = ((last.x - stage_pos.x).powi(2) + (last.y - stage_pos.y).powi(2)).sqrt();
-                                    if dist >= 2.0 {
-                                        stroke.points.push(StrokePoint { x: stage_pos.x, y: stage_pos.y, pressure });
-                                    }
-                                }
-                            } else {
-                                self.save_undo_state();
-                                self.current_stroke = Some(Stroke {
-                                    points: vec![StrokePoint { x: stage_pos.x, y: stage_pos.y, pressure }],
-                                    color: self.brush_color,
-                                    fill_color: None,
-                                    base_width: self.brush_size,
-                                    is_vector: self.active_tool == ToolType::VectorPen,
-                                    brush_texture_id: None,
-                                });
-                            }
-                        }
-                        _ => {}
-                    }
-                }
-            }
-
-            if pointer_released {
-                if let Some(mut stroke) = self.current_stroke.take() {
-                    if stroke.is_vector {
-                        stroke.smooth_vector();
-                    }
-                    if let Some(layer) = self.project.layers.get_mut(self.active_layer_idx) {
-                        layer.keyframes.entry(self.current_frame).or_default().strokes.push(stroke);
-                        self.has_unsaved_changes = true;
-                    }
-                }
-            }
-
-            self.last_pointer_pos = if pointer_down { pointer_pos } else { None };
-
-            if self.project.onion_skin.enabled && !self.is_playing {
-                if let Some(layer) = self.project.layers.get(self.active_layer_idx) {
-                    for offset in 1..=self.project.onion_skin.frames_before {
-                        if self.current_frame > offset {
-                            if let Some(fd) = layer.keyframes.get(&(self.current_frame - offset)) {
-                                for s in &fd.strokes {
-                                    draw_stroke_fast(&painter, s, Some(self.project.onion_skin.color_before), scale, 0.0, 0.0, &to_screen);
-                                }
-                            }
-                        }
-                    }
-                    for offset in 1..=self.project.onion_skin.frames_after {
-                        if let Some(fd) = layer.keyframes.get(&(self.current_frame + offset)) {
-                            for s in &fd.strokes {
-                                draw_stroke_fast(&painter, s, Some(self.project.onion_skin.color_after), scale, 0.0, 0.0, &to_screen);
-                            }
-                        }
-                    }
-                }
-            }
-
-            let mut media_to_draw = Vec::new();
-            for layer in &self.project.layers {
-                if layer.visible {
-                    if let Some(fd) = layer.keyframes.get(&self.current_frame) {
-                        media_to_draw.extend(fd.media_items.clone());
-                    }
-                }
-            }
-            for m in media_to_draw {
-                if let Some(tex) = self.load_texture_if_needed(ctx, &m.path) {
-                    painter.image(
-                        tex.id(),
-                        egui::Rect::from_min_max(to_screen(egui::pos2(m.x, m.y)), to_screen(egui::pos2(m.x + m.width, m.y + m.height))),
-                        egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
-                        egui::Color32::WHITE,
-                    );
-                }
-            }
-
-            for layer in &self.project.layers {
-                if layer.visible {
-                    if let Some(fd) = layer.keyframes.get(&self.current_frame) {
-                        for s in &fd.strokes {
-                            draw_stroke_fast(&painter, s, None, scale, 0.0, 0.0, &to_screen);
-                        }
-                        for inst in &fd.symbol_instances {
-                            if let Some(sym) = self.project.library_symbols.get(&inst.symbol_name) {
-                                for s in &sym.strokes {
-                                    draw_stroke_fast(&painter, s, None, scale * inst.scale, inst.x, inst.y, &to_screen);
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            if let Some(stroke) = &self.current_stroke {
-                draw_stroke_fast(&painter, stroke, None, scale, 0.0, 0.0, &to_screen);
-            }
-        });
-    }
-}
-
-fn draw_stroke_fast<F: Fn(egui::Pos2) -> egui::Pos2>(
-    painter: &egui::Painter,
-    stroke: &Stroke,
-    override_color: Option<[u8; 4]>,
-    scale: f32,
-    ox: f32,
-    oy: f32,
-    to_screen: &F,
-) {
-    if stroke.points.len() < 2 {
-        return;
-    }
-    let pts: Vec<egui::Pos2> = stroke
-        .points
-        .iter()
-        .map(|p| to_screen(egui::pos2(p.x + ox, p.y + oy)))
-        .collect();
-
-    if let Some(fc) = stroke.fill_color {
-        let fill_c = override_color.unwrap_or(fc);
-        painter.add(egui::Shape::convex_polygon(
-            pts.clone(),
-            egui::Color32::from_rgba_unmultiplied(fill_c[0], fill_c[1], fill_c[2], fill_c[3]),
-            egui::Stroke::NONE,
-        ));
-    }
-
-    let c = override_color.unwrap_or(stroke.color);
-    let color = egui::Color32::from_rgba_unmultiplied(c[0], c[1], c[2], c[3]);
-    painter.add(egui::Shape::line(pts, egui::Stroke::new(stroke.base_width * scale, color)));
-}
-
-fn main() -> eframe::Result<()> {
-    let options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default()
-            .with_title("AniHady2D")
-            .with_inner_size([1280.0, 720.0]),
-        renderer: eframe::Renderer::Wgpu,
-        wgpu_options: eframe::egui_wgpu::WgpuConfiguration {
-            power_preference: eframe::wgpu::PowerPreference::HighPerformance,
-            present_mode: eframe::wgpu::PresentMode::AutoNoVsync,
-            ..Default::default()
-        },
-        ..Default::default()
-    };
-
-    eframe::run_native(
-        "AniHady2D",
-        options,
-        Box::new(|cc| Ok(Box::new(AniHadyApp::new(cc)))),
-    )
-}
+                        UpdateState::Error(err) => {
+                            ui.colored_label(egui::Color32::RED, err);
+                            ui.add_space(8.0);
+                            if ui.button("Close").clicked() {
+                                self.show_update_dialog = false;
