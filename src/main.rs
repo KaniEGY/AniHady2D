@@ -489,7 +489,6 @@ fn draw_vector_tool_icon(
             painter.line_segment([c + egui::vec2(1.0, -4.5), c + egui::vec2(4.5, -1.0)], egui::Stroke::new(2.2, egui::Color32::WHITE));
         }
         ToolType::Text => {
-            // أيقونة حرف T للنص
             painter.line_segment([c + egui::vec2(-7.0, -7.5), c + egui::vec2(7.0, -7.5)], egui::Stroke::new(2.5, main_color));
             painter.line_segment([c + egui::vec2(0.0, -7.5), c + egui::vec2(0.0, 8.0)], egui::Stroke::new(2.5, main_color));
         }
@@ -822,7 +821,6 @@ impl AniHadyApp {
         Self::get_effective_keyframe_index(layer, frame).and_then(|k| layer.keyframes.get(&k))
     }
 
-    /// حساب وضع الرمز مع دعم الحركة التلقائية (Motion Tweening) بين فريمين
     fn get_interpolated_symbols(layer: &Layer, frame: usize) -> Vec<SymbolInstance> {
         let prev_k = match layer.keyframes.keys().filter(|&&k| k <= frame).max().copied() {
             Some(k) => k,
@@ -1686,7 +1684,6 @@ impl eframe::App for AniHadyApp {
             ctx.request_repaint();
         }
 
-        // نافذة إضافة نص عربي أو إنجليزي (Text Tool)
         if self.show_text_dialog {
             egui::Window::new(tr(lang, "Insert Text", "إضافة نص"))
                 .collapsible(false)
@@ -2480,7 +2477,6 @@ impl eframe::App for AniHadyApp {
                             });
                         }
 
-                        // تفعيل الحركة التلقائية (Motion Tween) للفريم الحالي
                         if let Some(layer) = self.project.layers.get_mut(self.active_layer_idx) {
                             if let Some(fd) = layer.keyframes.get_mut(&self.current_frame) {
                                 if !fd.symbol_instances.is_empty() {
@@ -3247,7 +3243,6 @@ impl eframe::App for AniHadyApp {
                                 painter.rect_filled(handle_rect, 2.0, egui::Color32::from_rgb(56, 189, 248));
                             }
                         }
-                        // رسم النصوص العربية والإنجليزية على الكانفا
                         for txt in &fd.text_items {
                             let shaped = fix_ar(&txt.content);
                             let col = egui::Color32::from_rgba_unmultiplied(txt.color[0], txt.color[1], txt.color[2], txt.color[3]);
@@ -3260,7 +3255,6 @@ impl eframe::App for AniHadyApp {
                             );
                         }
                     }
-                    // رسم الرموز مع دعم Motion Tweening التلقائي
                     let interp_symbols = Self::get_interpolated_symbols(layer, self.current_frame);
                     for inst in &interp_symbols {
                         if let Some(sym) = self.project.library_symbols.get(&inst.symbol_name) {
