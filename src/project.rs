@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
+use std::io::Read;
 use std::path::Path;
 
 #[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Debug)]
@@ -24,6 +25,60 @@ pub enum AudioSyncMode {
 impl Default for AudioSyncMode {
     fn default() -> Self {
         AudioSyncMode::Stream
+    }
+}
+
+#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Debug)]
+pub enum TweenMode {
+    None,
+    Classic,
+    Shape,
+}
+
+impl Default for TweenMode {
+    fn default() -> Self {
+        TweenMode::None
+    }
+}
+
+#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Debug)]
+pub enum EasingCurve {
+    Linear,
+    EaseIn,
+    EaseOut,
+    EaseInOut,
+}
+
+impl Default for EasingCurve {
+    fn default() -> Self {
+        EasingCurve::EaseInOut
+    }
+}
+
+impl EasingCurve {
+    pub fn apply(&self, t: f32) -> f32 {
+        let t = t.clamp(0.0, 1.0);
+        match self {
+            EasingCurve::Linear => t,
+            EasingCurve::EaseIn => t * t,
+            EasingCurve::EaseOut => 1.0 - (1.0 - t) * (1.0 - t),
+            EasingCurve::EaseInOut => {
+                if t < 0.5 {
+                    2.0 * t * t
+                } else {
+                    1.0 - (-2.0 * t + 2.0).powi(2) * 0.5
+                }
+            }
+        }
+    }
+
+    pub fn label(&self) -> &'static str {
+        match self {
+            EasingCurve::Linear => "Linear (ثابت)",
+            EasingCurve::EaseIn => "Ease In (تسارع تدريجي)",
+            EasingCurve::EaseOut => "Ease Out (تباطؤ ناعم)",
+            EasingCurve::EaseInOut => "Ease In-Out (سينمائي)",
+        }
     }
 }
 
@@ -64,7 +119,6 @@ fn default_width() -> f32 {
 }
 
 impl Stroke {
-    /// تنعيم خطوط الفرشاة العادية بتقنية Chaikin
     pub fn smooth_brush(&mut self) {
         if self.points.len() < 3 {
             return;
@@ -91,12 +145,37 @@ impl Stroke {
         }
     }
 
-    /// تبسيط نقاط الفيكتور (Douglas-Peucker) لترك نقاط تحكم ذكية وقليلة فقط
     pub fn simplify_vector_nodes(&mut self, tolerance: f32) {
         if self.points.len() <= 3 {
             return;
         }
         self.points = rdp_simplify(&self.points, tolerance);
+    }
+
+    /// إعادة توزيع نقاط الخط لعدد محدد لدعم Shape Tween (Contour Morphing)
+    pub fn resample_points(&self, target_count: usize) -> Vec<StrokePoint> {
+        if self.points.is_empty() || target_count == 0 {
+            return Vec::new();
+        }
+        if self.points.len() == 1 || target_count == 1 {
+            return vec![self.points[0].clone(); target_count];
+        }
+        let mut out = Vec::with_capacity(target_count);
+        let max_idx = (self.points.len() - 1) as f32;
+        for i in 0..target_count {
+            let pos = (i as f32 / (target_count - 1).max(1) as f32) * max_idx;
+            let idx0 = pos.floor() as usize;
+            let idx1 = (idx0 + 1).min(self.points.len() - 1);
+            let frac = pos - idx0 as f32;
+            let p0 = &self.points[idx0];
+            let p1 = &self.points[idx1];
+            out.push(StrokePoint {
+                x: p0.x + (p1.x - p0.x) * frac,
+                y: p0.y + (p1.y - p0.y) * frac,
+                pressure: p0.pressure + (p1.pressure - p0.pressure) * frac,
+            });
+        }
+        out
     }
 }
 
@@ -188,12 +267,17 @@ fn default_media_dim() -> f32 {
     300.0
 }
 
+/// رمز يدعم التايم لاين الداخلي المتداخل (Nested Timeline)
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Symbol {
     #[serde(default)]
     pub name: String,
     #[serde(default)]
     pub strokes: Vec<Stroke>,
+    #[serde(default)]
+    pub nested_keyframes: HashMap<usize, Vec<Stroke>>,
+    #[serde(default = "default_one")]
+    pub nested_total_frames: usize,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -206,6 +290,12 @@ pub struct SymbolInstance {
     pub y: f32,
     #[serde(default = "default_pressure")]
     pub scale: f32,
+    #[serde(default)]
+    pub rotation_deg: f32,
+    #[serde(default)]
+    pub anchor_offset_x: f32,
+    #[serde(default)]
+    pub anchor_offset_y: f32,
 }
 
 #[derive(Serialize, Deserialize, Clone, Default, Debug)]
@@ -220,6 +310,10 @@ pub struct FrameData {
     pub text_items: Vec<TextItem>,
     #[serde(default)]
     pub motion_tween: bool,
+    #[serde(default)]
+    pub tween_mode: TweenMode,
+    #[serde(default)]
+    pub easing: EasingCurve,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -328,7 +422,6 @@ fn default_w() -> u32 { 1280 }
 fn default_h() -> u32 { 720 }
 fn default_fps() -> u32 { 24 }
 
-/// هياكل التوافق العكسي (Legacy V1) لقراءة أقدم ملفات .ah2d التي كانت تخزن الفريمات كـ Vec<FrameData>
 #[derive(Deserialize)]
 struct LegacyLayerV1 {
     #[serde(default = "default_layer_name")]
@@ -376,25 +469,133 @@ impl Default for AniProject {
 }
 
 impl AniProject {
+    /// معمارية Time is a Function (من AniCraft):
+    /// تقييم المشهد رياضياً عند أي فريم مع دعم Shape Tween (Contour Morphing) و Classic Tween و Easing
+    pub fn evaluate_layer_at_frame(&self, layer: &Layer, frame: usize) -> FrameData {
+        let prev_k = match layer.keyframes.keys().filter(|&&k| k <= frame).max().copied() {
+            Some(k) => k,
+            None => return FrameData::default(),
+        };
+        let prev_fd = match layer.keyframes.get(&prev_k) {
+            Some(fd) => fd,
+            None => return FrameData::default(),
+        };
+
+        let effective_tween = if prev_fd.tween_mode != TweenMode::None {
+            prev_fd.tween_mode
+        } else if prev_fd.motion_tween {
+            TweenMode::Classic
+        } else {
+            TweenMode::None
+        };
+
+        if effective_tween == TweenMode::None || prev_k == frame {
+            return prev_fd.clone();
+        }
+
+        if let Some(&next_k) = layer.keyframes.keys().filter(|&&k| k > prev_k).min() {
+            if frame <= next_k {
+                if let Some(next_fd) = layer.keyframes.get(&next_k) {
+                    let raw_t = (frame - prev_k) as f32 / (next_k - prev_k).max(1) as f32;
+                    let t = prev_fd.easing.apply(raw_t);
+
+                    let mut evaluated = prev_fd.clone();
+
+                    // 1. Classic Tween للرموز (موقع، حجم، دوران)
+                    let mut interp_syms = Vec::with_capacity(prev_fd.symbol_instances.len());
+                    for (idx, inst) in prev_fd.symbol_instances.iter().enumerate() {
+                        if let Some(target) = next_fd.symbol_instances.get(idx) {
+                            if target.symbol_name == inst.symbol_name {
+                                interp_syms.push(SymbolInstance {
+                                    symbol_name: inst.symbol_name.clone(),
+                                    x: inst.x + (target.x - inst.x) * t,
+                                    y: inst.y + (target.y - inst.y) * t,
+                                    scale: inst.scale + (target.scale - inst.scale) * t,
+                                    rotation_deg: inst.rotation_deg + (target.rotation_deg - inst.rotation_deg) * t,
+                                    anchor_offset_x: inst.anchor_offset_x,
+                                    anchor_offset_y: inst.anchor_offset_y,
+                                });
+                                continue;
+                            }
+                        }
+                        interp_syms.push(inst.clone());
+                    }
+                    evaluated.symbol_instances = interp_syms;
+
+                    // 2. Shape Tween (Contour Morphing) لتحويل الخطوط المرسومة إلى شكل الفريم التالي
+                    if effective_tween == TweenMode::Shape {
+                        let mut morphed_strokes = Vec::with_capacity(prev_fd.strokes.len());
+                        for (idx, s0) in prev_fd.strokes.iter().enumerate() {
+                            if let Some(s1) = next_fd.strokes.get(idx) {
+                                let n = s0.points.len().max(s1.points.len()).clamp(2, 96);
+                                let pts0 = s0.resample_points(n);
+                                let pts1 = s1.resample_points(n);
+                                let mut blended = Vec::with_capacity(n);
+                                for (p0, p1) in pts0.iter().zip(pts1.iter()) {
+                                    blended.push(StrokePoint {
+                                        x: p0.x + (p1.x - p0.x) * t,
+                                        y: p0.y + (p1.y - p0.y) * t,
+                                        pressure: p0.pressure + (p1.pressure - p0.pressure) * t,
+                                    });
+                                }
+                                let c = [
+                                    (s0.color[0] as f32 + (s1.color[0] as f32 - s0.color[0] as f32) * t) as u8,
+                                    (s0.color[1] as f32 + (s1.color[1] as f32 - s0.color[1] as f32) * t) as u8,
+                                    (s0.color[2] as f32 + (s1.color[2] as f32 - s0.color[2] as f32) * t) as u8,
+                                    (s0.color[3] as f32 + (s1.color[3] as f32 - s0.color[3] as f32) * t) as u8,
+                                ];
+                                morphed_strokes.push(Stroke {
+                                    points: blended,
+                                    color: c,
+                                    fill_color: s0.fill_color.or(s1.fill_color),
+                                    base_width: s0.base_width + (s1.base_width - s0.base_width) * t,
+                                    is_vector: true,
+                                    brush_texture_id: None,
+                                });
+                            } else {
+                                morphed_strokes.push(s0.clone());
+                            }
+                        }
+                        evaluated.strokes = morphed_strokes;
+                    }
+
+                    return evaluated;
+                }
+            }
+        }
+        prev_fd.clone()
+    }
+
+    /// استخراج خطوط رمز معين عند فريم محدد (لدعم Nested Timelines داخل الرموز)
+    pub fn evaluate_symbol_strokes<'a>(&'a self, sym: &'a Symbol, global_frame: usize) -> &'a [Stroke] {
+        if sym.nested_keyframes.is_empty() {
+            return &sym.strokes;
+        }
+        let local_f = ((global_frame.saturating_sub(1)) % sym.nested_total_frames.max(1)) + 1;
+        if let Some(&k) = sym.nested_keyframes.keys().filter(|&&k| k <= local_f).max() {
+            if let Some(st) = sym.nested_keyframes.get(&k) {
+                return st;
+            }
+        }
+        &sym.strokes
+    }
+
     pub fn save_to_file(&self, path: &Path) -> Result<(), String> {
         let json = serde_json::to_vec(self).map_err(|e| format!("Serialize error: {}", e))?;
         let compressed = zstd::encode_all(&json[..], 3).map_err(|e| format!("Compress error: {}", e))?;
         fs::write(path, compressed).map_err(|e| format!("Write error: {}", e))
     }
 
-    /// محوّل المشاريع الشامل: يقرأ أي مشروع من أي إصدار سابق أو حالي بدون فشل
     pub fn load_from_file(path: &Path) -> Result<Self, String> {
         let raw = fs::read(path).map_err(|e| format!("Read error: {}", e))?;
         let decompressed = zstd::decode_all(&raw[..]).unwrap_or_else(|_| raw.clone());
 
-        // 1. محاولة القراءة بالهيكل الحالي (JSON أو MessagePack)
         let mut loaded: Option<AniProject> = serde_json::from_slice::<AniProject>(&decompressed)
             .ok()
             .or_else(|| rmp_serde::from_slice::<AniProject>(&decompressed).ok())
             .or_else(|| serde_json::from_slice::<AniProject>(&raw).ok())
             .or_else(|| rmp_serde::from_slice::<AniProject>(&raw).ok());
 
-        // 2. إذا كان المشروع قديماً جداً (V1 حيث كانت الفريمات Vec<FrameData>)، يتم تحويله تلقائياً
         if loaded.is_none() {
             let legacy_opt: Option<LegacyProjectV1> = serde_json::from_slice::<LegacyProjectV1>(&decompressed)
                 .ok()
@@ -458,4 +659,363 @@ impl AniProject {
             None => Err("تعذر قراءة ملف المشروع، تأكد من أن الملف غير تالف.".to_string()),
         }
     }
+}
+
+/// استيراد مسارات SVG وتحويلها إلى خطوط فيكتور قابلة للتعديل داخل Stick
+pub fn parse_svg_to_strokes(svg_path: &Path) -> Result<Vec<Stroke>, String> {
+    let content = fs::read_to_string(svg_path).map_err(|e| format!("SVG Read Error: {}", e))?;
+    let doc = roxmltree::Document::parse(&content).map_err(|e| format!("SVG Parse Error: {}", e))?;
+    let mut result = Vec::new();
+
+    for node in doc.descendants() {
+        let tag = node.tag_name().name();
+        if tag == "path" {
+            if let Some(d) = node.attribute("d") {
+                let stroke_col = parse_hex_color(node.attribute("stroke")).unwrap_or([0, 0, 0, 255]);
+                let fill_col = parse_hex_color(node.attribute("fill"));
+                let width = node
+                    .attribute("stroke-width")
+                    .and_then(|s| s.trim_end_matches("px").parse::<f32>().ok())
+                    .unwrap_or(4.0);
+                let pts = parse_svg_path_d(d);
+                if pts.len() >= 2 {
+                    result.push(Stroke {
+                        points: pts,
+                        color: stroke_col,
+                        fill_color: fill_col,
+                        base_width: width,
+                        is_vector: true,
+                        brush_texture_id: None,
+                    });
+                }
+            }
+        } else if tag == "rect" {
+            let x = node.attribute("x").and_then(|v| v.parse::<f32>().ok()).unwrap_or(0.0);
+            let y = node.attribute("y").and_then(|v| v.parse::<f32>().ok()).unwrap_or(0.0);
+            let w = node.attribute("width").and_then(|v| v.parse::<f32>().ok()).unwrap_or(100.0);
+            let h = node.attribute("height").and_then(|v| v.parse::<f32>().ok()).unwrap_or(100.0);
+            let stroke_col = parse_hex_color(node.attribute("stroke")).unwrap_or([0, 0, 0, 255]);
+            let fill_col = parse_hex_color(node.attribute("fill"));
+            result.push(Stroke {
+                points: vec![
+                    StrokePoint { x, y, pressure: 1.0 },
+                    StrokePoint { x: x + w, y, pressure: 1.0 },
+                    StrokePoint { x: x + w, y: y + h, pressure: 1.0 },
+                    StrokePoint { x, y: y + h, pressure: 1.0 },
+                    StrokePoint { x, y, pressure: 1.0 },
+                ],
+                color: stroke_col,
+                fill_color: fill_col,
+                base_width: 3.0,
+                is_vector: true,
+                brush_texture_id: None,
+            });
+        } else if tag == "circle" {
+            let cx = node.attribute("cx").and_then(|v| v.parse::<f32>().ok()).unwrap_or(100.0);
+            let cy = node.attribute("cy").and_then(|v| v.parse::<f32>().ok()).unwrap_or(100.0);
+            let r = node.attribute("r").and_then(|v| v.parse::<f32>().ok()).unwrap_or(50.0);
+            let stroke_col = parse_hex_color(node.attribute("stroke")).unwrap_or([0, 0, 0, 255]);
+            let fill_col = parse_hex_color(node.attribute("fill"));
+            let mut pts = Vec::new();
+            for i in 0..=32 {
+                let ang = (i as f32 / 32.0) * std::f32::consts::TAU;
+                pts.push(StrokePoint {
+                    x: cx + ang.cos() * r,
+                    y: cy + ang.sin() * r,
+                    pressure: 1.0,
+                });
+            }
+            result.push(Stroke {
+                points: pts,
+                color: stroke_col,
+                fill_color: fill_col,
+                base_width: 3.0,
+                is_vector: true,
+                brush_texture_id: None,
+            });
+        }
+    }
+
+    if result.is_empty() {
+        return Err("لم يتم العثور على مسارات فيكتور صالحة داخل ملف SVG.".to_string());
+    }
+    Ok(result)
+}
+
+fn parse_hex_color(attr: Option<&str>) -> Option<[u8; 4]> {
+    let s = attr?.trim();
+    if s == "none" || s.is_empty() {
+        return None;
+    }
+    if let Some(hex) = s.strip_prefix('#') {
+        if hex.len() == 6 {
+            let r = u8::from_str_radix(&hex[0..2], 16).ok()?;
+            let g = u8::from_str_radix(&hex[2..4], 16).ok()?;
+            let b = u8::from_str_radix(&hex[4..6], 16).ok()?;
+            return Some([r, g, b, 255]);
+        }
+    }
+    None
+}
+
+fn parse_svg_path_d(d: &str) -> Vec<StrokePoint> {
+    let mut pts = Vec::new();
+    let cleaned = d.replace(',', " ");
+    let mut tokens = Vec::new();
+    let mut buf = String::new();
+    for ch in cleaned.chars() {
+        if ch.is_alphabetic() {
+            if !buf.trim().is_empty() {
+                tokens.push(buf.trim().to_string());
+                buf.clear();
+            }
+            tokens.push(ch.to_string());
+        } else if ch.is_whitespace() {
+            if !buf.trim().is_empty() {
+                tokens.push(buf.trim().to_string());
+                buf.clear();
+            }
+        } else if ch == '-' && !buf.is_empty() && !buf.ends_with('e') && !buf.ends_with('E') {
+            tokens.push(buf.trim().to_string());
+            buf.clear();
+            buf.push(ch);
+        } else {
+            buf.push(ch);
+        }
+    }
+    if !buf.trim().is_empty() {
+        tokens.push(buf.trim().to_string());
+    }
+
+    let mut idx = 0;
+    let mut cmd = 'M';
+    let mut cur_x = 0.0f32;
+    let mut cur_y = 0.0f32;
+    let mut start_x = 0.0f32;
+    let mut start_y = 0.0f32;
+
+    while idx < tokens.len() {
+        if tokens[idx].len() == 1 && tokens[idx].chars().next().unwrap().is_alphabetic() {
+            cmd = tokens[idx].chars().next().unwrap();
+            idx += 1;
+            if cmd == 'Z' || cmd == 'z' {
+                pts.push(StrokePoint { x: start_x, y: start_y, pressure: 1.0 });
+                cur_x = start_x;
+                cur_y = start_y;
+                continue;
+            }
+        }
+        let read_f = |i: &mut usize| -> Option<f32> {
+            let v = tokens.get(*i)?.parse::<f32>().ok()?;
+            *i += 1;
+            Some(v)
+        };
+        match cmd {
+            'M' => {
+                if let (Some(x), Some(y)) = (read_f(&mut idx), read_f(&mut idx)) {
+                    cur_x = x;
+                    cur_y = y;
+                    start_x = x;
+                    start_y = y;
+                    pts.push(StrokePoint { x: cur_x, y: cur_y, pressure: 1.0 });
+                    cmd = 'L';
+                } else {
+                    idx += 1;
+                }
+            }
+            'm' => {
+                if let (Some(dx), Some(dy)) = (read_f(&mut idx), read_f(&mut idx)) {
+                    cur_x += dx;
+                    cur_y += dy;
+                    start_x = cur_x;
+                    start_y = cur_y;
+                    pts.push(StrokePoint { x: cur_x, y: cur_y, pressure: 1.0 });
+                    cmd = 'l';
+                } else {
+                    idx += 1;
+                }
+            }
+            'L' => {
+                if let (Some(x), Some(y)) = (read_f(&mut idx), read_f(&mut idx)) {
+                    cur_x = x;
+                    cur_y = y;
+                    pts.push(StrokePoint { x: cur_x, y: cur_y, pressure: 1.0 });
+                } else {
+                    idx += 1;
+                }
+            }
+            'l' => {
+                if let (Some(dx), Some(dy)) = (read_f(&mut idx), read_f(&mut idx)) {
+                    cur_x += dx;
+                    cur_y += dy;
+                    pts.push(StrokePoint { x: cur_x, y: cur_y, pressure: 1.0 });
+                } else {
+                    idx += 1;
+                }
+            }
+            'H' => {
+                if let Some(x) = read_f(&mut idx) {
+                    cur_x = x;
+                    pts.push(StrokePoint { x: cur_x, y: cur_y, pressure: 1.0 });
+                } else {
+                    idx += 1;
+                }
+            }
+            'h' => {
+                if let Some(dx) = read_f(&mut idx) {
+                    cur_x += dx;
+                    pts.push(StrokePoint { x: cur_x, y: cur_y, pressure: 1.0 });
+                } else {
+                    idx += 1;
+                }
+            }
+            'V' => {
+                if let Some(y) = read_f(&mut idx) {
+                    cur_y = y;
+                    pts.push(StrokePoint { x: cur_x, y: cur_y, pressure: 1.0 });
+                } else {
+                    idx += 1;
+                }
+            }
+            'v' => {
+                if let Some(dy) = read_f(&mut idx) {
+                    cur_y += dy;
+                    pts.push(StrokePoint { x: cur_x, y: cur_y, pressure: 1.0 });
+                } else {
+                    idx += 1;
+                }
+            }
+            'C' => {
+                if let (Some(_x1), Some(_y1), Some(_x2), Some(_y2), Some(x), Some(y)) = (
+                    read_f(&mut idx), read_f(&mut idx), read_f(&mut idx), read_f(&mut idx), read_f(&mut idx), read_f(&mut idx),
+                ) {
+                    cur_x = x;
+                    cur_y = y;
+                    pts.push(StrokePoint { x: cur_x, y: cur_y, pressure: 1.0 });
+                } else {
+                    idx += 1;
+                }
+            }
+            'c' => {
+                if let (Some(_dx1), Some(_dy1), Some(_dx2), Some(_dy2), Some(dx), Some(dy)) = (
+                    read_f(&mut idx), read_f(&mut idx), read_f(&mut idx), read_f(&mut idx), read_f(&mut idx), read_f(&mut idx),
+                ) {
+                    cur_x += dx;
+                    cur_y += dy;
+                    pts.push(StrokePoint { x: cur_x, y: cur_y, pressure: 1.0 });
+                } else {
+                    idx += 1;
+                }
+            }
+            _ => {
+                idx += 1;
+            }
+        }
+    }
+    pts
+}
+
+/// استيراد ملفات Adobe Animate (.xfl / .fla) واستخراج المشاهد والطبقات
+pub fn import_adobe_animate_project(path: &Path) -> Result<AniProject, String> {
+    let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
+    let mut xml_content = String::new();
+
+    if ext == "xfl" {
+        let parent = path.parent().unwrap_or(Path::new("."));
+        let dom_path = parent.join("DOMDocument.xml");
+        xml_content = fs::read_to_string(&dom_path)
+            .map_err(|_| "لم يتم العثور على DOMDocument.xml بجوار ملف XFL.".to_string())?;
+    } else if ext == "fla" {
+        let file = fs::File::open(path).map_err(|e| e.to_string())?;
+        let mut archive = zip::ZipArchive::new(file)
+            .map_err(|_| "ملف FLA قديم غير مضغوط بصيغة XFL، قم بحفظه كـ XFL من Animate.".to_string())?;
+        for i in 0..archive.len() {
+            if let Ok(mut entry) = archive.by_index(i) {
+                if entry.name().ends_with("DOMDocument.xml") {
+                    entry.read_to_string(&mut xml_content).map_err(|e| e.to_string())?;
+                    break;
+                }
+            }
+        }
+    }
+
+    if xml_content.is_empty() {
+        return Err("تعذر قراءة بيانات Adobe Animate.".to_string());
+    }
+
+    let doc = roxmltree::Document::parse(&xml_content).map_err(|e| e.to_string())?;
+    let mut proj = AniProject::default();
+    if let Some(root) = doc.root_element().into() {
+        if let Some(w) = root.attribute("width").and_then(|v| v.parse::<u32>().ok()) {
+            proj.width = w;
+        }
+        if let Some(h) = root.attribute("height").and_then(|v| v.parse::<u32>().ok()) {
+            proj.height = h;
+        }
+        if let Some(fps) = root.attribute("frameRate").and_then(|v| v.parse::<u32>().ok()) {
+            proj.fps = fps;
+        }
+    }
+
+    let mut imported_layers = Vec::new();
+    for node in doc.descendants() {
+        if node.tag_name().name() == "DOMLayer" {
+            let l_name = node.attribute("name").unwrap_or("Animate_Layer").to_string();
+            let mut kf_map = HashMap::new();
+            for frame_node in node.descendants().filter(|n| n.tag_name().name() == "DOMFrame") {
+                let idx = frame_node.attribute("index").and_then(|v| v.parse::<usize>().ok()).unwrap_or(0) + 1;
+                let mut fd = FrameData::default();
+                for edge in frame_node.descendants().filter(|n| n.tag_name().name() == "Edge") {
+                    if let Some(edges_str) = edge.attribute("edges") {
+                        let pts = parse_animate_edges(edges_str);
+                        if pts.len() >= 2 {
+                            fd.strokes.push(Stroke {
+                                points: pts,
+                                color: [0, 0, 0, 255],
+                                fill_color: None,
+                                base_width: 3.0,
+                                is_vector: true,
+                                brush_texture_id: None,
+                            });
+                        }
+                    }
+                }
+                kf_map.insert(idx, fd);
+            }
+            if kf_map.is_empty() {
+                kf_map.insert(1, FrameData::default());
+            }
+            imported_layers.push(Layer {
+                name: l_name,
+                visible: true,
+                locked: false,
+                keyframes: kf_map,
+            });
+        }
+    }
+
+    if !imported_layers.is_empty() {
+        let max_f = imported_layers.iter().flat_map(|l| l.keyframes.keys().copied()).max().unwrap_or(1);
+        proj.layers = imported_layers;
+        proj.total_frames = max_f;
+    }
+    Ok(proj)
+}
+
+fn parse_animate_edges(edges: &str) -> Vec<StrokePoint> {
+    let mut pts = Vec::new();
+    let nums: Vec<f32> = edges
+        .split(|c: char| !c.is_ascii_digit() && c != '-' && c != '.')
+        .filter_map(|s| s.parse::<f32>().ok())
+        .collect();
+    for pair in nums.chunks(2) {
+        if pair.len() == 2 {
+            pts.push(StrokePoint {
+                x: pair[0] / 20.0,
+                y: pair[1] / 20.0,
+                pressure: 1.0,
+            });
+        }
+    }
+    pts
 }
