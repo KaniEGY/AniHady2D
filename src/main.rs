@@ -5,17 +5,138 @@ mod project;
 
 use eframe::egui;
 use project::{AniProject, AudioTrack, FrameData, Layer, MediaItem, MediaType, Stroke, StrokePoint, Symbol, SymbolInstance, ToolType};
-use rodio::{Decoder, OutputStream, Sink};
+use rodio::{Decoder, OutputStream, Sink, Source};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufReader, Read, Write};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
-const FALLBACK_VERSION: &str = "1.1.25";
+const FALLBACK_VERSION: &str = "1.1.30";
 const GITHUB_REPO: &str = "KaniEGY/AniHady2D";
 const YOUTUBE_CHANNEL_URL: &str = "https://www.youtube.com/@%D8%A7%D8%A8%D9%84%D9%83%D8%A7%D8%B4-%D8%A7%D9%86%D9%85%D9%8A%D8%B4%D9%86/videos";
+
+#[derive(Clone, Copy)]
+enum SfxType {
+    NewFrame,
+    BrushScratch,
+    EraserRub,
+    ExportSuccess,
+    ExitFarewell,
+}
+
+/// مولد موجات صوتية فوري مدمج للمؤثرات الصوتية الترفيهية (بدون الحاجة لملفات خارجية)
+struct SynthSfx {
+    sfx: SfxType,
+    sample_idx: usize,
+    total_samples: usize,
+    sample_rate: u32,
+}
+
+impl SynthSfx {
+    fn new(sfx: SfxType) -> Self {
+        let sample_rate = 44100;
+        let duration_ms = match sfx {
+            SfxType::NewFrame => 90,
+            SfxType::BrushScratch => 45,
+            SfxType::EraserRub => 55,
+            SfxType::ExportSuccess => 420,
+            SfxType::ExitFarewell => 320,
+        };
+        Self {
+            sfx,
+            sample_idx: 0,
+            total_samples: (sample_rate * duration_ms / 1000) as usize,
+            sample_rate,
+        }
+    }
+}
+
+impl Iterator for SynthSfx {
+    type Item = f32;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.sample_idx >= self.total_samples {
+            return None;
+        }
+        let t = self.sample_idx as f32 / self.sample_rate as f32;
+        let progress = self.sample_idx as f32 / self.total_samples as f32;
+        let envelope = (1.0 - progress).powf(1.5);
+        self.sample_idx += 1;
+
+        let sample = match self.sfx {
+            SfxType::NewFrame => {
+                // صوت فقاعة / نقرة مرحة صاعدة
+                let freq = 480.0 + progress * 420.0;
+                (t * freq * std::f32::consts::TAU).sin() * 0.22 * envelope
+            }
+            SfxType::BrushScratch => {
+                // صوت خربشة قلم رصاص / فرشاة على الورق
+                let noise = ((self.sample_idx.wrapping_mul(1103515245).wrapping_add(12345) >> 16) as f32 / 32768.0) - 1.0;
+                let tone = (t * 1400.0 * std::f32::consts::TAU).sin();
+                (noise * 0.65 + tone * 0.35) * 0.09 * envelope
+            }
+            SfxType::EraserRub => {
+                // صوت احتكاك أستيكة مطاطية
+                let noise = ((self.sample_idx.wrapping_mul(214013).wrapping_add(2531011) >> 16) as f32 / 32768.0) - 1.0;
+                let low_rub = (t * 260.0 * std::f32::consts::TAU).sin();
+                (noise * 0.4 + low_rub * 0.6) * 0.14 * envelope
+            }
+            SfxType::ExportSuccess => {
+                // نغمة انتصار احتفالية (3 نوتات صاعدة)
+                let freq = if progress < 0.33 {
+                    523.25 // C5
+                } else if progress < 0.66 {
+                    659.25 // E5
+                } else {
+                    783.99 // G5
+                };
+                (t * freq * std::f32::consts::TAU).sin() * 0.25 * envelope
+            }
+            SfxType::ExitFarewell => {
+                // نغمة وداع هابطة لطيفة
+                let freq = 520.0 - progress * 260.0;
+                (t * freq * std::f32::consts::TAU).sin() * 0.22 * envelope
+            }
+        };
+
+        Some(sample)
+    }
+}
+
+impl Source for SynthSfx {
+    fn current_frame_len(&self) -> Option<usize> {
+        Some(self.total_samples - self.sample_idx)
+    }
+    fn channels(&self) -> u16 {
+        1
+    }
+    fn sample_rate(&self) -> u32 {
+        self.sample_rate
+    }
+    fn total_duration(&self) -> Option<Duration> {
+        Some(Duration::from_secs_f32(self.total_samples as f32 / self.sample_rate as f32))
+    }
+}
+
+fn play_sfx_async(enabled: bool, sfx: SfxType, wait_finish: bool) {
+    if !enabled {
+        return;
+    }
+    let handle = std::thread::spawn(move || {
+        if let Ok((_stream, stream_handle)) = OutputStream::try_default() {
+            if let Ok(sink) = Sink::try_new(&stream_handle) {
+                sink.append(SynthSfx::new(sfx));
+                sink.sleep_until_end();
+            }
+        }
+    });
+    if wait_finish {
+        let _ = handle.join();
+    }
+}
 
 #[derive(Serialize, Deserialize, Clone, Copy, PartialEq)]
 enum AppLang {
@@ -57,6 +178,8 @@ enum UpdateState {
 #[derive(Serialize, Deserialize, Clone)]
 struct AppConfig {
     lang: AppLang,
+    #[serde(default)]
+    sound_effects_enabled: bool,
     tool_select: String,
     tool_pen: String,
     tool_brush: String,
@@ -79,6 +202,7 @@ impl Default for AppConfig {
     fn default() -> Self {
         Self {
             lang: AppLang::English,
+            sound_effects_enabled: true,
             tool_select: "V".to_string(),
             tool_pen: "P".to_string(),
             tool_brush: "B".to_string(),
@@ -347,6 +471,7 @@ struct AniHadyApp {
     pan_offset: egui::Vec2,
     is_playing: bool,
     last_frame_time: f64,
+    last_sfx_time: f64,
     has_unsaved_changes: bool,
     show_exit_dialog: bool,
     show_symbol_dialog: bool,
@@ -395,6 +520,7 @@ impl AniHadyApp {
             pan_offset: egui::Vec2::ZERO,
             is_playing: false,
             last_frame_time: 0.0,
+            last_sfx_time: 0.0,
             has_unsaved_changes: false,
             show_exit_dialog: false,
             show_symbol_dialog: false,
@@ -425,6 +551,10 @@ impl AniHadyApp {
             AppLang::English => en,
             AppLang::Arabic => ar,
         }
+    }
+
+    fn play_sfx(&self, sfx: SfxType) {
+        play_sfx_async(self.config.sound_effects_enabled, sfx, false);
     }
 
     fn take_snapshot(&self) -> HistorySnapshot {
@@ -488,17 +618,16 @@ impl AniHadyApp {
         }
     }
 
-    /// F5: تمديد مدة ظهور الفريم
     fn action_insert_frame_f5(&mut self) {
         self.save_undo_state();
         self.timeline_length += 1;
         self.project.total_frames = self.timeline_length;
         self.current_frame = self.timeline_length;
         self.has_unsaved_changes = true;
+        self.play_sfx(SfxType::NewFrame);
         self.status_message = format!("{} -> {}f", self.tr("Frame Extended", "تم تمديد الفريم"), self.timeline_length);
     }
 
-    /// F6: إدراج Keyframe مع نسخ محتوى الفريم الحالي إلى فريم جديد بدون حذف القديم
     fn action_insert_keyframe_f6(&mut self) {
         self.save_undo_state();
         let next_f = self.current_frame + 1;
@@ -514,10 +643,10 @@ impl AniHadyApp {
         }
         self.current_frame = next_f;
         self.has_unsaved_changes = true;
+        self.play_sfx(SfxType::NewFrame);
         self.status_message = format!("{} ({})", self.tr("Keyframe Copied", "تم نسخ الفريم"), next_f);
     }
 
-    /// F7: إنشاء Blank Keyframe جديد تماماً بعد الفريم الحالي بدون حذف الفريم الحالي أبداً!
     fn action_insert_blank_keyframe_f7(&mut self) {
         self.save_undo_state();
         let next_f = self.current_frame + 1;
@@ -530,6 +659,7 @@ impl AniHadyApp {
         }
         self.current_frame = next_f;
         self.has_unsaved_changes = true;
+        self.play_sfx(SfxType::NewFrame);
         self.status_message = format!("{} ({})", self.tr("New Blank Keyframe", "فريم فارغ جديد"), next_f);
     }
 
@@ -547,6 +677,7 @@ impl AniHadyApp {
             if let Some(layer) = self.project.layers.get_mut(layer_idx) {
                 layer.keyframes.insert(frame_idx, clip);
                 self.has_unsaved_changes = true;
+                self.play_sfx(SfxType::NewFrame);
                 self.status_message = format!("{} ({})", self.tr("Pasted to Frame", "تم اللصق في الفريم"), frame_idx);
             }
         }
@@ -557,6 +688,7 @@ impl AniHadyApp {
         if let Some(layer) = self.project.layers.get_mut(layer_idx) {
             layer.keyframes.insert(frame_idx, FrameData::default());
             self.has_unsaved_changes = true;
+            self.play_sfx(SfxType::EraserRub);
             self.status_message = format!("{} ({})", self.tr("Cleared Frame", "تم مسح الفريم"), frame_idx);
         }
     }
@@ -944,7 +1076,6 @@ impl eframe::App for AniHadyApp {
             if sc_smaller { self.brush_size = (self.brush_size - 2.0).max(1.0); }
             if sc_larger { self.brush_size = (self.brush_size + 2.0).min(100.0); }
 
-            // زر Delete يحذف العنصر المحدد أو يمسح الفريم الحالي
             if del_pressed {
                 if let Some(idx) = self.selected_symbol_inst_idx.take() {
                     self.save_undo_state();
@@ -1024,7 +1155,7 @@ impl eframe::App for AniHadyApp {
                 });
         }
 
-        // نافذة الإعدادات (اختيار اللغة عربي/إنجليزي + تخصيص كل الاختصارات)
+        // نافذة الإعدادات (اختيار اللغة + خيار المؤثرات الصوتية الترفيهية + الاختصارات)
         if self.show_settings_dialog {
             egui::Window::new(self.tr("Settings & Shortcuts", "الإعدادات والاختصارات"))
                 .collapsible(false)
@@ -1032,7 +1163,6 @@ impl eframe::App for AniHadyApp {
                 .default_width(450.0)
                 .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
                 .show(ctx, |ui| {
-                    // قائمة اختيار اللغة (عربي / English)
                     ui.horizontal(|ui| {
                         ui.strong(self.tr("Interface Language:", "لغة الواجهة:"));
                         if ui.selectable_label(self.config.lang == AppLang::English, "English").clicked() {
@@ -1042,6 +1172,19 @@ impl eframe::App for AniHadyApp {
                         if ui.selectable_label(self.config.lang == AppLang::Arabic, "العربية (Arabic)").clicked() {
                             self.config.lang = AppLang::Arabic;
                             self.config.save();
+                        }
+                    });
+                    ui.add_space(4.0);
+                    // خيار الساوند افكت الترفيهي
+                    ui.horizontal(|ui| {
+                        if ui.checkbox(
+                            &mut self.config.sound_effects_enabled,
+                            self.tr("Fun Sound Effects (Brush, Eraser, Frames, Export, Exit)", "المؤثرات الصوتية الترفيهية (الفرشاة، الممحاة، الفريمات، التصدير، الإغلاق)"),
+                        ).changed() {
+                            self.config.save();
+                            if self.config.sound_effects_enabled {
+                                self.play_sfx(SfxType::NewFrame);
+                            }
                         }
                     });
                     ui.separator();
@@ -1069,7 +1212,7 @@ impl eframe::App for AniHadyApp {
                         (14, self.tr("Increase Brush Size", "تكبير حجم الفرشاة"), &self.config.brush_larger),
                         (15, self.tr("Reset Canvas View", "إرجاع الكانفا للمنتصف"), &self.config.reset_canvas),
                     ];
-                    egui::ScrollArea::vertical().max_height(310.0).show(ui, |ui| {
+                    egui::ScrollArea::vertical().max_height(290.0).show(ui, |ui| {
                         for (idx, label, current_key) in items {
                             ui.horizontal(|ui| {
                                 ui.allocate_ui(egui::vec2(230.0, 22.0), |ui| {
@@ -1098,8 +1241,10 @@ impl eframe::App for AniHadyApp {
                     ui.horizontal(|ui| {
                         if ui.button(self.tr("Reset Defaults", "استعادة الافتراضي")).clicked() {
                             let saved_lang = self.config.lang;
+                            let saved_sfx = self.config.sound_effects_enabled;
                             self.config = AppConfig::default();
                             self.config.lang = saved_lang;
+                            self.config.sound_effects_enabled = saved_sfx;
                             self.config.save();
                             self.listening_shortcut_idx = None;
                         }
@@ -1183,6 +1328,7 @@ impl eframe::App for AniHadyApp {
                                             scale: 1.0,
                                         });
                                         self.has_unsaved_changes = true;
+                                        self.play_sfx(SfxType::NewFrame);
                                     }
                                 }
                             }
@@ -1197,6 +1343,8 @@ impl eframe::App for AniHadyApp {
             if self.has_unsaved_changes {
                 ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
                 self.show_exit_dialog = true;
+            } else {
+                play_sfx_async(self.config.sound_effects_enabled, SfxType::ExitFarewell, true);
             }
         }
 
@@ -1209,10 +1357,12 @@ impl eframe::App for AniHadyApp {
                     ui.label(self.tr("Save changes before closing?", "هل تريد حفظ المشروع قبل الإغلاق؟"));
                     ui.horizontal(|ui| {
                         if ui.button(self.tr("Save & Exit", "حفظ وخروج")).clicked() && self.trigger_save() {
+                            play_sfx_async(self.config.sound_effects_enabled, SfxType::ExitFarewell, true);
                             self.allow_close = true;
                             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                         }
                         if ui.button(self.tr("Don't Save", "عدم الحفظ")).clicked() {
+                            play_sfx_async(self.config.sound_effects_enabled, SfxType::ExitFarewell, true);
                             self.allow_close = true;
                             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                         }
@@ -1259,7 +1409,10 @@ impl eframe::App for AniHadyApp {
                             .save_file()
                         {
                             match exporter::export_to_mp4(&self.project, &path) {
-                                Ok(_) => self.status_message = self.tr("Exported MP4!", "تم تصدير الفيديو!").to_string(),
+                                Ok(_) => {
+                                    self.play_sfx(SfxType::ExportSuccess);
+                                    self.status_message = self.tr("Exported MP4!", "تم تصدير الفيديو!").to_string();
+                                }
                                 Err(e) => self.status_message = e,
                             }
                         }
@@ -1321,7 +1474,7 @@ impl eframe::App for AniHadyApp {
             });
         });
 
-        // شريط الأدوات الأيسر (قابل للتوسيع والتضييق بحرية)
+        // شريط الأدوات الأيسر
         egui::SidePanel::left("tools_panel")
             .resizable(true)
             .default_width(64.0)
@@ -1378,7 +1531,7 @@ impl eframe::App for AniHadyApp {
                 });
             });
 
-        // لوحة الخصائص والمكتبة اليمنى (قابلة للتوسيع والتضييق بحرية)
+        // لوحة الخصائص والمكتبة اليمنى
         egui::SidePanel::right("right_panel")
             .resizable(true)
             .default_width(240.0)
@@ -1452,6 +1605,7 @@ impl eframe::App for AniHadyApp {
                                         scale: 1.0,
                                     });
                                     self.has_unsaved_changes = true;
+                                    self.play_sfx(SfxType::NewFrame);
                                 }
                             }
                         });
@@ -1479,7 +1633,7 @@ impl eframe::App for AniHadyApp {
                 }
             });
 
-        // التايم لاين السفلي (قابل للتوسيع والتضييق بحرية + قائمة كليك يمين احترافية)
+        // التايم لاين السفلي
         egui::TopBottomPanel::bottom("timeline_panel")
             .resizable(true)
             .default_height(215.0)
@@ -1533,6 +1687,7 @@ impl eframe::App for AniHadyApp {
                             locked: false,
                             keyframes: kf,
                         });
+                        self.play_sfx(SfxType::NewFrame);
                     }
                 });
 
@@ -1580,7 +1735,6 @@ impl eframe::App for AniHadyApp {
                                     if layer_resp.clicked() {
                                         self.active_layer_idx = l_idx;
                                     }
-                                    // كليك يمين على الطبقة (Layer Context Menu)
                                     layer_resp.context_menu(|ui| {
                                         if ui.button(&lbl_dup_layer).clicked() {
                                             pending_dup_layer = Some(l_idx);
@@ -1629,7 +1783,6 @@ impl eframe::App for AniHadyApp {
                                     self.active_layer_idx = l_idx;
                                     self.current_frame = f;
                                 }
-                                // كليك يمين على أي فريم (Copy / Paste / Delete)
                                 cell_resp.context_menu(|ui| {
                                     if ui.button(&lbl_copy).clicked() {
                                         pending_copy = Some((l_idx, f));
@@ -1801,6 +1954,7 @@ impl eframe::App for AniHadyApp {
                                         if s.points.iter().any(|p| ((p.x - stage_pos.x).powi(2) + (p.y - stage_pos.y).powi(2)).sqrt() < 35.0) {
                                             s.fill_color = Some(self.brush_color);
                                             self.has_unsaved_changes = true;
+                                            self.play_sfx(SfxType::NewFrame);
                                             break;
                                         }
                                     }
@@ -1810,6 +1964,10 @@ impl eframe::App for AniHadyApp {
                         ToolType::Eraser if pointer_down => {
                             if pointer_pressed {
                                 self.save_undo_state();
+                            }
+                            if delta.length() > 0.5 && now - self.last_sfx_time > 0.09 {
+                                self.play_sfx(SfxType::EraserRub);
+                                self.last_sfx_time = now;
                             }
                             self.ensure_editable_keyframe();
                             if let Some(layer) = self.project.layers.get_mut(self.active_layer_idx) {
@@ -1834,6 +1992,10 @@ impl eframe::App for AniHadyApp {
                         }
                         ToolType::VectorPen | ToolType::Brush if pointer_down => {
                             let speed = delta.length();
+                            if speed > 0.8 && now - self.last_sfx_time > 0.08 {
+                                self.play_sfx(SfxType::BrushScratch);
+                                self.last_sfx_time = now;
+                            }
                             let raw_p = if let Some(f) = touch_force {
                                 f
                             } else {
