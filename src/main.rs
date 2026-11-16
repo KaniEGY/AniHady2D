@@ -1,3 +1,5 @@
+#![windows_subsystem = "windows"]
+
 mod exporter;
 mod project;
 
@@ -79,7 +81,7 @@ struct AniHadyApp {
     status_message: String,
     audio_sink: Option<(OutputStream, Sink)>,
     last_pointer_pos: Option<egui::Pos2>,
-    right_tab: usize, // 0: Properties, 1: Library & Audio
+    right_tab: usize,
 }
 
 impl AniHadyApp {
@@ -206,17 +208,16 @@ impl AniHadyApp {
     fn restart_with_new_exe(&mut self) {
         if let Ok(current_exe) = std::env::current_exe() {
             let new_exe = current_exe.with_file_name("AniHady2D_new.exe");
-            let bat_path = current_exe.with_file_name("update_anihady.bat");
-            let bat_content = format!(
-                "@echo off\r\ntimeout /t 2 /nobreak > NUL\r\nmove /y \"{}\" \"{}\"\r\nstart \"\" \"{}\"\r\ndel \"%~f0\"\r\n",
-                new_exe.display(),
-                current_exe.display(),
-                current_exe.display()
+            let ps_script = format!(
+                "Start-Sleep -Seconds 2; Move-Item -LiteralPath '{}' -Destination '{}' -Force; Start-Process -FilePath '{}'",
+                new_exe.display().to_string().replace('\'', "''"),
+                current_exe.display().to_string().replace('\'', "''"),
+                current_exe.display().to_string().replace('\'', "''")
             );
-            if std::fs::write(&bat_path, bat_content).is_ok() {
-                let _ = std::process::Command::new("cmd").args(["/C", &bat_path.to_string_lossy()]).spawn();
-                std::process::exit(0);
-            }
+            let _ = std::process::Command::new("powershell")
+                .args(["-NoProfile", "-WindowStyle", "Hidden", "-Command", &ps_script])
+                .spawn();
+            std::process::exit(0);
         }
     }
 
@@ -428,39 +429,21 @@ impl eframe::App for AniHadyApp {
             typing_in_textbox = true;
         }
 
-        // الاختصارات الاحترافية (Adobe Animate Shortcuts)
         if !typing_in_textbox {
-            if ctrl_z {
-                self.undo();
-            }
-            if ctrl_s {
-                self.trigger_save();
-            }
+            if ctrl_z { self.undo(); }
+            if ctrl_s { self.trigger_save(); }
             if f5_pressed {
                 self.project.total_frames += 10;
                 self.status_message = format!("Extended timeline to {} frames (F5)", self.project.total_frames);
             }
-            if f6_pressed {
-                self.insert_keyframe_f6();
-            }
-            if f8_pressed {
-                self.show_symbol_dialog = true;
-            }
+            if f6_pressed { self.insert_keyframe_f6(); }
+            if f8_pressed { self.show_symbol_dialog = true; }
             if enter_pressed {
                 self.is_playing = !self.is_playing;
-                if self.is_playing {
-                    self.start_audio_playback();
-                } else {
-                    self.stop_audio_playback();
-                }
+                if self.is_playing { self.start_audio_playback(); } else { self.stop_audio_playback(); }
             }
-            if comma_pressed && self.current_frame > 1 {
-                self.current_frame -= 1;
-            }
-            if period_pressed && self.current_frame < self.project.total_frames {
-                self.current_frame += 1;
-            }
-            // دبل مسطرة (Double Space) لإرجاع الكانفا لمنتصف الشاشة والزوم 100%
+            if comma_pressed && self.current_frame > 1 { self.current_frame -= 1; }
+            if period_pressed && self.current_frame < self.project.total_frames { self.current_frame += 1; }
             if space_pressed {
                 if now - self.last_space_tap_time < 0.35 {
                     self.pan_offset = egui::Vec2::ZERO;
@@ -471,7 +454,6 @@ impl eframe::App for AniHadyApp {
                     self.last_space_tap_time = now;
                 }
             }
-            // اختصارات الأدوات
             if key_v { self.active_tool = ToolType::Select; }
             if key_p { self.active_tool = ToolType::VectorPen; }
             if key_b { self.active_tool = ToolType::Brush; }
@@ -513,7 +495,6 @@ impl eframe::App for AniHadyApp {
             ctx.request_repaint();
         }
 
-        // نافذة التحديثات
         if self.show_update_dialog {
             let current_st = self.update_state.lock().unwrap().clone();
             egui::Window::new("AniHady2D Updater")
@@ -533,9 +514,7 @@ impl eframe::App for AniHadyApp {
                         }
                         UpdateState::UpToDate => {
                             ui.colored_label(egui::Color32::GREEN, "You are on the latest version!");
-                            if ui.button("Close").clicked() {
-                                self.show_update_dialog = false;
-                            }
+                            if ui.button("Close").clicked() { self.show_update_dialog = false; }
                         }
                         UpdateState::UpdateAvailable { version, download_url } => {
                             ui.colored_label(egui::Color32::LIGHT_BLUE, format!("New Version Available: v{}", version));
@@ -543,9 +522,7 @@ impl eframe::App for AniHadyApp {
                                 if ui.button("Download & Install").clicked() {
                                     self.download_and_apply_update(download_url, ctx.clone());
                                 }
-                                if ui.button("Cancel").clicked() {
-                                    self.show_update_dialog = false;
-                                }
+                                if ui.button("Cancel").clicked() { self.show_update_dialog = false; }
                             });
                         }
                         UpdateState::Downloading(msg) => {
@@ -556,15 +533,11 @@ impl eframe::App for AniHadyApp {
                         }
                         UpdateState::ReadyToRestart => {
                             ui.colored_label(egui::Color32::GREEN, "Update ready! Restart now?");
-                            if ui.button("Restart & Apply").clicked() {
-                                self.restart_with_new_exe();
-                            }
+                            if ui.button("Restart & Apply").clicked() { self.restart_with_new_exe(); }
                         }
                         UpdateState::Error(err) => {
                             ui.colored_label(egui::Color32::RED, err);
-                            if ui.button("Close").clicked() {
-                                self.show_update_dialog = false;
-                            }
+                            if ui.button("Close").clicked() { self.show_update_dialog = false; }
                         }
                     }
                 });
@@ -602,9 +575,7 @@ impl eframe::App for AniHadyApp {
                             }
                             self.show_symbol_dialog = false;
                         }
-                        if ui.button("Cancel").clicked() {
-                            self.show_symbol_dialog = false;
-                        }
+                        if ui.button("Cancel").clicked() { self.show_symbol_dialog = false; }
                     });
                 });
         }
@@ -636,16 +607,12 @@ impl eframe::App for AniHadyApp {
                 });
         }
 
-        // الشريط العلوي الاحترافي (Adobe Animate Top Header)
         egui::TopBottomPanel::top("top_bar").show(ctx, |ui| {
             egui::menu::bar(ui, |ui| {
                 ui.colored_label(egui::Color32::from_rgb(80, 170, 255), "◆ AniHady2D");
                 ui.separator();
                 ui.menu_button("File", |ui| {
-                    if ui.button("Save Project (Ctrl+S)").clicked() {
-                        self.trigger_save();
-                        ui.close_menu();
-                    }
+                    if ui.button("Save Project (Ctrl+S)").clicked() { self.trigger_save(); ui.close_menu(); }
                     if ui.button("Open Project (.ah2d)").clicked() {
                         if let Some(path) = rfd::FileDialog::new().add_filter("AniHady2D", &["ah2d"]).pick_file() {
                             if let Ok(proj) = AniProject::load_from_file(&path) {
@@ -656,18 +623,9 @@ impl eframe::App for AniHadyApp {
                         ui.close_menu();
                     }
                     ui.separator();
-                    if ui.button("Import Image...").clicked() {
-                        self.import_image_dialog();
-                        ui.close_menu();
-                    }
-                    if ui.button("Import Video...").clicked() {
-                        self.import_video_dialog();
-                        ui.close_menu();
-                    }
-                    if ui.button("Import Audio...").clicked() {
-                        self.import_audio_dialog();
-                        ui.close_menu();
-                    }
+                    if ui.button("Import Image...").clicked() { self.import_image_dialog(); ui.close_menu(); }
+                    if ui.button("Import Video...").clicked() { self.import_video_dialog(); ui.close_menu(); }
+                    if ui.button("Import Audio...").clicked() { self.import_audio_dialog(); ui.close_menu(); }
                     ui.separator();
                     if ui.button("Export Video (MP4)...").clicked() {
                         if let Some(path) = rfd::FileDialog::new()
@@ -684,10 +642,7 @@ impl eframe::App for AniHadyApp {
                     }
                 });
                 ui.menu_button("Edit", |ui| {
-                    if ui.button("Undo (Ctrl+Z)").clicked() {
-                        self.undo();
-                        ui.close_menu();
-                    }
+                    if ui.button("Undo (Ctrl+Z)").clicked() { self.undo(); ui.close_menu(); }
                     if ui.button("Reset Canvas View (Double Space)").clicked() {
                         self.pan_offset = egui::Vec2::ZERO;
                         self.zoom_level = 1.0;
@@ -695,14 +650,8 @@ impl eframe::App for AniHadyApp {
                     }
                 });
                 ui.menu_button("Insert", |ui| {
-                    if ui.button("Keyframe (F6)").clicked() {
-                        self.insert_keyframe_f6();
-                        ui.close_menu();
-                    }
-                    if ui.button("Convert to Symbol (F8)").clicked() {
-                        self.show_symbol_dialog = true;
-                        ui.close_menu();
-                    }
+                    if ui.button("Keyframe (F6)").clicked() { self.insert_keyframe_f6(); ui.close_menu(); }
+                    if ui.button("Convert to Symbol (F8)").clicked() { self.show_symbol_dialog = true; ui.close_menu(); }
                 });
                 ui.separator();
                 if ui.button("🖼 Image").clicked() { self.import_image_dialog(); }
@@ -722,7 +671,6 @@ impl eframe::App for AniHadyApp {
             });
         });
 
-        // شريط الأدوات الجانبي الأيسر المدمج (Adobe Animate Classic Toolbar)
         egui::SidePanel::left("tools_panel").exact_width(64.0).show(ctx, |ui| {
             ui.vertical_centered(|ui| {
                 ui.add_space(4.0);
@@ -755,20 +703,14 @@ impl eframe::App for AniHadyApp {
             });
         });
 
-        // لوحة الخصائص والمكتبة اليمنى (Properties & Library Tabs مثل Adobe Animate)
         egui::SidePanel::right("right_panel").exact_width(235.0).show(ctx, |ui| {
             ui.horizontal(|ui| {
-                if ui.selectable_label(self.right_tab == 0, "Properties").clicked() {
-                    self.right_tab = 0;
-                }
-                if ui.selectable_label(self.right_tab == 1, "Library & Audio").clicked() {
-                    self.right_tab = 1;
-                }
+                if ui.selectable_label(self.right_tab == 0, "Properties").clicked() { self.right_tab = 0; }
+                if ui.selectable_label(self.right_tab == 1, "Library & Audio").clicked() { self.right_tab = 1; }
             });
             ui.separator();
 
             if self.right_tab == 0 {
-                // تبويب الخصائص (Properties)
                 ui.strong("Tool Settings");
                 ui.add_space(4.0);
                 ui.horizontal(|ui| {
@@ -789,18 +731,9 @@ impl eframe::App for AniHadyApp {
                     ui.add(egui::DragValue::new(&mut self.project.height).range(240..=2160));
                 });
                 ui.horizontal(|ui| {
-                    if ui.small_button("1080p").clicked() {
-                        self.project.width = 1920;
-                        self.project.height = 1080;
-                    }
-                    if ui.small_button("720p").clicked() {
-                        self.project.width = 1280;
-                        self.project.height = 720;
-                    }
-                    if ui.small_button("Shorts").clicked() {
-                        self.project.width = 1080;
-                        self.project.height = 1920;
-                    }
+                    if ui.small_button("1080p").clicked() { self.project.width = 1920; self.project.height = 1080; }
+                    if ui.small_button("720p").clicked() { self.project.width = 1280; self.project.height = 720; }
+                    if ui.small_button("Shorts").clicked() { self.project.width = 1080; self.project.height = 1920; }
                 });
                 ui.horizontal(|ui| {
                     ui.label("Stage Color:");
@@ -822,7 +755,6 @@ impl eframe::App for AniHadyApp {
                 ui.small("• F8: Convert to Symbol");
                 ui.small("• V / P / B / E / K: Tools");
             } else {
-                // تبويب المكتبة والصوت (Library & Audio)
                 ui.strong("Symbols Library");
                 let sym_names: Vec<String> = self.project.library_symbols.keys().cloned().collect();
                 if sym_names.is_empty() {
@@ -868,7 +800,6 @@ impl eframe::App for AniHadyApp {
             }
         });
 
-        // التايم لاين السفلي (Adobe Animate Timeline)
         egui::TopBottomPanel::bottom("timeline_panel").exact_height(215.0).show(ctx, |ui| {
             ui.horizontal(|ui| {
                 if ui.button("|<").on_hover_text("First Frame").clicked() { self.current_frame = 1; }
@@ -1009,7 +940,6 @@ impl eframe::App for AniHadyApp {
             });
         });
 
-        // مساحة العمل والكانفا (Stage)
         egui::CentralPanel::default().show(ctx, |ui| {
             let canvas_rect = ui.available_rect_before_wrap();
             let painter = ui.painter_at(canvas_rect);
@@ -1019,7 +949,6 @@ impl eframe::App for AniHadyApp {
                 self.zoom_level = (self.zoom_level + scroll_y * 0.001).clamp(0.1, 4.0);
             }
 
-            // تحريك الكانفا عند الضغط المطول على المسطرة (Space + Drag)
             if space_down && pointer_down {
                 if let (Some(curr), Some(last)) = (pointer_pos, self.last_pointer_pos) {
                     self.pan_offset += curr - last;
@@ -1031,7 +960,6 @@ impl eframe::App for AniHadyApp {
             let stage_size = egui::vec2(self.project.width as f32, self.project.height as f32) * scale;
             let stage_rect = egui::Rect::from_center_size(center, stage_size);
 
-            // ظل خفيف للمسرح مثل Adobe Animate
             painter.rect_filled(
                 stage_rect.translate(egui::vec2(6.0, 6.0)),
                 0.0,
