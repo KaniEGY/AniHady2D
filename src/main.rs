@@ -9,8 +9,8 @@ use eframe::egui;
 use exporter::{ImageExportFormat, VideoExportFormat};
 use profile::UserProfile;
 use project::{
-    AniProject, AudioSyncMode, AudioTrack, FrameData, Layer, MediaItem, MediaType, Stroke, StrokePoint, Symbol,
-    SymbolInstance, TextItem, ToolType,
+    AniProject, AudioSyncMode, AudioTrack, EasingCurve, FrameData, Layer, MediaItem, MediaType, Stroke, StrokePoint,
+    Symbol, SymbolInstance, TextItem, ToolType, TweenMode,
 };
 use rodio::source::{SineWave, TakeDuration};
 use rodio::{Decoder, OutputStream, Sink, Source};
@@ -23,7 +23,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use unicode_bidi::BidiInfo;
 
-const FALLBACK_VERSION: &str = "2.3.0";
+const FALLBACK_VERSION: &str = "3.0.0";
 const GITHUB_REPO: &str = "KaniEGY/AniHady2D";
 const YOUTUBE_CHANNEL_URL: &str = "https://www.youtube.com/@%D8%A7%D8%A8%D9%84%D9%83%D8%A7%D8%B4-%D8%A7%D9%86%D9%85%D9%8A%D8%B4%D9%86/videos";
 
@@ -39,6 +39,7 @@ enum WorkspaceMode {
 enum ActiveToolUI {
     SelectNormal,
     SelectLasso,
+    FreeTransform,
     VectorDirectSelect,
     VectorPen,
     Brush,
@@ -279,6 +280,8 @@ struct AppConfig {
     tool_select: String,
     #[serde(default = "default_lasso_key")]
     tool_lasso: String,
+    #[serde(default = "default_free_tr_key")]
+    tool_free_transform: String,
     #[serde(default = "default_vec_sel_key")]
     tool_vector_select: String,
     tool_pen: String,
@@ -314,7 +317,8 @@ fn default_tl_bg() -> [u8; 4] { [32, 32, 36, 255] }
 fn default_tl_cell() -> [u8; 4] { [42, 42, 46, 255] }
 fn default_tl_head() -> [u8; 4] { [210, 50, 50, 255] }
 fn default_lasso_key() -> String { "L".to_string() }
-fn default_vec_sel_key() -> String { "Q".to_string() }
+fn default_free_tr_key() -> String { "Q".to_string() }
+fn default_vec_sel_key() -> String { "G".to_string() }
 fn default_partial_eraser_key() -> String { "T".to_string() }
 fn default_text_key() -> String { "N".to_string() }
 fn default_shape_key() -> String { "U".to_string() }
@@ -333,7 +337,8 @@ impl Default for AppConfig {
             timeline_playhead_color: default_tl_head(),
             tool_select: "V".to_string(),
             tool_lasso: "L".to_string(),
-            tool_vector_select: "Q".to_string(),
+            tool_free_transform: "Q".to_string(),
+            tool_vector_select: "G".to_string(),
             tool_pen: "P".to_string(),
             tool_brush: "B".to_string(),
             tool_eraser: "E".to_string(),
@@ -486,6 +491,7 @@ fn draw_undo_redo_arrow(painter: &egui::Painter, rect: egui::Rect, is_undo: bool
 fn get_tool_ui_color(tool: ActiveToolUI) -> egui::Color32 {
     match tool {
         ActiveToolUI::SelectNormal | ActiveToolUI::SelectLasso => egui::Color32::from_rgb(56, 189, 248),
+        ActiveToolUI::FreeTransform => egui::Color32::from_rgb(245, 158, 11),
         ActiveToolUI::VectorDirectSelect => egui::Color32::from_rgb(192, 132, 252),
         ActiveToolUI::VectorPen => egui::Color32::from_rgb(139, 92, 246),
         ActiveToolUI::Brush => egui::Color32::from_rgb(249, 115, 22),
@@ -521,6 +527,14 @@ fn draw_tool_ui_icon(painter: &egui::Painter, rect: egui::Rect, tool: ActiveTool
         ActiveToolUI::SelectLasso => {
             painter.circle_stroke(c + egui::vec2(-1.0, -2.0), 6.5, stroke);
             painter.line_segment([c + egui::vec2(3.5, 3.0), c + egui::vec2(7.5, 8.5)], stroke);
+        }
+        ActiveToolUI::FreeTransform => {
+            let sq = egui::Rect::from_center_size(c, egui::vec2(13.0, 13.0));
+            painter.rect_stroke(sq, 1.0, stroke);
+            painter.circle_filled(c, 2.2, main_color);
+            for corner in [sq.min, sq.max, egui::pos2(sq.max.x, sq.min.y), egui::pos2(sq.min.x, sq.max.y)] {
+                painter.rect_filled(egui::Rect::from_center_size(corner, egui::vec2(3.6, 3.6)), 0.0, main_color);
+            }
         }
         ActiveToolUI::VectorDirectSelect => {
             let pts = vec![
@@ -616,8 +630,17 @@ fn draw_gear_icon(painter: &egui::Painter, rect: egui::Rect, scale: f32) {
     }
 }
 
-fn draw_timeline_frame_shape(painter: &egui::Painter, rect: egui::Rect, kind: u8) {
+fn draw_timeline_frame_shape(painter: &egui::Painter, rect: egui::Rect, kind: u8, tween_mode: TweenMode) {
     let c = rect.center();
+    match tween_mode {
+        TweenMode::Classic => {
+            painter.rect_filled(rect.shrink(1.5), 2.0, egui::Color32::from_rgba_unmultiplied(139, 92, 246, 135));
+        }
+        TweenMode::Shape => {
+            painter.rect_filled(rect.shrink(1.5), 2.0, egui::Color32::from_rgba_unmultiplied(16, 185, 129, 135));
+        }
+        TweenMode::None => {}
+    }
     match kind {
         1 => {
             painter.circle_filled(c, 4.8, egui::Color32::from_rgb(239, 68, 68));
@@ -644,9 +667,10 @@ fn draw_timeline_frame_shape(painter: &egui::Painter, rect: egui::Rect, kind: u8
     }
 }
 
+/// نظام Undo/Redo موفر للذاكرة يعتمد على Arc Structural Sharing (من معمارية AniCraft)
 #[derive(Clone)]
 struct HistorySnapshot {
-    project: AniProject,
+    project: Arc<AniProject>,
     timeline_length: usize,
     current_frame: usize,
     active_layer_idx: usize,
@@ -792,6 +816,7 @@ struct StickApp {
     current_frame: usize,
     last_scrubbed_frame: usize,
     active_layer_idx: usize,
+    editing_symbol_name: Option<String>, // Nested Timeline editing state
     selected_audio_idx: Option<usize>,
     active_tool_ui: ActiveToolUI,
     selected_shape_kind: GeometricShapeKind,
@@ -805,7 +830,10 @@ struct StickApp {
     selected_stroke_indices: Vec<usize>,
     selected_text_idx: Option<usize>,
     selected_symbol_inst_idx: Option<usize>,
+    custom_anchor_offset: egui::Vec2,
+    is_dragging_anchor: bool,
     is_resizing_selection: bool,
+    is_rotating_selection: bool,
     brush_color: [u8; 4],
     stage_bg_color: [u8; 4],
     brush_size: f32,
@@ -827,8 +855,10 @@ struct StickApp {
     show_exit_dialog: bool,
     show_symbol_dialog: bool,
     show_text_dialog: bool,
-    show_export_dialog: bool,
-    show_image_export_dialog: bool,
+    show_export_studio: bool,
+    export_studio_tab: usize, // 0: Video, 1: Images, 2: Game Dev (Sprite Sheet), 3: Web (Lottie)
+    show_command_palette: bool,
+    command_search_query: String,
     show_timeline_settings: bool,
     selected_export_format: VideoExportFormat,
     selected_image_format: ImageExportFormat,
@@ -905,6 +935,7 @@ impl StickApp {
             current_frame: 1,
             last_scrubbed_frame: 1,
             active_layer_idx: 0,
+            editing_symbol_name: None,
             selected_audio_idx: None,
             active_tool_ui: ActiveToolUI::Brush,
             selected_shape_kind: GeometricShapeKind::StraightLine,
@@ -918,7 +949,10 @@ impl StickApp {
             selected_stroke_indices: Vec::new(),
             selected_text_idx: None,
             selected_symbol_inst_idx: None,
+            custom_anchor_offset: egui::Vec2::ZERO,
+            is_dragging_anchor: false,
             is_resizing_selection: false,
+            is_rotating_selection: false,
             brush_color: [0, 0, 0, 255],
             stage_bg_color: [255, 255, 255, 255],
             brush_size: 6.0,
@@ -940,8 +974,10 @@ impl StickApp {
             show_exit_dialog: false,
             show_symbol_dialog: false,
             show_text_dialog: false,
-            show_export_dialog: false,
-            show_image_export_dialog: false,
+            show_export_studio: false,
+            export_studio_tab: 0,
+            show_command_palette: false,
+            command_search_query: String::new(),
             show_timeline_settings: false,
             selected_export_format: VideoExportFormat::Mp4,
             selected_image_format: ImageExportFormat::PngTransparent,
@@ -970,7 +1006,7 @@ impl StickApp {
             texture_cache: HashMap::new(),
             imported_brushes: Vec::new(),
             saved_path: None,
-            status_message: "Stick Ready".to_string(),
+            status_message: "Stick Studio Ready".to_string(),
             audio_sink: None,
             last_pointer_pos: None,
             right_tab: 0,
@@ -996,11 +1032,6 @@ impl StickApp {
         let _ = std::fs::write(target_dir.join("version.txt"), FALLBACK_VERSION);
         let _ = create_desktop_shortcut(&target_exe);
 
-        let dir_clone = target_dir.clone();
-        std::thread::spawn(move || {
-            let _ = exporter::ensure_ffmpeg_installed(&dir_clone);
-        });
-
         self.play_sfx(SfxType::LevelUpFanfare);
         self.workspace_mode = WorkspaceMode::Launcher;
         self.status_message = "تم التسطيب وإنشاء اختصار Stick على سطح المكتب!".to_string();
@@ -1015,7 +1046,7 @@ impl StickApp {
         let state_arc = Arc::clone(&self.export_task_state);
 
         *state_arc.lock().unwrap() = ExportTaskState::Running(
-            "جاري تجهيز محرك الفيديو وتصدير الفريمات في الخلفية...".to_string(),
+            "جاري تصدير الفريمات بالتوازي فائق السرعة...".to_string(),
         );
 
         std::thread::spawn(move || {
@@ -1025,7 +1056,7 @@ impl StickApp {
                 Ok(_) => {
                     play_sfx_async(sfx_ok, SfxType::ExportSuccess, false);
                     *st = ExportTaskState::Done(format!(
-                        "تم تصدير الفيديو بنجاح بصيغة .{}!",
+                        "تم التصدير بنجاح بصيغة .{}!",
                         fmt.ext().to_uppercase()
                     ));
                 }
@@ -1063,7 +1094,7 @@ impl StickApp {
 
     fn take_snapshot(&self) -> HistorySnapshot {
         HistorySnapshot {
-            project: self.project.clone(),
+            project: Arc::new(self.project.clone()),
             timeline_length: self.timeline_length,
             current_frame: self.current_frame,
             active_layer_idx: self.active_layer_idx,
@@ -1071,7 +1102,7 @@ impl StickApp {
     }
 
     fn restore_snapshot(&mut self, snap: HistorySnapshot) {
-        self.project = snap.project;
+        self.project = (*snap.project).clone();
         self.timeline_length = snap.timeline_length.max(1);
         self.current_frame = snap.current_frame.clamp(1, self.timeline_length);
         self.active_layer_idx = snap.active_layer_idx.min(self.project.layers.len().saturating_sub(1));
@@ -1081,7 +1112,7 @@ impl StickApp {
     }
 
     fn save_undo_state(&mut self) {
-        if self.undo_stack.len() > 40 {
+        if self.undo_stack.len() > 60 {
             self.undo_stack.remove(0);
         }
         self.undo_stack.push(self.take_snapshot());
@@ -1114,44 +1145,6 @@ impl StickApp {
         Self::get_effective_keyframe_index(layer, frame).and_then(|k| layer.keyframes.get(&k))
     }
 
-    fn get_interpolated_symbols(layer: &Layer, frame: usize) -> Vec<SymbolInstance> {
-        let prev_k = match layer.keyframes.keys().filter(|&&k| k <= frame).max().copied() {
-            Some(k) => k,
-            None => return Vec::new(),
-        };
-        let prev_fd = match layer.keyframes.get(&prev_k) {
-            Some(fd) => fd,
-            None => return Vec::new(),
-        };
-        if !prev_fd.motion_tween || prev_k == frame {
-            return prev_fd.symbol_instances.clone();
-        }
-        if let Some(&next_k) = layer.keyframes.keys().filter(|&&k| k > prev_k).min() {
-            if frame <= next_k {
-                if let Some(next_fd) = layer.keyframes.get(&next_k) {
-                    let t = (frame - prev_k) as f32 / (next_k - prev_k).max(1) as f32;
-                    let mut result = Vec::with_capacity(prev_fd.symbol_instances.len());
-                    for (idx, inst) in prev_fd.symbol_instances.iter().enumerate() {
-                        if let Some(target) = next_fd.symbol_instances.get(idx) {
-                            if target.symbol_name == inst.symbol_name {
-                                result.push(SymbolInstance {
-                                    symbol_name: inst.symbol_name.clone(),
-                                    x: inst.x + (target.x - inst.x) * t,
-                                    y: inst.y + (target.y - inst.y) * t,
-                                    scale: inst.scale + (target.scale - inst.scale) * t,
-                                });
-                                continue;
-                            }
-                        }
-                        result.push(inst.clone());
-                    }
-                    return result;
-                }
-            }
-        }
-        prev_fd.symbol_instances.clone()
-    }
-
     fn ensure_editable_keyframe(&mut self) {
         if let Some(layer) = self.project.layers.get_mut(self.active_layer_idx) {
             if !layer.keyframes.contains_key(&self.current_frame) {
@@ -1164,6 +1157,19 @@ impl StickApp {
     }
 
     fn commit_stroke_with_symmetry(&mut self, stroke: Stroke, now_time: f64) {
+        if let Some(ref sym_name) = self.editing_symbol_name.clone() {
+            if let Some(sym) = self.project.library_symbols.get_mut(sym_name) {
+                let kf_strokes = sym.nested_keyframes.entry(self.current_frame).or_insert_with(|| sym.strokes.clone());
+                kf_strokes.push(stroke.clone());
+                if self.current_frame == 1 {
+                    sym.strokes = kf_strokes.clone();
+                }
+                self.has_unsaved_changes = true;
+                self.record_frame_drawn_activity(now_time);
+                return;
+            }
+        }
+
         let stage_w = self.project.width as f32;
         let stage_h = self.project.height as f32;
         let mut strokes_to_add = vec![stroke.clone()];
@@ -1192,6 +1198,82 @@ impl StickApp {
             fd.strokes.extend(strokes_to_add);
             self.has_unsaved_changes = true;
             self.record_frame_drawn_activity(now_time);
+        }
+    }
+
+    /// تحويل الحر (Free Transform): تكبير وتصغير وتدوير العناصر حول نقطة الارتكاز القابلة للسحب (Anchor Point)
+    fn transform_selected_items(&mut self, scale_factor: f32, delta_angle_deg: f32, flip_h: bool, flip_v: bool) {
+        self.ensure_editable_keyframe();
+        if let Some(layer) = self.project.layers.get_mut(self.active_layer_idx) {
+            if let Some(frame) = layer.keyframes.get_mut(&self.current_frame) {
+                let mut min_p = egui::pos2(f32::MAX, f32::MAX);
+                let mut max_p = egui::pos2(f32::MIN, f32::MIN);
+                let mut has_any = false;
+
+                for &idx in &self.selected_stroke_indices {
+                    if let Some(s) = frame.strokes.get(idx) {
+                        for p in &s.points {
+                            min_p = min_p.min(egui::pos2(p.x, p.y));
+                            max_p = max_p.max(egui::pos2(p.x, p.y));
+                            has_any = true;
+                        }
+                    }
+                }
+                if let Some(t_idx) = self.selected_text_idx {
+                    if let Some(txt) = frame.text_items.get(t_idx) {
+                        min_p = min_p.min(egui::pos2(txt.x, txt.y));
+                        max_p = max_p.max(egui::pos2(txt.x + 80.0, txt.y + txt.font_size));
+                        has_any = true;
+                    }
+                }
+                if let Some(s_idx) = self.selected_symbol_inst_idx {
+                    if let Some(inst) = frame.symbol_instances.get(s_idx) {
+                        min_p = min_p.min(egui::pos2(inst.x, inst.y));
+                        max_p = max_p.max(egui::pos2(inst.x + 50.0, inst.y + 50.0));
+                        has_any = true;
+                    }
+                }
+                if !has_any {
+                    return;
+                }
+
+                let pivot = min_p.lerp(max_p, 0.5) + self.custom_anchor_offset;
+                let rad = delta_angle_deg.to_radians();
+                let (sin_a, cos_a) = rad.sin_cos();
+
+                for &idx in &self.selected_stroke_indices {
+                    if let Some(s) = frame.strokes.get_mut(idx) {
+                        for p in &mut s.points {
+                            let mut dx = (p.x - pivot.x) * scale_factor;
+                            let mut dy = (p.y - pivot.y) * scale_factor;
+                            if flip_h { dx = -dx; }
+                            if flip_v { dy = -dy; }
+                            let rx = dx * cos_a - dy * sin_a;
+                            let ry = dx * sin_a + dy * cos_a;
+                            p.x = pivot.x + rx;
+                            p.y = pivot.y + ry;
+                        }
+                    }
+                }
+                if let Some(t_idx) = self.selected_text_idx {
+                    if let Some(txt) = frame.text_items.get_mut(t_idx) {
+                        let dx = (txt.x - pivot.x) * scale_factor;
+                        let dy = (txt.y - pivot.y) * scale_factor;
+                        txt.x = pivot.x + dx;
+                        txt.y = pivot.y + dy;
+                        txt.font_size = (txt.font_size * scale_factor).clamp(8.0, 260.0);
+                    }
+                }
+                if let Some(s_idx) = self.selected_symbol_inst_idx {
+                    if let Some(inst) = frame.symbol_instances.get_mut(s_idx) {
+                        inst.scale = (inst.scale * scale_factor).clamp(0.1, 10.0);
+                        inst.rotation_deg = (inst.rotation_deg + delta_angle_deg) % 360.0;
+                        inst.anchor_offset_x = self.custom_anchor_offset.x;
+                        inst.anchor_offset_y = self.custom_anchor_offset.y;
+                    }
+                }
+                self.has_unsaved_changes = true;
+            }
         }
     }
 
@@ -1301,70 +1383,6 @@ impl StickApp {
         self.has_unsaved_changes = true;
         self.play_sfx(SfxType::EraserRub);
         self.status_message = format!("{} ({})", tr(self.config.lang, "Frame Deleted", "تم حذف الفريم نهائياً"), frame_idx);
-    }
-
-    fn scale_selected_items(&mut self, factor: f32) {
-        self.ensure_editable_keyframe();
-        if let Some(layer) = self.project.layers.get_mut(self.active_layer_idx) {
-            if let Some(frame) = layer.keyframes.get_mut(&self.current_frame) {
-                let mut min_p = egui::pos2(f32::MAX, f32::MAX);
-                let mut max_p = egui::pos2(f32::MIN, f32::MIN);
-                let mut has_any = false;
-
-                for &idx in &self.selected_stroke_indices {
-                    if let Some(s) = frame.strokes.get(idx) {
-                        for p in &s.points {
-                            min_p = min_p.min(egui::pos2(p.x, p.y));
-                            max_p = max_p.max(egui::pos2(p.x, p.y));
-                            has_any = true;
-                        }
-                    }
-                }
-                if let Some(t_idx) = self.selected_text_idx {
-                    if let Some(txt) = frame.text_items.get(t_idx) {
-                        min_p = min_p.min(egui::pos2(txt.x, txt.y));
-                        max_p = max_p.max(egui::pos2(txt.x + 80.0, txt.y + txt.font_size));
-                        has_any = true;
-                    }
-                }
-                if let Some(s_idx) = self.selected_symbol_inst_idx {
-                    if let Some(inst) = frame.symbol_instances.get(s_idx) {
-                        min_p = min_p.min(egui::pos2(inst.x, inst.y));
-                        max_p = max_p.max(egui::pos2(inst.x + 50.0, inst.y + 50.0));
-                        has_any = true;
-                    }
-                }
-
-                if !has_any {
-                    return;
-                }
-                let center = min_p.lerp(max_p, 0.5);
-
-                for &idx in &self.selected_stroke_indices {
-                    if let Some(s) = frame.strokes.get_mut(idx) {
-                        for p in &mut s.points {
-                            p.x = center.x + (p.x - center.x) * factor;
-                            p.y = center.y + (p.y - center.y) * factor;
-                        }
-                    }
-                }
-                if let Some(t_idx) = self.selected_text_idx {
-                    if let Some(txt) = frame.text_items.get_mut(t_idx) {
-                        txt.x = center.x + (txt.x - center.x) * factor;
-                        txt.y = center.y + (txt.y - center.y) * factor;
-                        txt.font_size = (txt.font_size * factor).clamp(8.0, 260.0);
-                    }
-                }
-                if let Some(s_idx) = self.selected_symbol_inst_idx {
-                    if let Some(inst) = frame.symbol_instances.get_mut(s_idx) {
-                        inst.x = center.x + (inst.x - center.x) * factor;
-                        inst.y = center.y + (inst.y - center.y) * factor;
-                        inst.scale = (inst.scale * factor).clamp(0.1, 10.0);
-                    }
-                }
-                self.has_unsaved_changes = true;
-            }
-        }
     }
 
     fn trigger_audio_stream_scrub(&mut self) {
@@ -1488,6 +1506,49 @@ impl StickApp {
             self.has_unsaved_changes = true;
             self.play_sfx(SfxType::NewFrame);
             self.status_message = tr(self.config.lang, "Image Layer Added", "تم إضافة طبقة للصورة");
+        }
+    }
+
+    fn import_svg_dialog(&mut self) {
+        if let Some(path) = rfd::FileDialog::new()
+            .add_filter("SVG Vector Graphic", &["svg"])
+            .pick_file()
+        {
+            match project::parse_svg_to_strokes(&path) {
+                Ok(strokes) => {
+                    self.save_undo_state();
+                    self.ensure_editable_keyframe();
+                    let count = strokes.len();
+                    if let Some(layer) = self.project.layers.get_mut(self.active_layer_idx) {
+                        layer.keyframes.entry(self.current_frame).or_default().strokes.extend(strokes);
+                        self.has_unsaved_changes = true;
+                        self.play_sfx(SfxType::NewFrame);
+                        self.status_message = format!("SVG Imported: {} vector paths", count);
+                    }
+                }
+                Err(e) => self.status_message = e,
+            }
+        }
+    }
+
+    fn import_animate_dialog(&mut self) {
+        if let Some(path) = rfd::FileDialog::new()
+            .add_filter("Adobe Animate Project", &["xfl", "fla"])
+            .pick_file()
+        {
+            match project::import_adobe_animate_project(&path) {
+                Ok(proj) => {
+                    self.save_undo_state();
+                    self.timeline_length = proj.total_frames.max(1);
+                    self.current_frame = 1;
+                    self.active_layer_idx = 0;
+                    self.project = proj;
+                    self.has_unsaved_changes = true;
+                    self.play_sfx(SfxType::NewFrame);
+                    self.status_message = tr(self.config.lang, "Adobe Animate Imported!", "تم استيراد مشروع Adobe Animate!");
+                }
+                Err(e) => self.status_message = e,
+            }
         }
     }
 
@@ -1620,9 +1681,6 @@ impl StickApp {
                     let mut bytes = Vec::new();
                     if response.into_reader().read_to_end(&mut bytes).is_ok() {
                         if let Ok(current_exe) = std::env::current_exe() {
-                            if let Some(dir) = current_exe.parent() {
-                                let _ = exporter::ensure_ffmpeg_installed(dir);
-                            }
                             let new_exe = current_exe.with_file_name("Stick_new.exe");
                             if let Ok(mut file) = File::create(&new_exe) {
                                 if file.write_all(&bytes).is_ok() {
@@ -1664,11 +1722,10 @@ impl StickApp {
         let mut paths = Vec::new();
         for layer in &self.project.layers {
             if layer.visible {
-                if let Some(fd) = Self::get_effective_frame_data(layer, self.current_frame) {
-                    for m in &fd.media_items {
-                        if !self.texture_cache.contains_key(&m.path) {
-                            paths.push(m.path.clone());
-                        }
+                let fd = self.project.evaluate_layer_at_frame(layer, self.current_frame);
+                for m in &fd.media_items {
+                    if !self.texture_cache.contains_key(&m.path) {
+                        paths.push(m.path.clone());
                     }
                 }
             }
@@ -1688,30 +1745,56 @@ impl StickApp {
 
     fn render_tool_properties_ui(&mut self, ui: &mut egui::Ui, lang: AppLang) {
         match self.active_tool_ui {
-            ActiveToolUI::SelectNormal | ActiveToolUI::SelectLasso | ActiveToolUI::VectorDirectSelect => {
-                ui.strong(tr(lang, "Selection Tool Properties", "خصائص أداة التحديد"));
+            ActiveToolUI::SelectNormal | ActiveToolUI::SelectLasso | ActiveToolUI::FreeTransform | ActiveToolUI::VectorDirectSelect => {
+                ui.strong(tr(lang, "Transform & Selection", "خصائص التحديد والتحويل الحر"));
                 ui.add_space(4.0);
                 ui.horizontal(|ui| {
-                    if ui.selectable_label(self.active_tool_ui == ActiveToolUI::SelectNormal, tr(lang, "Normal (V)", "عادي (V)")).clicked() {
+                    if ui.selectable_label(self.active_tool_ui == ActiveToolUI::SelectNormal, tr(lang, "Select (V)", "تحديد (V)")).clicked() {
                         self.active_tool_ui = ActiveToolUI::SelectNormal;
                     }
+                    if ui.selectable_label(self.active_tool_ui == ActiveToolUI::FreeTransform, tr(lang, "Transform (Q)", "تحويل حر (Q)")).clicked() {
+                        self.active_tool_ui = ActiveToolUI::FreeTransform;
+                    }
+                });
+                ui.horizontal(|ui| {
                     if ui.selectable_label(self.active_tool_ui == ActiveToolUI::SelectLasso, tr(lang, "Lasso (L)", "حرة (L)")).clicked() {
                         self.active_tool_ui = ActiveToolUI::SelectLasso;
                     }
-                    if ui.selectable_label(self.active_tool_ui == ActiveToolUI::VectorDirectSelect, tr(lang, "Vector Pts (Q)", "نقاط فيكتور (Q)")).clicked() {
+                    if ui.selectable_label(self.active_tool_ui == ActiveToolUI::VectorDirectSelect, tr(lang, "Vector Pts (G)", "نقاط فيكتور (G)")).clicked() {
                         self.active_tool_ui = ActiveToolUI::VectorDirectSelect;
                     }
                 });
                 ui.add_space(6.0);
-                ui.label(tr(lang, "Scale Selected Group:", "تكبير وتصغير المجموعة المحددة:"));
+                ui.label(tr(lang, "Free Transform Around Anchor:", "التحويل حول نقطة الارتكاز:"));
                 ui.horizontal(|ui| {
                     if ui.button(" -10% ").clicked() {
                         self.save_undo_state();
-                        self.scale_selected_items(0.90);
+                        self.transform_selected_items(0.90, 0.0, false, false);
                     }
                     if ui.button(" +10% ").clicked() {
                         self.save_undo_state();
-                        self.scale_selected_items(1.10);
+                        self.transform_selected_items(1.10, 0.0, false, false);
+                    }
+                    if ui.button(" ↻ 15° ").clicked() {
+                        self.save_undo_state();
+                        self.transform_selected_items(1.0, 15.0, false, false);
+                    }
+                    if ui.button(" ↺ 15° ").clicked() {
+                        self.save_undo_state();
+                        self.transform_selected_items(1.0, -15.0, false, false);
+                    }
+                });
+                ui.horizontal(|ui| {
+                    if ui.button(tr(lang, "Flip H", "عكس أفقي")).clicked() {
+                        self.save_undo_state();
+                        self.transform_selected_items(1.0, 0.0, true, false);
+                    }
+                    if ui.button(tr(lang, "Flip V", "عكس رأسي")).clicked() {
+                        self.save_undo_state();
+                        self.transform_selected_items(1.0, 0.0, false, true);
+                    }
+                    if ui.small_button(tr(lang, "Reset Anchor", "توسيط الارتكاز")).clicked() {
+                        self.custom_anchor_offset = egui::Vec2::ZERO;
                     }
                 });
                 if let Some(t_idx) = self.selected_text_idx {
@@ -1740,7 +1823,7 @@ impl StickApp {
                     ui.add(egui::DragValue::new(&mut self.brush_size).range(1.0..=100.0));
                 });
                 ui.add(egui::Slider::new(&mut self.brush_size, 1.0..=100.0).show_value(false));
-                ui.small(tr(lang, "Use Vector Select (Q) to edit vector points.", "استخدم أداة نقاط الفيكتور (Q) لتعديل انحناء الخطوط."));
+                ui.small(tr(lang, "Use Vector Select (G) to edit vector points.", "استخدم أداة نقاط الفيكتور (G) لتعديل انحناء الخطوط."));
             }
             ActiveToolUI::Brush => {
                 ui.strong(tr(lang, "Brush Properties (B)", "خصائص الفرشاة"));
@@ -2023,6 +2106,7 @@ impl eframe::App for StickApp {
             ctrl_s,
             ctrl_c,
             ctrl_v,
+            ctrl_k,
             shift_f5,
             del_pressed,
             space_down,
@@ -2041,6 +2125,7 @@ impl eframe::App for StickApp {
             touch_force,
             sc_select,
             sc_lasso,
+            sc_free_tr,
             sc_vec_sel,
             sc_pen,
             sc_brush,
@@ -2097,6 +2182,7 @@ impl eframe::App for StickApp {
                 i.modifiers.ctrl && i.key_pressed(egui::Key::S),
                 i.modifiers.ctrl && i.key_pressed(egui::Key::C),
                 i.modifiers.ctrl && i.key_pressed(egui::Key::V),
+                i.modifiers.ctrl && i.key_pressed(egui::Key::K),
                 i.modifiers.shift && i.key_pressed(egui::Key::F5),
                 i.key_pressed(egui::Key::Delete),
                 i.key_down(egui::Key::Space),
@@ -2115,6 +2201,7 @@ impl eframe::App for StickApp {
                 stylus_force,
                 is_shortcut_pressed(i, &self.config.tool_select),
                 is_shortcut_pressed(i, &self.config.tool_lasso),
+                is_shortcut_pressed(i, &self.config.tool_free_transform),
                 is_shortcut_pressed(i, &self.config.tool_vector_select),
                 is_shortcut_pressed(i, &self.config.tool_pen),
                 is_shortcut_pressed(i, &self.config.tool_brush),
@@ -2140,31 +2227,38 @@ impl eframe::App for StickApp {
             )
         });
 
+        if ctrl_k {
+            self.show_command_palette = !self.show_command_palette;
+            self.command_search_query.clear();
+            self.play_sfx(SfxType::UiClick);
+        }
+
         if let (Some(idx), Some(k_name)) = (self.listening_shortcut_idx, pressed_key_name) {
             match idx {
                 0 => self.config.tool_select = k_name,
                 1 => self.config.tool_lasso = k_name,
-                2 => self.config.tool_vector_select = k_name,
-                3 => self.config.tool_pen = k_name,
-                4 => self.config.tool_brush = k_name,
-                5 => self.config.tool_eraser = k_name,
-                6 => self.config.tool_eraser_partial = k_name,
-                7 => self.config.tool_bucket = k_name,
-                8 => self.config.tool_eyedropper = k_name,
-                9 => self.config.tool_text = k_name,
-                10 => self.config.tool_shape = k_name,
-                11 => self.config.tool_hand = k_name,
-                12 => self.config.delete_frame_key = k_name,
-                13 => self.config.insert_frame = k_name,
-                14 => self.config.insert_keyframe = k_name,
-                15 => self.config.insert_blank_kf = k_name,
-                16 => self.config.convert_symbol = k_name,
-                17 => self.config.play_pause = k_name,
-                18 => self.config.prev_frame = k_name,
-                19 => self.config.next_frame = k_name,
-                20 => self.config.brush_smaller = k_name,
-                21 => self.config.brush_larger = k_name,
-                22 => self.config.reset_canvas = k_name,
+                2 => self.config.tool_free_transform = k_name,
+                3 => self.config.tool_vector_select = k_name,
+                4 => self.config.tool_pen = k_name,
+                5 => self.config.tool_brush = k_name,
+                6 => self.config.tool_eraser = k_name,
+                7 => self.config.tool_eraser_partial = k_name,
+                8 => self.config.tool_bucket = k_name,
+                9 => self.config.tool_eyedropper = k_name,
+                10 => self.config.tool_text = k_name,
+                11 => self.config.tool_shape = k_name,
+                12 => self.config.tool_hand = k_name,
+                13 => self.config.delete_frame_key = k_name,
+                14 => self.config.insert_frame = k_name,
+                15 => self.config.insert_keyframe = k_name,
+                16 => self.config.insert_blank_kf = k_name,
+                17 => self.config.convert_symbol = k_name,
+                18 => self.config.play_pause = k_name,
+                19 => self.config.prev_frame = k_name,
+                20 => self.config.next_frame = k_name,
+                21 => self.config.brush_smaller = k_name,
+                22 => self.config.brush_larger = k_name,
+                23 => self.config.reset_canvas = k_name,
                 _ => {}
             }
             self.config.save();
@@ -2174,8 +2268,8 @@ impl eframe::App for StickApp {
 
         let any_modal_open = self.show_symbol_dialog
             || self.show_text_dialog
-            || self.show_export_dialog
-            || self.show_image_export_dialog
+            || self.show_export_studio
+            || self.show_command_palette
             || self.show_exit_dialog
             || self.show_update_dialog
             || self.show_settings_dialog
@@ -2245,6 +2339,10 @@ impl eframe::App for StickApp {
             if sc_lasso {
                 self.active_tool_ui = ActiveToolUI::SelectLasso;
                 self.play_sfx(SfxType::LassoSelect);
+            }
+            if sc_free_tr {
+                self.active_tool_ui = ActiveToolUI::FreeTransform;
+                self.play_sfx(SfxType::UiClick);
             }
             if sc_vec_sel {
                 self.active_tool_ui = ActiveToolUI::VectorDirectSelect;
@@ -2351,129 +2449,292 @@ impl eframe::App for StickApp {
             ctx.request_repaint();
         }
 
-        // نافذة تصدير الصور بأشهر الصيغ (PNG, JPG, WebP, BMP, TIFF)
-        if self.show_image_export_dialog {
-            egui::Window::new(tr(lang, "Export Image / Frame", "تصدير الصورة بأشهر الصيغ"))
+        // لوحة الأوامر السريعة (Command Palette - Ctrl+K) مستوحاة من AniCraft
+        if self.show_command_palette {
+            egui::Window::new(tr(lang, "Command Palette (Ctrl+K)", "لوحة الأوامر السريعة (Ctrl+K)"))
                 .collapsible(false)
                 .resizable(false)
-                .default_width(360.0)
-                .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+                .default_width(420.0)
+                .anchor(egui::Align2::CENTER_TOP, [0.0, 75.0])
                 .show(ctx, |ui| {
-                    ui.label(tr(lang, "Choose Image Format:", "اختر صيغة الصورة:"));
-                    ui.add_space(6.0);
-                    let formats = [
-                        ImageExportFormat::PngTransparent,
-                        ImageExportFormat::PngSolid,
-                        ImageExportFormat::Jpg,
-                        ImageExportFormat::Webp,
-                        ImageExportFormat::Bmp,
-                        ImageExportFormat::Tiff,
+                    let resp = ui.add(
+                        egui::TextEdit::singleline(&mut self.command_search_query)
+                            .hint_text(tr(lang, "Type a command or tool name...", "اكتب اسم الأداة أو الأمر للبحث السريع..."))
+                            .desired_width(400.0),
+                    );
+                    resp.request_focus();
+                    ui.separator();
+
+                    let q = self.command_search_query.to_lowercase();
+                    let commands: Vec<(&str, &str, usize)> = vec![
+                        ("Export Studio (Video, Images, Sprite Sheet, Lottie)", "استوديو التصدير الشامل", 1),
+                        ("Free Transform Tool (Q)", "أداة التحويل الحر ونقطة الارتكاز", 2),
+                        ("Vector Direct Select Tool (G)", "أداة تعديل نقاط الفيكتور", 3),
+                        ("Import SVG Vector File...", "استيراد ملف فيكتور SVG", 4),
+                        ("Import Adobe Animate (.xfl / .fla)...", "استيراد مشروع Adobe Animate", 5),
+                        ("Enable Shape Tween (Morphing)", "تفعيل التحول التلقائي بين شكلين (Shape Tween)", 6),
+                        ("Enable Classic Tween", "تفعيل التحريك الكلاسيكي (Classic Tween)", 7),
+                        ("Convert Selection to Symbol (F8)", "تحويل الرسمة إلى رمز (Symbol)", 8),
+                        ("Insert Blank Keyframe (F7)", "إدراج فريم فارغ جديد", 9),
+                        ("Settings & Solo Leveling System", "الإعدادات ونظام المستويات", 10),
                     ];
-                    for fmt in formats {
-                        ui.radio_value(&mut self.selected_image_format, fmt, fix_ar(fmt.label()));
-                    }
-                    ui.add_space(10.0);
-                    ui.horizontal(|ui| {
-                        if ui.button(tr(lang, "Save Image...", "حفظ الصورة...")).clicked() {
-                            let ext = self.selected_image_format.ext();
-                            let default_name = format!("Stick_Image.{}", ext);
-                            if let Some(mut path) = rfd::FileDialog::new()
-                                .add_filter("Image", &[ext])
-                                .set_file_name(&default_name)
-                                .save_file()
-                            {
-                                if path.extension().is_none() {
-                                    path.set_extension(ext);
-                                }
-                                match exporter::export_single_image_format(
-                                    &self.project,
-                                    self.current_frame,
-                                    &path,
-                                    self.selected_image_format,
-                                    self.stage_bg_color,
-                                ) {
-                                    Ok(_) => {
-                                        self.play_sfx(SfxType::ExportSuccess);
-                                        self.status_message = format!("Saved .{} Image!", ext.to_uppercase());
+
+                    for (en_name, ar_name, action_id) in commands {
+                        if q.is_empty() || en_name.to_lowercase().contains(&q) || ar_name.contains(&q) {
+                            let label = format!("{}  —  {}", en_name, fix_ar(ar_name));
+                            if ui.selectable_label(false, label).clicked() {
+                                self.show_command_palette = false;
+                                match action_id {
+                                    1 => {
+                                        *self.export_task_state.lock().unwrap() = ExportTaskState::Idle;
+                                        self.show_export_studio = true;
                                     }
-                                    Err(e) => self.status_message = e,
+                                    2 => self.active_tool_ui = ActiveToolUI::FreeTransform,
+                                    3 => self.active_tool_ui = ActiveToolUI::VectorDirectSelect,
+                                    4 => self.import_svg_dialog(),
+                                    5 => self.import_animate_dialog(),
+                                    6 => {
+                                        self.ensure_editable_keyframe();
+                                        if let Some(l) = self.project.layers.get_mut(self.active_layer_idx) {
+                                            if let Some(fd) = l.keyframes.get_mut(&self.current_frame) {
+                                                fd.tween_mode = TweenMode::Shape;
+                                            }
+                                        }
+                                    }
+                                    7 => {
+                                        self.ensure_editable_keyframe();
+                                        if let Some(l) = self.project.layers.get_mut(self.active_layer_idx) {
+                                            if let Some(fd) = l.keyframes.get_mut(&self.current_frame) {
+                                                fd.tween_mode = TweenMode::Classic;
+                                            }
+                                        }
+                                    }
+                                    8 => self.show_symbol_dialog = true,
+                                    9 => self.action_insert_blank_keyframe_f7(now_time),
+                                    10 => self.show_settings_dialog = true,
+                                    _ => {}
                                 }
                             }
-                            self.show_image_export_dialog = false;
                         }
-                        if ui.button(tr(lang, "Cancel", "إلغاء")).clicked() {
-                            self.show_image_export_dialog = false;
-                        }
-                    });
+                    }
+                    ui.separator();
+                    if ui.small_button(tr(lang, "Close (Esc)", "إغلاق")).clicked() {
+                        self.show_command_palette = false;
+                    }
                 });
         }
 
-        // نافذة تصدير الفيديو في الخلفية بدون تجمد الواجهة
-        if self.show_export_dialog {
+        // استوديو التصدير الشامل المستقل (Export Studio Window)
+        if self.show_export_studio {
             let task_st = self.export_task_state.lock().unwrap().clone();
-            egui::Window::new(tr(lang, "Export Video / Animation", "تصدير الفيديو بصيغ متعددة"))
+            egui::Window::new(tr(lang, "Stick Export Studio", "استوديو التصدير الاحترافي"))
                 .collapsible(false)
                 .resizable(false)
-                .default_width(380.0)
+                .default_width(470.0)
                 .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
                 .show(ctx, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.selectable_value(&mut self.export_studio_tab, 0, tr(lang, "🎬 Video & GIF", "🎬 فيديو و GIF"));
+                        ui.selectable_value(&mut self.export_studio_tab, 1, tr(lang, "🖼 Images", "🖼 صور"));
+                        ui.selectable_value(&mut self.export_studio_tab, 2, tr(lang, "🎮 Sprite Sheet", "🎮 ألعاب"));
+                        ui.selectable_value(&mut self.export_studio_tab, 3, tr(lang, "🌐 Lottie Web", "🌐 ويب Lottie"));
+                    });
+                    ui.separator();
+
                     match task_st {
                         ExportTaskState::Running(msg) => {
+                            ui.add_space(12.0);
                             ui.horizontal(|ui| {
                                 ui.spinner();
                                 ui.label(fix_ar(&msg));
                             });
-                            ui.small(fix_ar("البرنامج يعمل بسلاسة في الخلفية، يرجى الانتظار..."));
+                            ui.small(fix_ar("يتم التصيير بالتوازي في الخلفية بأقصى سرعة..."));
+                            ui.add_space(12.0);
                             ctx.request_repaint();
                         }
                         ExportTaskState::Done(msg) => {
+                            ui.add_space(10.0);
                             ui.colored_label(egui::Color32::GREEN, fix_ar(&msg));
-                            if ui.button(tr(lang, "Close", "تم")).clicked() {
+                            ui.add_space(10.0);
+                            if ui.button(tr(lang, "Done", "تم")).clicked() {
                                 *self.export_task_state.lock().unwrap() = ExportTaskState::Idle;
-                                self.show_export_dialog = false;
+                                self.show_export_studio = false;
                             }
                         }
                         ExportTaskState::Failed(err) => {
+                            ui.add_space(10.0);
                             ui.colored_label(egui::Color32::LIGHT_RED, fix_ar(&err));
+                            ui.add_space(10.0);
                             if ui.button(tr(lang, "Close", "إغلاق")).clicked() {
                                 *self.export_task_state.lock().unwrap() = ExportTaskState::Idle;
-                                self.show_export_dialog = false;
+                                self.show_export_studio = false;
                             }
                         }
                         ExportTaskState::Idle => {
-                            ui.label(tr(lang, "Select Video Format:", "اختر صيغة الفيديو:"));
-                            ui.add_space(6.0);
-                            let formats = [
-                                VideoExportFormat::Mp4,
-                                VideoExportFormat::Mov,
-                                VideoExportFormat::Avi,
-                                VideoExportFormat::Mkv,
-                                VideoExportFormat::Webm,
-                                VideoExportFormat::Gif,
-                            ];
-                            for fmt in formats {
-                                ui.radio_value(&mut self.selected_export_format, fmt, fix_ar(fmt.label()));
-                            }
-                            ui.add_space(10.0);
-                            ui.horizontal(|ui| {
-                                if ui.button(tr(lang, "Export Now...", "تصدير الآن...")).clicked() {
-                                    let ext = self.selected_export_format.ext();
-                                    let default_name = format!("Stick_Export.{}", ext);
-                                    if let Some(mut path) = rfd::FileDialog::new()
-                                        .add_filter("Video", &[ext])
-                                        .set_file_name(&default_name)
-                                        .save_file()
-                                    {
-                                        if path.extension().is_none() {
-                                            path.set_extension(ext);
-                                        }
-                                        self.start_background_video_export(path, ctx.clone());
+                            match self.export_studio_tab {
+                                0 => {
+                                    ui.strong(tr(lang, "Select Video / Animation Format:", "اختر صيغة الفيديو أو الحركة:"));
+                                    ui.add_space(4.0);
+                                    let v_formats = [
+                                        VideoExportFormat::GifInstant,
+                                        VideoExportFormat::Mp4,
+                                        VideoExportFormat::Mov,
+                                        VideoExportFormat::Avi,
+                                        VideoExportFormat::Mkv,
+                                        VideoExportFormat::Webm,
+                                    ];
+                                    for fmt in v_formats {
+                                        ui.radio_value(&mut self.selected_export_format, fmt, fix_ar(fmt.label()));
                                     }
+                                    ui.add_space(10.0);
+                                    ui.horizontal(|ui| {
+                                        if ui.button(tr(lang, "🚀 Export Video Now...", "🚀 تصدير الآن...")).clicked() {
+                                            let ext = self.selected_export_format.ext();
+                                            let default_name = format!("Stick_Anim.{}", ext);
+                                            if let Some(mut path) = rfd::FileDialog::new()
+                                                .add_filter("Animation", &[ext])
+                                                .set_file_name(&default_name)
+                                                .save_file()
+                                            {
+                                                if path.extension().is_none() {
+                                                    path.set_extension(ext);
+                                                }
+                                                self.start_background_video_export(path, ctx.clone());
+                                            }
+                                        }
+                                        if ui.button(tr(lang, "Cancel", "إلغاء")).clicked() {
+                                            self.show_export_studio = false;
+                                        }
+                                    });
                                 }
-                                if ui.button(tr(lang, "Cancel", "إلغاء")).clicked() {
-                                    self.show_export_dialog = false;
+                                1 => {
+                                    ui.strong(tr(lang, "Single Frame / Drawing Export:", "تصدير الرسمة أو الفريم الحالي:"));
+                                    ui.add_space(4.0);
+                                    let i_formats = [
+                                        ImageExportFormat::PngTransparent,
+                                        ImageExportFormat::PngSolid,
+                                        ImageExportFormat::Jpg,
+                                        ImageExportFormat::Webp,
+                                        ImageExportFormat::Bmp,
+                                        ImageExportFormat::Tiff,
+                                    ];
+                                    for fmt in i_formats {
+                                        ui.radio_value(&mut self.selected_image_format, fmt, fix_ar(fmt.label()));
+                                    }
+                                    ui.add_space(8.0);
+                                    ui.horizontal(|ui| {
+                                        if ui.button(tr(lang, "💾 Export Single Image...", "💾 حفظ كصورة...")).clicked() {
+                                            let ext = self.selected_image_format.ext();
+                                            let default_name = format!("Stick_Art.{}", ext);
+                                            if let Some(mut path) = rfd::FileDialog::new()
+                                                .add_filter("Image", &[ext])
+                                                .set_file_name(&default_name)
+                                                .save_file()
+                                            {
+                                                if path.extension().is_none() {
+                                                    path.set_extension(ext);
+                                                }
+                                                match exporter::export_single_image_format(
+                                                    &self.project,
+                                                    self.current_frame,
+                                                    &path,
+                                                    self.selected_image_format,
+                                                    self.stage_bg_color,
+                                                ) {
+                                                    Ok(_) => {
+                                                        self.play_sfx(SfxType::ExportSuccess);
+                                                        *self.export_task_state.lock().unwrap() = ExportTaskState::Done("تم حفظ الصورة بنجاح!".to_string());
+                                                    }
+                                                    Err(e) => {
+                                                        *self.export_task_state.lock().unwrap() = ExportTaskState::Failed(e);
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        if ui.button(tr(lang, "📁 Export PNG Sequence...", "📁 تصدير تسلسل PNG شفاف...")).clicked() {
+                                            self.project.total_frames = self.timeline_length;
+                                            if let Some(folder) = rfd::FileDialog::new().pick_folder() {
+                                                match exporter::export_transparent_png_sequence(&self.project, &folder) {
+                                                    Ok(n) => {
+                                                        self.play_sfx(SfxType::ExportSuccess);
+                                                        *self.export_task_state.lock().unwrap() = ExportTaskState::Done(format!("تم تصدير {} صورة شفافة بسرعة البرق!", n));
+                                                    }
+                                                    Err(e) => {
+                                                        *self.export_task_state.lock().unwrap() = ExportTaskState::Failed(e);
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        if ui.button(tr(lang, "Close", "إغلاق")).clicked() {
+                                            self.show_export_studio = false;
+                                        }
+                                    });
                                 }
-                            });
+                                2 => {
+                                    ui.strong(tr(lang, "Game Development Sprite Sheet", "تصدير Sprite Sheet للألعاب (Unity / Godot)"));
+                                    ui.add_space(6.0);
+                                    ui.label(fix_ar("يقوم بدمج كافة فريمات الحركة في شريط صور شفاف واحد جاهز لمحركات الألعاب."));
+                                    ui.add_space(10.0);
+                                    ui.horizontal(|ui| {
+                                        if ui.button(tr(lang, "🎮 Export Sprite Sheet (.png)...", "🎮 تصدير Sprite Sheet...")).clicked() {
+                                            self.project.total_frames = self.timeline_length;
+                                            if let Some(mut path) = rfd::FileDialog::new()
+                                                .add_filter("PNG Sprite Sheet", &["png"])
+                                                .set_file_name("Stick_SpriteSheet.png")
+                                                .save_file()
+                                            {
+                                                if path.extension().is_none() {
+                                                    path.set_extension("png");
+                                                }
+                                                match exporter::export_sprite_sheet(&self.project, &path) {
+                                                    Ok(n) => {
+                                                        self.play_sfx(SfxType::ExportSuccess);
+                                                        *self.export_task_state.lock().unwrap() = ExportTaskState::Done(format!("تم تصدير Sprite Sheet ({} فريمات) بنجاح!", n));
+                                                    }
+                                                    Err(e) => {
+                                                        *self.export_task_state.lock().unwrap() = ExportTaskState::Failed(e);
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        if ui.button(tr(lang, "Close", "إغلاق")).clicked() {
+                                            self.show_export_studio = false;
+                                        }
+                                    });
+                                }
+                                _ => {
+                                    ui.strong(tr(lang, "Lottie Web & Mobile Animation (.json)", "تصدير رسوم متجهة للويب (Lottie JSON)"));
+                                    ui.add_space(6.0);
+                                    ui.label(fix_ar("يصيّر مسارات الفيكتور بصيغة Lottie القياسية للعمل على المواقع وتطبيقات الهواتف."));
+                                    ui.add_space(10.0);
+                                    ui.horizontal(|ui| {
+                                        if ui.button(tr(lang, "🌐 Export Lottie (.json)...", "🌐 تصدير ملف Lottie...")).clicked() {
+                                            self.project.total_frames = self.timeline_length;
+                                            if let Some(mut path) = rfd::FileDialog::new()
+                                                .add_filter("Lottie JSON", &["json"])
+                                                .set_file_name("Stick_Lottie.json")
+                                                .save_file()
+                                            {
+                                                if path.extension().is_none() {
+                                                    path.set_extension("json");
+                                                }
+                                                match exporter::export_lottie_json(&self.project, &path) {
+                                                    Ok(_) => {
+                                                        self.play_sfx(SfxType::ExportSuccess);
+                                                        *self.export_task_state.lock().unwrap() = ExportTaskState::Done("تم تصدير ملف Lottie JSON بنجاح!".to_string());
+                                                    }
+                                                    Err(e) => {
+                                                        *self.export_task_state.lock().unwrap() = ExportTaskState::Failed(e);
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        if ui.button(tr(lang, "Close", "إغلاق")).clicked() {
+                                            self.show_export_studio = false;
+                                        }
+                                    });
+                                }
+                            }
                         }
                     }
                 });
@@ -2705,27 +2966,28 @@ impl eframe::App for StickApp {
                         let items = [
                             (0, tr(lang, "Select Tool (Normal)", "أداة التحديد العادي"), self.config.tool_select.clone()),
                             (1, tr(lang, "Area Select Tool (Lasso)", "أداة تحديد المنطقة الحرة"), self.config.tool_lasso.clone()),
-                            (2, tr(lang, "Vector Direct Select", "أداة تحديد نقاط الفيكتور"), self.config.tool_vector_select.clone()),
-                            (3, tr(lang, "Vector Pen Tool", "أداة قلم الفيكتور"), self.config.tool_pen.clone()),
-                            (4, tr(lang, "Brush Tool", "أداة الفرشاة"), self.config.tool_brush.clone()),
-                            (5, tr(lang, "Eraser Red (Full Stroke)", "الممحاة الحمراء (مسح الخط كامل)"), self.config.tool_eraser.clone()),
-                            (6, tr(lang, "Eraser Green (Partial)", "الممحاة الخضراء (مسح جزء صغير)"), self.config.tool_eraser_partial.clone()),
-                            (7, tr(lang, "Paint Bucket Tool", "أداة دلو التعبئة"), self.config.tool_bucket.clone()),
-                            (8, tr(lang, "Eyedropper Tool", "أداة قطارة الألوان"), self.config.tool_eyedropper.clone()),
-                            (9, tr(lang, "Text Tool", "أداة الكتابة (النص)"), self.config.tool_text.clone()),
-                            (10, tr(lang, "Shape / Line Tool", "أداة الخطوط والأشكال الهندسية"), self.config.tool_shape.clone()),
-                            (11, tr(lang, "Hand Tool (Rotate/Flip)", "أداة اليد (تدوير وعكس الكانفا)"), self.config.tool_hand.clone()),
-                            (12, tr(lang, "Delete Frame Completely", "حذف الفريم نهائياً"), self.config.delete_frame_key.clone()),
-                            (13, tr(lang, "Insert Frame (Extend)", "تمديد الفريم الحالي"), self.config.insert_frame.clone()),
-                            (14, tr(lang, "Insert Keyframe (Duplicate)", "إدراج فريم منسوخ"), self.config.insert_keyframe.clone()),
-                            (15, tr(lang, "Insert Blank Keyframe", "إدراج فريم فارغ جديد"), self.config.insert_blank_kf.clone()),
-                            (16, tr(lang, "Convert to Symbol", "تحويل إلى رمز (Symbol)"), self.config.convert_symbol.clone()),
-                            (17, tr(lang, "Play / Pause", "تشغيل / إيقاف"), self.config.play_pause.clone()),
-                            (18, tr(lang, "Previous Frame", "الفريم السابق"), self.config.prev_frame.clone()),
-                            (19, tr(lang, "Next Frame", "الفريم التالي"), self.config.next_frame.clone()),
-                            (20, tr(lang, "Decrease Brush Size", "تصغير حجم الفرشاة"), self.config.brush_smaller.clone()),
-                            (21, tr(lang, "Increase Brush Size", "تكبير حجم الفرشاة"), self.config.brush_larger.clone()),
-                            (22, tr(lang, "Reset Canvas View", "إرجاع الكانفا للمنتصف"), self.config.reset_canvas.clone()),
+                            (2, tr(lang, "Free Transform Tool", "أداة التحويل الحر"), self.config.tool_free_transform.clone()),
+                            (3, tr(lang, "Vector Direct Select", "أداة تحديد نقاط الفيكتور"), self.config.tool_vector_select.clone()),
+                            (4, tr(lang, "Vector Pen Tool", "أداة قلم الفيكتور"), self.config.tool_pen.clone()),
+                            (5, tr(lang, "Brush Tool", "أداة الفرشاة"), self.config.tool_brush.clone()),
+                            (6, tr(lang, "Eraser Red (Full Stroke)", "الممحاة الحمراء (مسح الخط كامل)"), self.config.tool_eraser.clone()),
+                            (7, tr(lang, "Eraser Green (Partial)", "الممحاة الخضراء (مسح جزء صغير)"), self.config.tool_eraser_partial.clone()),
+                            (8, tr(lang, "Paint Bucket Tool", "أداة دلو التعبئة"), self.config.tool_bucket.clone()),
+                            (9, tr(lang, "Eyedropper Tool", "أداة قطارة الألوان"), self.config.tool_eyedropper.clone()),
+                            (10, tr(lang, "Text Tool", "أداة الكتابة (النص)"), self.config.tool_text.clone()),
+                            (11, tr(lang, "Shape / Line Tool", "أداة الخطوط والأشكال الهندسية"), self.config.tool_shape.clone()),
+                            (12, tr(lang, "Hand Tool (Rotate/Flip)", "أداة اليد (تدوير وعكس الكانفا)"), self.config.tool_hand.clone()),
+                            (13, tr(lang, "Delete Frame Completely", "حذف الفريم نهائياً"), self.config.delete_frame_key.clone()),
+                            (14, tr(lang, "Insert Frame (Extend)", "تمديد الفريم الحالي"), self.config.insert_frame.clone()),
+                            (15, tr(lang, "Insert Keyframe (Duplicate)", "إدراج فريم منسوخ"), self.config.insert_keyframe.clone()),
+                            (16, tr(lang, "Insert Blank Keyframe", "إدراج فريم فارغ جديد"), self.config.insert_blank_kf.clone()),
+                            (17, tr(lang, "Convert to Symbol", "تحويل إلى رمز (Symbol)"), self.config.convert_symbol.clone()),
+                            (18, tr(lang, "Play / Pause", "تشغيل / إيقاف"), self.config.play_pause.clone()),
+                            (19, tr(lang, "Previous Frame", "الفريم السابق"), self.config.prev_frame.clone()),
+                            (20, tr(lang, "Next Frame", "الفريم التالي"), self.config.next_frame.clone()),
+                            (21, tr(lang, "Decrease Brush Size", "تصغير حجم الفرشاة"), self.config.brush_smaller.clone()),
+                            (22, tr(lang, "Increase Brush Size", "تكبير حجم الفرشاة"), self.config.brush_larger.clone()),
+                            (23, tr(lang, "Reset Canvas View", "إرجاع الكانفا للمنتصف"), self.config.reset_canvas.clone()),
                         ];
                         let press_key_txt = tr(lang, "Press any key...", "اضغط أي زر...");
                         egui::ScrollArea::vertical().max_height(210.0).show(ui, |ui| {
@@ -2933,9 +3195,13 @@ impl eframe::App for StickApp {
                             if let Some(layer) = self.project.layers.get_mut(self.active_layer_idx) {
                                 if let Some(frame) = layer.keyframes.get_mut(&self.current_frame) {
                                     if !frame.strokes.is_empty() {
+                                        let mut nested = HashMap::new();
+                                        nested.insert(1, frame.strokes.clone());
                                         let sym = Symbol {
                                             name: self.new_symbol_name.clone(),
                                             strokes: frame.strokes.clone(),
+                                            nested_keyframes: nested,
+                                            nested_total_frames: 1,
                                         };
                                         self.project.library_symbols.insert(self.new_symbol_name.clone(), sym);
                                         frame.strokes.clear();
@@ -2944,6 +3210,9 @@ impl eframe::App for StickApp {
                                             x: 0.0,
                                             y: 0.0,
                                             scale: 1.0,
+                                            rotation_deg: 0.0,
+                                            anchor_offset_x: 0.0,
+                                            anchor_offset_y: 0.0,
                                         });
                                         self.has_unsaved_changes = true;
                                         self.play_sfx(SfxType::NewFrame);
@@ -3045,33 +3314,20 @@ impl eframe::App for StickApp {
                     }
                     ui.separator();
                     if ui.button(tr(lang, "Import Image...", "استيراد صورة...")).clicked() { self.import_image_dialog(); ui.close_menu(); }
-                    if ui.button(tr(lang, "Export Image (PNG, JPG, WebP, BMP, TIFF)...", "تصدير صورة بأشهر الصيغ...")).clicked() {
-                        self.show_image_export_dialog = true;
-                        ui.close_menu();
-                    }
+                    if ui.button(tr(lang, "Import SVG Vector...", "استيراد فيكتور SVG...")).clicked() { self.import_svg_dialog(); ui.close_menu(); }
                     if self.workspace_mode == WorkspaceMode::AnimationStudio {
-                        ui.separator();
+                        if ui.button(tr(lang, "Import Adobe Animate (.xfl / .fla)...", "استيراد Adobe Animate...")).clicked() {
+                            self.import_animate_dialog();
+                            ui.close_menu();
+                        }
                         if ui.button(tr(lang, "Import Video...", "استيراد فيديو...")).clicked() { self.import_video_dialog(); ui.close_menu(); }
                         if ui.button(tr(lang, "Import Audio...", "استيراد صوت...")).clicked() { self.import_audio_dialog(); ui.close_menu(); }
-                        ui.separator();
-                        if ui.button(tr(lang, "Export Transparent PNGs (Premiere)...", "تصدير صور شفافة (PNG Sequence)...")).clicked() {
-                            self.project.total_frames = self.timeline_length;
-                            if let Some(folder) = rfd::FileDialog::new().pick_folder() {
-                                match exporter::export_transparent_png_sequence(&self.project, &folder) {
-                                    Ok(n) => {
-                                        self.play_sfx(SfxType::ExportSuccess);
-                                        self.status_message = format!("Exported {} Transparent PNGs!", n);
-                                    }
-                                    Err(e) => self.status_message = e,
-                                }
-                            }
-                            ui.close_menu();
-                        }
-                        if ui.button(tr(lang, "Export Video (MP4, MOV, AVI, MKV, GIF)...", "تصدير فيديو بجميع الصيغ...")).clicked() {
-                            *self.export_task_state.lock().unwrap() = ExportTaskState::Idle;
-                            self.show_export_dialog = true;
-                            ui.close_menu();
-                        }
+                    }
+                    ui.separator();
+                    if ui.button(tr(lang, "🚀 Open Export Studio...", "🚀 فتح استوديو التصدير الشامل...")).clicked() {
+                        *self.export_task_state.lock().unwrap() = ExportTaskState::Idle;
+                        self.show_export_studio = true;
+                        ui.close_menu();
                     }
                 });
 
@@ -3098,12 +3354,29 @@ impl eframe::App for StickApp {
 
                 ui.separator();
                 if ui.button(tr(lang, "+ Image", "+ صورة")).clicked() { self.import_image_dialog(); }
+                if ui.button("+ SVG").on_hover_text("Import SVG Vector").clicked() { self.import_svg_dialog(); }
                 if self.workspace_mode == WorkspaceMode::AnimationStudio {
                     if ui.button(tr(lang, "+ Video", "+ فيديو")).clicked() { self.import_video_dialog(); }
                     if ui.button(tr(lang, "+ Audio", "+ صوت")).clicked() { self.import_audio_dialog(); }
                 }
                 ui.separator();
+                if ui.button(egui::RichText::new(tr(lang, "Export Studio", "استوديو التصدير")).color(egui::Color32::from_rgb(56, 189, 248))).clicked() {
+                    *self.export_task_state.lock().unwrap() = ExportTaskState::Idle;
+                    self.show_export_studio = true;
+                }
+                if ui.small_button("Ctrl+K").on_hover_text("Command Palette").clicked() {
+                    self.show_command_palette = true;
+                }
                 if ui.button(tr(lang, "Updates", "تحديثات")).clicked() { self.check_for_updates(ctx.clone()); }
+
+                // شريط الخروج من التايم لاين الداخلي للرمز (Nested Timeline Breadcrumb)
+                if let Some(ref sym_name) = self.editing_symbol_name.clone() {
+                    ui.separator();
+                    ui.colored_label(egui::Color32::from_rgb(250, 204, 21), format!("[Symbol: {}]", sym_name));
+                    if ui.small_button(tr(lang, "⬅ Exit Symbol", "⬅ العودة للمشهد الرئيسي")).clicked() {
+                        self.editing_symbol_name = None;
+                    }
+                }
 
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     let (gear_rect, gear_resp) = ui.allocate_exact_size(egui::vec2(24.0, 22.0), egui::Sense::click());
@@ -3182,6 +3455,7 @@ impl eframe::App for StickApp {
 
                     let tools = [
                         (select_ui, select_label, select_sc),
+                        (ActiveToolUI::FreeTransform, tr(lang, "Free Transform", "تحويل حر"), self.config.tool_free_transform.clone()),
                         (ActiveToolUI::VectorPen, tr(lang, "Vector Pen", "قلم فيكتور"), self.config.tool_pen.clone()),
                         (ActiveToolUI::Brush, tr(lang, "Brush", "فرشاة"), self.config.tool_brush.clone()),
                         (eraser_ui, eraser_label, eraser_sc),
@@ -3196,7 +3470,7 @@ impl eframe::App for StickApp {
                         let selected = self.active_tool_ui == tool;
                         let accent = get_tool_ui_color(tool);
                         let btn_w = if show_labels { ui.available_width() - 8.0 } else { 42.0 };
-                        let (rect, resp) = ui.allocate_exact_size(egui::vec2(btn_w, 34.0), egui::Sense::click());
+                        let (rect, resp) = ui.allocate_exact_size(egui::vec2(btn_w, 32.0), egui::Sense::click());
                         let bg = if selected {
                             accent
                         } else if resp.hovered() {
@@ -3205,14 +3479,14 @@ impl eframe::App for StickApp {
                             egui::Color32::from_rgb(44, 44, 48)
                         };
                         ui.painter().rect_filled(rect, 6.0, bg);
-                        let icon_rect = egui::Rect::from_min_size(rect.min, egui::vec2(42.0, 34.0));
+                        let icon_rect = egui::Rect::from_min_size(rect.min, egui::vec2(42.0, 32.0));
                         draw_tool_ui_icon(ui.painter(), icon_rect, tool, selected);
                         if show_labels {
                             ui.painter().text(
                                 icon_rect.right_center() + egui::vec2(4.0, 0.0),
                                 egui::Align2::LEFT_CENTER,
                                 format!("{} ({})", name, sc),
-                                egui::FontId::proportional(13.0),
+                                egui::FontId::proportional(12.5),
                                 egui::Color32::WHITE,
                             );
                         }
@@ -3229,7 +3503,7 @@ impl eframe::App for StickApp {
                         if matches!(tool, ActiveToolUI::SelectNormal | ActiveToolUI::SelectLasso | ActiveToolUI::VectorDirectSelect) {
                             let lbl_norm = tr(lang, "Normal Select (V)", "تحديد عادي (V)");
                             let lbl_area = tr(lang, "Area / Lasso Select (L)", "تحديد منطقة حرة (L)");
-                            let lbl_vec = tr(lang, "Vector Direct Select (Q)", "تحديد نقاط الفيكتور (Q)");
+                            let lbl_vec = tr(lang, "Vector Direct Select (G)", "تحديد نقاط الفيكتور (G)");
                             resp.context_menu(|ui| {
                                 if ui.selectable_label(self.active_tool_ui == ActiveToolUI::SelectNormal, &lbl_norm).clicked() {
                                     self.active_tool_ui = ActiveToolUI::SelectNormal;
@@ -3324,25 +3598,18 @@ impl eframe::App for StickApp {
                     ui.separator();
                     ui.small(tr(lang, "Color", "اللون"));
                     ui.color_edit_button_srgba_unmultiplied(&mut self.brush_color);
-                    ui.add_space(4.0);
-                    if ui.small_button("+Brush").on_hover_text("Import Brush").clicked() {
-                        if let Some(path) = rfd::FileDialog::new().add_filter("Brush", &["png", "abr"]).pick_file() {
-                            self.imported_brushes.push(path.file_name().unwrap_or_default().to_string_lossy().to_string());
-                        }
-                    }
                 });
             });
 
         // اللوحة اليمنى
         egui::SidePanel::right("right_panel")
             .resizable(true)
-            .default_width(255.0)
-            .width_range(180.0..=480.0)
+            .default_width(260.0)
+            .width_range(185.0..=480.0)
             .show(ctx, |ui| {
                 if self.workspace_mode == WorkspaceMode::DrawingOnly {
                     ui.strong(tr(lang, "🎨 Drawing Studio Tools", "🎨 استوديو الرسم الاحترافي"));
                     ui.separator();
-
                     self.render_tool_properties_ui(ui, lang);
 
                     ui.add_space(8.0);
@@ -3422,8 +3689,9 @@ impl eframe::App for StickApp {
 
                     ui.add_space(8.0);
                     ui.separator();
-                    if ui.button(tr(lang, "💾 Export Image (PNG, JPG, WebP...)", "💾 تصدير الصورة بأشهر الصيغ")).clicked() {
-                        self.show_image_export_dialog = true;
+                    if ui.button(tr(lang, "🚀 Open Export Studio...", "🚀 تصدير الرسمة (Export Studio)...")).clicked() {
+                        self.export_studio_tab = 1;
+                        self.show_export_studio = true;
                     }
                 } else {
                     ui.horizontal(|ui| {
@@ -3435,12 +3703,29 @@ impl eframe::App for StickApp {
                     if self.right_tab == 0 {
                         self.render_tool_properties_ui(ui, lang);
 
+                        // إعدادات Tweens و Easing للفريم الحالي (Classic Tween & Shape Tween)
                         if let Some(layer) = self.project.layers.get_mut(self.active_layer_idx) {
                             if let Some(fd) = layer.keyframes.get_mut(&self.current_frame) {
-                                if !fd.symbol_instances.is_empty() {
-                                    ui.add_space(8.0);
-                                    ui.separator();
-                                    ui.checkbox(&mut fd.motion_tween, tr(lang, "Motion Tween (Auto Animate)", "تحريك تلقائي (Motion Tween)"));
+                                ui.add_space(8.0);
+                                ui.separator();
+                                ui.strong(tr(lang, "Frame Tween & Easing", "التحريك التلقائي والنعومة (Tweens)"));
+                                ui.horizontal(|ui| {
+                                    ui.selectable_value(&mut fd.tween_mode, TweenMode::None, tr(lang, "None", "بدون"));
+                                    ui.selectable_value(&mut fd.tween_mode, TweenMode::Classic, "Classic");
+                                    ui.selectable_value(&mut fd.tween_mode, TweenMode::Shape, "Shape");
+                                });
+                                if fd.tween_mode != TweenMode::None {
+                                    ui.horizontal(|ui| {
+                                        ui.label("Easing:");
+                                        egui::ComboBox::from_id_salt("easing_combo")
+                                            .selected_text(fix_ar(fd.easing.label()))
+                                            .show_ui(ui, |ui| {
+                                                ui.selectable_value(&mut fd.easing, EasingCurve::Linear, fix_ar(EasingCurve::Linear.label()));
+                                                ui.selectable_value(&mut fd.easing, EasingCurve::EaseIn, fix_ar(EasingCurve::EaseIn.label()));
+                                                ui.selectable_value(&mut fd.easing, EasingCurve::EaseOut, fix_ar(EasingCurve::EaseOut.label()));
+                                                ui.selectable_value(&mut fd.easing, EasingCurve::EaseInOut, fix_ar(EasingCurve::EaseInOut.label()));
+                                            });
+                                    });
                                 }
                             }
                         }
@@ -3489,7 +3774,7 @@ impl eframe::App for StickApp {
                             ui.add(egui::DragValue::new(&mut self.project.fps).range(1..=60));
                         });
                     } else {
-                        ui.strong(tr(lang, "Symbols Library", "مكتبة الرموز"));
+                        ui.strong(tr(lang, "Symbols & Nested Timelines", "مكتبة الرموز والتايم لاين الداخلي"));
                         let sym_names: Vec<String> = self.project.library_symbols.keys().cloned().collect();
                         if sym_names.is_empty() {
                             ui.small(tr(lang, "Draw & press F8 to create symbol", "ارسم واضغط F8 لإنشاء رمز"));
@@ -3507,10 +3792,16 @@ impl eframe::App for StickApp {
                                             x: 100.0,
                                             y: 100.0,
                                             scale: 1.0,
+                                            rotation_deg: 0.0,
+                                            anchor_offset_x: 0.0,
+                                            anchor_offset_y: 0.0,
                                         });
                                         self.has_unsaved_changes = true;
                                         self.play_sfx(SfxType::NewFrame);
                                     }
+                                }
+                                if ui.small_button(tr(lang, "Edit Timeline", "تعديل الداخل")).clicked() {
+                                    self.editing_symbol_name = Some(s_name);
                                 }
                             });
                         }
@@ -3632,6 +3923,7 @@ impl eframe::App for StickApp {
                     let mut pending_paste: Option<(usize, usize)> = None;
                     let mut pending_clear_frame: Option<(usize, usize)> = None;
                     let mut pending_remove_frame: Option<(usize, usize)> = None;
+                    let mut pending_tween_op: Option<(usize, usize, TweenMode)> = None;
                     let mut pending_dup_layer: Option<usize> = None;
                     let mut delete_layer_idx: Option<usize> = None;
                     let mut swap_layers: Option<(usize, usize)> = None;
@@ -3730,6 +4022,7 @@ impl eframe::App for StickApp {
                                             || !fd.symbol_instances.is_empty()
                                             || !fd.text_items.is_empty()
                                     });
+                                    let tw_mode = eff_fd.map(|fd| fd.tween_mode).unwrap_or(TweenMode::None);
 
                                     let is_selected = self.active_layer_idx == l_idx && self.current_frame == f;
                                     let shape_kind = if is_keyframe {
@@ -3753,7 +4046,7 @@ impl eframe::App for StickApp {
                                         egui::Sense::click_and_drag(),
                                     );
                                     ui.painter().rect_filled(cell_rect, 3.0, fill);
-                                    draw_timeline_frame_shape(ui.painter(), cell_rect, shape_kind);
+                                    draw_timeline_frame_shape(ui.painter(), cell_rect, shape_kind, tw_mode);
 
                                     if cell_resp.clicked() {
                                         self.active_layer_idx = l_idx;
@@ -3771,6 +4064,19 @@ impl eframe::App for StickApp {
                                     }
 
                                     cell_resp.context_menu(|ui| {
+                                        if ui.button(tr(lang, "Create Classic Tween", "تفعيل Classic Tween")).clicked() {
+                                            pending_tween_op = Some((l_idx, f, TweenMode::Classic));
+                                            ui.close_menu();
+                                        }
+                                        if ui.button(tr(lang, "Create Shape Tween (Morph)", "تفعيل Shape Tween (تحول الشكل)")).clicked() {
+                                            pending_tween_op = Some((l_idx, f, TweenMode::Shape));
+                                            ui.close_menu();
+                                        }
+                                        if ui.button(tr(lang, "Remove Tween", "إلغاء التحريك التلقائي")).clicked() {
+                                            pending_tween_op = Some((l_idx, f, TweenMode::None));
+                                            ui.close_menu();
+                                        }
+                                        ui.separator();
                                         if ui.button(&lbl_copy).clicked() {
                                             pending_copy = Some((l_idx, f));
                                             ui.close_menu();
@@ -3855,6 +4161,17 @@ impl eframe::App for StickApp {
                     if pointer_released {
                         self.dragged_layer_idx = None;
                         self.dragged_frame = None;
+                    }
+
+                    if let Some((l_idx, f_idx, tw)) = pending_tween_op {
+                        self.save_undo_state();
+                        if let Some(layer) = self.project.layers.get_mut(l_idx) {
+                            let eff_k = Self::get_effective_keyframe_index(layer, f_idx).unwrap_or(f_idx);
+                            if let Some(fd) = layer.keyframes.get_mut(&eff_k) {
+                                fd.tween_mode = tw;
+                                self.has_unsaved_changes = true;
+                            }
+                        }
                     }
 
                     if let Some((src_l, dst_l)) = swap_layers {
@@ -4079,38 +4396,61 @@ impl eframe::App for StickApp {
                                 }
                             }
                         }
-                        ActiveToolUI::SelectNormal | ActiveToolUI::SelectLasso => {
+                        ActiveToolUI::SelectNormal | ActiveToolUI::SelectLasso | ActiveToolUI::FreeTransform => {
                             if pointer_pressed {
                                 let mut hit_resize_handle = false;
+                                let mut hit_rotate_handle = false;
+                                let mut hit_anchor_handle = false;
+
                                 if let Some(layer) = self.project.layers.get(self.active_layer_idx) {
                                     if let Some(frame) = Self::get_effective_frame_data(layer, self.current_frame) {
+                                        let mut min_p = egui::pos2(f32::MAX, f32::MAX);
                                         let mut max_p = egui::pos2(f32::MIN, f32::MIN);
                                         let mut has_sel = false;
                                         for &idx in &self.selected_stroke_indices {
                                             if let Some(s) = frame.strokes.get(idx) {
                                                 for p in &s.points {
-                                                    max_p = max_p.max(to_screen(egui::pos2(p.x, p.y)));
+                                                    let sp = to_screen(egui::pos2(p.x, p.y));
+                                                    min_p = min_p.min(sp);
+                                                    max_p = max_p.max(sp);
                                                     has_sel = true;
                                                 }
                                             }
                                         }
                                         if let Some(t_idx) = self.selected_text_idx {
                                             if let Some(txt) = frame.text_items.get(t_idx) {
+                                                min_p = min_p.min(to_screen(egui::pos2(txt.x, txt.y)));
                                                 max_p = max_p.max(to_screen(egui::pos2(txt.x + 110.0, txt.y + txt.font_size)));
                                                 has_sel = true;
                                             }
                                         }
-                                        if has_sel && pos.distance(max_p + egui::vec2(6.0, 6.0)) < 22.0 {
-                                            hit_resize_handle = true;
+                                        if has_sel {
+                                            let anchor_scr = min_p.lerp(max_p, 0.5) + self.custom_anchor_offset * scale;
+                                            if pos.distance(anchor_scr) < 14.0 && self.active_tool_ui == ActiveToolUI::FreeTransform {
+                                                hit_anchor_handle = true;
+                                            } else if pos.distance(max_p + egui::vec2(6.0, 6.0)) < 20.0 {
+                                                hit_resize_handle = true;
+                                            } else if self.active_tool_ui == ActiveToolUI::FreeTransform
+                                                && pos.distance(egui::pos2(max_p.x + 6.0, min_p.y - 6.0)) < 20.0
+                                            {
+                                                hit_rotate_handle = true;
+                                            }
                                         }
                                     }
                                 }
 
-                                if hit_resize_handle {
+                                if hit_anchor_handle {
+                                    self.is_dragging_anchor = true;
+                                } else if hit_resize_handle {
                                     self.save_undo_state();
                                     self.is_resizing_selection = true;
+                                } else if hit_rotate_handle {
+                                    self.save_undo_state();
+                                    self.is_rotating_selection = true;
                                 } else {
+                                    self.is_dragging_anchor = false;
                                     self.is_resizing_selection = false;
+                                    self.is_rotating_selection = false;
                                     if self.active_tool_ui == ActiveToolUI::SelectLasso {
                                         let mut clicked_selected = false;
                                         if !self.selected_stroke_indices.is_empty() {
@@ -4130,6 +4470,7 @@ impl eframe::App for StickApp {
                                         if !clicked_selected {
                                             self.selected_stroke_indices.clear();
                                             self.selected_text_idx = None;
+                                            self.custom_anchor_offset = egui::Vec2::ZERO;
                                             self.lasso_polygon.clear();
                                             self.lasso_polygon.push(stage_pos);
                                             self.is_drawing_lasso = true;
@@ -4138,6 +4479,7 @@ impl eframe::App for StickApp {
                                         self.selected_stroke_indices.clear();
                                         self.selected_symbol_inst_idx = None;
                                         self.selected_text_idx = None;
+                                        self.custom_anchor_offset = egui::Vec2::ZERO;
                                         if let Some(layer) = self.project.layers.get(self.active_layer_idx) {
                                             if let Some(frame) = Self::get_effective_frame_data(layer, self.current_frame) {
                                                 for (i, txt) in frame.text_items.iter().enumerate() {
@@ -4171,9 +4513,13 @@ impl eframe::App for StickApp {
                                     }
                                 }
                             } else if pointer_down && delta.length_sq() > 0.0 {
-                                if self.is_resizing_selection || ctx.input(|i| i.modifiers.shift) {
+                                if self.is_dragging_anchor {
+                                    self.custom_anchor_offset += delta;
+                                } else if self.is_resizing_selection || ctx.input(|i| i.modifiers.shift) {
                                     let factor = (1.0 + (delta.x + delta.y) * 0.006).clamp(0.85, 1.15);
-                                    self.scale_selected_items(factor);
+                                    self.transform_selected_items(factor, 0.0, false, false);
+                                } else if self.is_rotating_selection {
+                                    self.transform_selected_items(1.0, delta.x * 0.6, false, false);
                                 } else if self.is_drawing_lasso {
                                     self.lasso_polygon.push(stage_pos);
                                 } else {
@@ -4250,13 +4596,12 @@ impl eframe::App for StickApp {
                         }
                         ActiveToolUI::Eyedropper if pointer_pressed => {
                             if let Some(layer) = self.project.layers.get(self.active_layer_idx) {
-                                if let Some(frame) = Self::get_effective_frame_data(layer, self.current_frame) {
-                                    for s in &frame.strokes {
-                                        if s.points.iter().any(|p| ((p.x - stage_pos.x).powi(2) + (p.y - stage_pos.y).powi(2)).sqrt() < 15.0) {
-                                            self.brush_color = s.color;
-                                            self.play_sfx(SfxType::UiClick);
-                                            break;
-                                        }
+                                let frame = self.project.evaluate_layer_at_frame(layer, self.current_frame);
+                                for s in &frame.strokes {
+                                    if s.points.iter().any(|p| ((p.x - stage_pos.x).powi(2) + (p.y - stage_pos.y).powi(2)).sqrt() < 15.0) {
+                                        self.brush_color = s.color;
+                                        self.play_sfx(SfxType::UiClick);
+                                        break;
                                     }
                                 }
                             }
@@ -4326,7 +4671,9 @@ impl eframe::App for StickApp {
             }
 
             if pointer_released {
+                self.is_dragging_anchor = false;
                 self.is_resizing_selection = false;
+                self.is_rotating_selection = false;
                 self.editing_vector_node = None;
 
                 if let (Some(p0), Some(p1)) = (self.shape_drag_start.take(), self.shape_drag_current.take()) {
@@ -4347,11 +4694,10 @@ impl eframe::App for StickApp {
                 if self.is_drawing_lasso {
                     self.is_drawing_lasso = false;
                     if let Some(layer) = self.project.layers.get(self.active_layer_idx) {
-                        if let Some(frame) = Self::get_effective_frame_data(layer, self.current_frame) {
-                            for (i, s) in frame.strokes.iter().enumerate() {
-                                if s.points.iter().any(|p| point_in_polygon(egui::pos2(p.x, p.y), &self.lasso_polygon)) {
-                                    self.selected_stroke_indices.push(i);
-                                }
+                        let frame = self.project.evaluate_layer_at_frame(layer, self.current_frame);
+                        for (i, s) in frame.strokes.iter().enumerate() {
+                            if s.points.iter().any(|p| point_in_polygon(egui::pos2(p.x, p.y), &self.lasso_polygon)) {
+                                self.selected_stroke_indices.push(i);
                             }
                         }
                     }
@@ -4375,20 +4721,28 @@ impl eframe::App for StickApp {
 
             self.last_pointer_pos = if pointer_down { pointer_pos } else { None };
 
-            if self.project.onion_skin.enabled && !self.is_playing && self.workspace_mode == WorkspaceMode::AnimationStudio {
-                if let Some(layer) = self.project.layers.get(self.active_layer_idx) {
-                    for offset in 1..=self.project.onion_skin.frames_before {
-                        if self.current_frame > offset {
-                            if let Some(fd) = Self::get_effective_frame_data(layer, self.current_frame - offset) {
+            // إذا كان المستخدم داخل Nested Timeline لرمز معين، يتم عرض الرمز فقط
+            if let Some(ref sym_name) = self.editing_symbol_name {
+                if let Some(sym) = self.project.library_symbols.get(sym_name) {
+                    let sym_strokes = self.project.evaluate_symbol_strokes(sym, self.current_frame);
+                    for s in sym_strokes {
+                        draw_stroke_pro(&painter, s, None, scale, 0.0, 0.0, &to_screen);
+                    }
+                }
+            } else {
+                if self.project.onion_skin.enabled && !self.is_playing && self.workspace_mode == WorkspaceMode::AnimationStudio {
+                    if let Some(layer) = self.project.layers.get(self.active_layer_idx) {
+                        for offset in 1..=self.project.onion_skin.frames_before {
+                            if self.current_frame > offset {
+                                let fd = self.project.evaluate_layer_at_frame(layer, self.current_frame - offset);
                                 for s in &fd.strokes {
                                     draw_stroke_pro(&painter, s, Some(self.project.onion_skin.color_before), scale, 0.0, 0.0, &to_screen);
                                 }
                             }
                         }
-                    }
-                    for offset in 1..=self.project.onion_skin.frames_after {
-                        if self.current_frame + offset <= self.timeline_length {
-                            if let Some(fd) = Self::get_effective_frame_data(layer, self.current_frame + offset) {
+                        for offset in 1..=self.project.onion_skin.frames_after {
+                            if self.current_frame + offset <= self.timeline_length {
+                                let fd = self.project.evaluate_layer_at_frame(layer, self.current_frame + offset);
                                 for s in &fd.strokes {
                                     draw_stroke_pro(&painter, s, Some(self.project.onion_skin.color_after), scale, 0.0, 0.0, &to_screen);
                                 }
@@ -4396,11 +4750,10 @@ impl eframe::App for StickApp {
                         }
                     }
                 }
-            }
 
-            for (l_idx, layer) in self.project.layers.iter().enumerate().rev() {
-                if layer.visible {
-                    if let Some(fd) = Self::get_effective_frame_data(layer, self.current_frame) {
+                for (l_idx, layer) in self.project.layers.iter().enumerate().rev() {
+                    if layer.visible {
+                        let fd = self.project.evaluate_layer_at_frame(layer, self.current_frame);
                         for m in &fd.media_items {
                             if let Some(tex) = self.texture_cache.get(&m.path) {
                                 painter.image(
@@ -4448,13 +4801,25 @@ impl eframe::App for StickApp {
                             }
                             if has_box {
                                 let sel_rect = egui::Rect::from_min_max(min_p - egui::vec2(6.0, 6.0), max_p + egui::vec2(6.0, 6.0));
-                                painter.rect_stroke(
-                                    sel_rect,
-                                    2.0,
-                                    egui::Stroke::new(1.5, egui::Color32::from_rgb(56, 189, 248)),
-                                );
+                                let box_col = if self.active_tool_ui == ActiveToolUI::FreeTransform {
+                                    egui::Color32::from_rgb(245, 158, 11)
+                                } else {
+                                    egui::Color32::from_rgb(56, 189, 248)
+                                };
+                                painter.rect_stroke(sel_rect, 2.0, egui::Stroke::new(1.5, box_col));
+
+                                // مقبض التكبير والتصغير (الزاوية السفلية اليمنى)
                                 let handle_rect = egui::Rect::from_center_size(sel_rect.right_bottom(), egui::vec2(13.0, 13.0));
-                                painter.rect_filled(handle_rect, 2.0, egui::Color32::from_rgb(56, 189, 248));
+                                painter.rect_filled(handle_rect, 2.0, box_col);
+
+                                // مقبض التدوير ونقطة الارتكاز البيضاء عند اختيار Free Transform (Q)
+                                if self.active_tool_ui == ActiveToolUI::FreeTransform {
+                                    let rot_pos = egui::pos2(sel_rect.max.x, sel_rect.min.y);
+                                    painter.circle_filled(rot_pos, 6.5, egui::Color32::from_rgb(34, 197, 94));
+                                    let anchor_scr = sel_rect.center() + self.custom_anchor_offset * scale;
+                                    painter.circle_filled(anchor_scr, 5.5, egui::Color32::WHITE);
+                                    painter.circle_stroke(anchor_scr, 6.5, egui::Stroke::new(1.5, egui::Color32::BLACK));
+                                }
                             }
                         }
 
@@ -4469,12 +4834,13 @@ impl eframe::App for StickApp {
                                 col,
                             );
                         }
-                    }
-                    let interp_symbols = Self::get_interpolated_symbols(layer, self.current_frame);
-                    for inst in &interp_symbols {
-                        if let Some(sym) = self.project.library_symbols.get(&inst.symbol_name) {
-                            for s in &sym.strokes {
-                                draw_stroke_pro(&painter, s, None, scale * inst.scale, inst.x, inst.y, &to_screen);
+
+                        for inst in &fd.symbol_instances {
+                            if let Some(sym) = self.project.library_symbols.get(&inst.symbol_name) {
+                                let sym_strokes = self.project.evaluate_symbol_strokes(sym, self.current_frame);
+                                for s in sym_strokes {
+                                    draw_stroke_pro(&painter, s, None, scale * inst.scale, inst.x, inst.y, &to_screen);
+                                }
                             }
                         }
                     }
