@@ -1230,12 +1230,17 @@ impl StickApp {
         if let Some((_, sink)) = self.audio_sink.take() { sink.stop(); }
     }
 
-    fn trigger_save(&mut self) -> bool {
+fn trigger_save(&mut self) -> bool {
         self.project.total_frames = self.timeline_length;
-        if let Some(mut path) = rfd::FileDialog::new().add_filter("Stick Project", &["stick", "ah2d"]).set_file_name("project.stick").save_file() {
-            if path.extension().is_none() { path.set_extension("stick"); }
+        if let Some(mut path) = rfd::FileDialog::new()
+            .add_filter("Stick Project", &["stick", "ah2d"])
+            .set_file_name("project.stick")
+            .save_file()
+        {
+            if path.extension().is_none() {
+                path.set_extension("stick");
+            }
             if self.project.save_to_file(&path).is_ok() {
-                self.saved_path = Some(path);
                 self.has_unsaved_changes = false;
                 self.play_sfx(SfxType::NewFrame);
                 self.status_message = tr(self.config.lang, "Project Saved!", "تم حفظ المشروع بالكامل!");
