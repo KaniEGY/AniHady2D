@@ -1,9 +1,11 @@
 #![windows_subsystem = "windows"]
 
 mod brushes;
+mod changelog;
 mod exporter;
 mod profile;
 mod project;
+
 
 use arabic_reshaper::arabic_reshape;
 use brushes::{draw_brush_preset_icon, draw_stroke_pro};
@@ -25,7 +27,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use unicode_bidi::BidiInfo;
 
-const FALLBACK_VERSION: &str = "4.0.0";
+const FALLBACK_VERSION: &str = "4.1.0";
 const GITHUB_REPO: &str = "KaniEGY/Stick";
 const YOUTUBE_CHANNEL_URL: &str = "https://www.youtube.com/@%D8%A7%D8%A8%D9%84%D9%83%D8%A7%D8%B4-%D8%A7%D9%86%D9%85%D9%8A%D8%B4%D9%86/videos";
 
@@ -242,6 +244,8 @@ enum UpdateState {
 #[derive(Serialize, Deserialize, Clone)]
 struct AppConfig {
     lang: AppLang,
+    #[serde(default)]
+    last_seen_patch_version: String,
     #[serde(default = "default_true_val")]
     sound_effects_enabled: bool,
     #[serde(default)]
@@ -306,6 +310,7 @@ impl Default for AppConfig {
     fn default() -> Self {
         Self {
             lang: AppLang::Arabic,
+            last_seen_patch_version: String::new(),
             sound_effects_enabled: true,
             show_grid: false,
             grid_size: 40.0,
@@ -748,6 +753,7 @@ struct StickApp {
     text_font_size: f32,
     pending_text_pos: egui::Pos2,
     show_update_dialog: bool,
+    show_patch_notes_dialog: bool,
     show_settings_dialog: bool,
     show_credits_dialog: bool,
     renaming_layer_idx: Option<usize>,
@@ -861,6 +867,7 @@ impl StickApp {
             text_font_size: 36.0,
             pending_text_pos: egui::pos2(200.0, 200.0),
             show_update_dialog: false,
+            show_patch_notes_dialog: AppConfig::load().last_seen_patch_version != FALLBACK_VERSION,
             show_settings_dialog: false,
             show_credits_dialog: false,
             renaming_layer_idx: None,
@@ -1601,7 +1608,20 @@ impl eframe::App for StickApp {
             });
             return;
         }
+let mut patch_acknowledged = false;
+        changelog::render_whats_new_modal(
+            ctx,
+            lang,
+            &mut self.show_patch_notes_dialog,
+            &mut patch_acknowledged,
+        );
+        if patch_acknowledged {
+            self.config.last_seen_patch_version = FALLBACK_VERSION.to_string();
+            self.config.save();
+            self.play_sfx(SfxType::NewFrame);
+        }
 
+        
         let mut typing_in_textbox = ctx.wants_keyboard_input();
         let (
             now, ctrl_z, ctrl_y, ctrl_s, ctrl_c, ctrl_v, ctrl_k, shift_f5, del_pressed,
