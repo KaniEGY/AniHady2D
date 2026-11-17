@@ -416,6 +416,8 @@ struct AppConfig {
     timeline_dock_height: f32,
     #[serde(default)]
     timeline_style: u8,
+    #[serde(default = "default_new_timeline_cell_width")]
+    timeline_new_cell_width: f32,
     #[serde(default = "default_new_timeline_row_height")]
     timeline_new_row_height: f32,
     #[serde(default = "default_true_val")]
@@ -495,6 +497,7 @@ fn default_vanishing_x() -> f32 { 0.5 }
 fn default_vanishing_y() -> f32 { 0.30 }
 fn default_timeline_height() -> f32 { 310.0 }
 fn default_new_timeline_row_height() -> f32 { 50.0 }
+fn default_new_timeline_cell_width() -> f32 { 64.0 }
 fn default_right_split() -> f32 { 0.45 }
 fn default_grid_size() -> f32 { 40.0 }
 fn default_autosave_mins() -> u64 { 5 }
@@ -531,6 +534,7 @@ impl Default for AppConfig {
             vanishing_y: default_vanishing_y(),
             timeline_dock_height: default_timeline_height(),
             timeline_style: 0,
+            timeline_new_cell_width: default_new_timeline_cell_width(),
             timeline_new_row_height: default_new_timeline_row_height(),
             timeline_show_timecodes: true,
             show_top_bar: true,
@@ -4414,8 +4418,13 @@ impl eframe::App for StickApp {
                 ui.separator();
                 ui.horizontal(|ui| {
                     ui.label(tr(lang, "Timeline zoom", "تكبير التايم لاين"));
-                    ui.add(egui::Slider::new(&mut self.timeline_cell_width, 16.0..=84.0)
-                        .show_value(false));
+                    if self.config.timeline_style == 1 {
+                        if ui.add(egui::Slider::new(&mut self.config.timeline_new_cell_width,
+                            28.0..=110.0).show_value(false)).changed() { self.config.save(); }
+                    } else {
+                        ui.add(egui::Slider::new(&mut self.timeline_cell_width, 16.0..=84.0)
+                            .show_value(false));
+                    }
                     if ui.add(egui::Slider::new(&mut self.config.timeline_dock_height, 140.0..=850.0)
                         .text(tr(lang, "Panel height", "ارتفاع التايم لاين"))).changed() {
                         self.config.save();
@@ -4428,8 +4437,9 @@ impl eframe::App for StickApp {
                     }
                 });
                 let modern = self.config.timeline_style == 1;
-                let cell_w = if modern { self.timeline_cell_width.max(30.0) }
-                    else { self.timeline_cell_width };
+                let cell_w = if modern {
+                    self.config.timeline_new_cell_width.clamp(28.0, 110.0)
+                } else { self.timeline_cell_width };
                 let label_w = if modern { 218.0 } else { 198.0 };
                 let header_h = if modern { 39.0 } else { 30.0 };
                 let row_h = if modern {
@@ -4670,7 +4680,12 @@ impl eframe::App for StickApp {
                     }
                     ui.separator();
                     ui.label(tr(lang, "Timeline cell width", "عرض الفريم في التايم لاين"));
-                    ui.add(egui::Slider::new(&mut self.timeline_cell_width, 20.0..=90.0));
+                    if self.config.timeline_style == 1 {
+                        if ui.add(egui::Slider::new(&mut self.config.timeline_new_cell_width,
+                            28.0..=110.0)).changed() { self.config.save(); }
+                    } else {
+                        ui.add(egui::Slider::new(&mut self.timeline_cell_width, 20.0..=90.0));
+                    }
                     ui.small(tr(lang, "Drag the Timeline's top border to resize it vertically.",
                         "اسحب الحافة اللي فوق للتايم لاين عشان تكبره أو تصغّره."));
                 });
