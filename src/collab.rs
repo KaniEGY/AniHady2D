@@ -110,7 +110,14 @@ fn valid_strokes(layer: usize, frame: usize, strokes: &[Stroke], project: &AniPr
 pub fn apply_strokes(project: &mut AniProject, layer: usize, frame: usize, strokes: Vec<Stroke>) -> bool {
     if !valid_strokes(layer, frame, &strokes, project) { return false; }
     project.total_frames = project.total_frames.max(frame);
-    project.layers[layer].keyframes.entry(frame).or_default().strokes.extend(strokes);
+    let keyframes = &mut project.layers[layer].keyframes;
+    if !keyframes.contains_key(&frame) {
+        // Match Stick's editable-keyframe inheritance (important for animation).
+        let previous = keyframes.iter().filter(|(index, _)| **index <= frame)
+            .max_by_key(|(index, _)| **index).map(|(_, data)| data.clone()).unwrap_or_default();
+        keyframes.insert(frame, previous);
+    }
+    if let Some(data) = keyframes.get_mut(&frame) { data.strokes.extend(strokes); }
     true
 }
 fn local_address() -> String {
