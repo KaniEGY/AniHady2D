@@ -93,3 +93,14 @@
 - `STICK_ONLINE_GUIDE.md`: complete Tailscale guide and troubleshooting, with manual two-PC QA checklist. This does not implement global room code discovery or built-in VPN/relay services.
 - User wants every successfully tested version published by default through GitHub Releases and Check for Updates. DO NOT publish only if user expressly says not to; keep earlier release rollback choices and don't publish failed CI.
 - CI and runtime result: to be filled from actual Windows workflow results. Windows two-PC cross-ISP GUI test is not performed here.
+
+
+## 17 Nov 2026 — Tools audit, fill seams and eraser precision
+- Branch: `fix/tools-bucket-eraser-selection-20261117`, based on `main` SHA `8b5c1368679ae13400ab3999937a55bd46c097a2`.
+- Scope: inspect all 13 drawing toolbar tools, compare to AniCraft (engine paint, eraser, path tools and selection), independent implementation. No Krita GPL source copied.
+- New `src/fill_render.rs` + `earcutr` dependency: proper concave region triangulation for live canvas, aligning with tiny-skia export path. `src/fill_tools.rs`: grow bounded flooded region under the ink to eliminate white gaps, support clicks near wall, retain divider isolation, tests for self-intersecting doodle loops, small gaps and outline underpaint.
+- `src/eraser_tools.rs`: full-stroke hit against segment geometry; partial eraser analytically clips paths against eraser disc instead of only testing vertices. Main UI interpolates fast eraser drags; tests cover long line, clipping, dab and untouched strokes.
+- `src/selection_tools.rs`: exact line/filled polygon picking and precise hit test (no bbox false positives); eyedropper now searches topmost visible layer. `src/main.rs`: bucket gap slider + optional all-visible-layer reference, fill-only ordering for recolor, smoothed brush pointer-up endpoint and square drag fix.
+- `TOOLS_AUDIT_2026_11_17.md`: table covering all 13 tool paths, automation and Windows GUI follow-up, plus explicit known boundaries.
+- User's standing release preference: publish every tested update by default, unless explicitly told not to. Always keep old releases and rollback; no known-failing build on main.
+- QA: latest PR Windows cargo test/release build plus manual painting/old-project/save/export/2 PC still need verification before stating complete acceptance.
