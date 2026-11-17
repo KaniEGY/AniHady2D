@@ -35,7 +35,7 @@ Stick is **hosted on the creator's own computer**. It listens on TCP 47554 for c
 
 ## Collaboration limitations / الأمان
 
-- The host serializes edits, including drawing, bucket fill, erasing, layers, keyframes, frame content, text and transforms.
+- The host serializes edits, including legacy stroke packets and structural document edits, under the same ordering gate, so a stroke cannot overtake a simultaneous layer/frame edit. Actual cross-network two-PC latency and reconnect behavior still need GUI QA.
 - Concurrent edits to the same array position can still conflict. The host can use **Sync full project** to restore participants to the same document.
 - External image/audio **file contents are not transferred** through Stick; absolute local asset paths are deliberately suppressed. Saving and reopening a legacy project needs its original files.
 - There is no dedicated reconnect/replay service, global player directory or end-to-end transport encryption **inside Stick**. Tailscale encrypts its transport when used; plain LAN/direct TCP is not independently encrypted by Stick.
@@ -46,7 +46,8 @@ Stick is **hosted on the creator's own computer**. It listens on TCP 47554 for c
 - [ ] Host Tailscale connected, guest joined from a different ISP; verify drawing and all document edits.
 - [ ] Direct guest join using the host's 100.x address when UDP discovery is blocked.
 - [ ] Test room listing over Tailscale when UDP discovery is allowed.
-- [ ] Test password rejection, capacity, disconnect, reopened room and LAN behavior.
+- [x] Wrong-password rejection verified by local Windows loopback regression test (after the related CI build passes); physical two-PC acceptance remains pending.
+- [ ] Test capacity, disconnect, reopened room and LAN behavior on real machines.
 - [ ] On 3 real PCs: host leaves gracefully, first guest becomes host, remaining guest reconnects, draws, and then the second host leaves and hands off again. Test password protected room, color changes, kick and reconnect attempts.
 - [ ] Unplug the host PC without warning: make sure clients keep local artwork and get an explicit disconnect, not a false promise of recovery.
 - [ ] Test erasing, adding/deleting layers, animation keyframes, and explicit host resync on both PCs.
