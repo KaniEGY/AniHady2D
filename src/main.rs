@@ -190,6 +190,15 @@ fn tr(lang: AppLang, en: &str, ar: &str) -> String {
     }
 }
 
+// Notification strings are shaped once in the notice window itself.
+// Using tr() here would reshape Arabic twice and scramble its word order.
+fn tr_notice(lang: AppLang, en: &str, ar: &str) -> String {
+    match lang {
+        AppLang::English => en.to_string(),
+        AppLang::Arabic => ar.to_string(),
+    }
+}
+
 
 const TOOLBAR_ITEMS: [ActiveToolUI; 13] = [
     ActiveToolUI::SelectNormal,
@@ -1463,8 +1472,8 @@ impl StickApp {
 
     fn download_and_apply_update(&mut self, info: updater::ReleaseInfo, ctx: egui::Context) {
         if self.has_unsaved_changes || self.current_stroke.is_some() {
-            self.project_notice_title = tr(self.config.lang, "Save your work first", "احفظ شغلك الأول");
-            self.project_notice_body = tr(
+            self.project_notice_title = tr_notice(self.config.lang, "Save your work first", "احفظ شغلك الأول");
+            self.project_notice_body = tr_notice(
                 self.config.lang,
                 "Save your open project (Ctrl+S), then click Install again. We won't restart and lose unsaved work.",
                 "احفظ المشروع المفتوح (Ctrl+S)، وبعد كده اضغط تثبيت تاني. البرنامج مش هيقفل ويضيّع شغلك.",
@@ -1494,8 +1503,8 @@ impl StickApp {
 
     fn restart_with_new_exe(&mut self, version: String, staged_exe: PathBuf) {
         if self.has_unsaved_changes || self.current_stroke.is_some() {
-            self.project_notice_title = tr(self.config.lang, "Save before restarting", "احفظ قبل إعادة التشغيل");
-            self.project_notice_body = tr(
+            self.project_notice_title = tr_notice(self.config.lang, "Save before restarting", "احفظ قبل إعادة التشغيل");
+            self.project_notice_body = tr_notice(
                 self.config.lang,
                 "You have unsaved changes. Save your project, then restart the update.",
                 "عندك تعديلات لسه متحفظتش. احفظ المشروع وبعدها كمّل التحديث.",
@@ -2971,6 +2980,17 @@ fn main() -> eframe::Result<()> {
 #[cfg(test)]
 mod tool_discovery_tests {
     use super::*;
+
+    #[test]
+    fn updater_notice_keeps_arabic_unshaped_until_one_render_pass() {
+        let message = tr_notice(
+            AppLang::Arabic,
+            "Save your work first",
+            "احفظ شغلك الأول",
+        );
+        assert_eq!(message, "احفظ شغلك الأول");
+        assert!(!message.is_empty());
+    }
 
     #[test]
     fn every_toolbar_tool_has_a_localized_name_and_shortcut() {
