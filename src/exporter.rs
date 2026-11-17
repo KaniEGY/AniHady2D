@@ -149,11 +149,22 @@ pub fn render_frame_pixmap(project: &AniProject, frame_idx: usize, transparent_b
         pixmap.fill(Color::from_rgba8(bg_rgba[0], bg_rgba[1], bg_rgba[2], 255));
     }
 
+    // Composite every layer only once with its opacity. This ensures that
+    // overlapping strokes in a layer are not individually dimmed again.
     for layer in project.layers.iter().rev() {
-        // تجاهل الطبقات المخفية أو طبقات السكتش الإرشادية (Guide Layers) عند التصدير
         if !layer.visible || layer.is_guide {
             continue;
         }
+        let layer_alpha = if layer.opacity.is_finite() {
+            layer.opacity.clamp(0.0, 1.0)
+        } else {
+            1.0
+        };
+        if layer_alpha <= 0.0 {
+            continue;
+        }
+
+        let mut layer_pixmap = Pixmap::new(w, h).expect("Canvas dimensions already checked");
         let fd = project.evaluate_layer_at_frame(layer, frame_idx);
 
         for m in &fd.media_items {
@@ -167,7 +178,7 @@ pub fn render_frame_pixmap(project: &AniProject, frame_idx: usize, transparent_b
                     .to_rgba8();
                 if let Some(mut sub_pix) = Pixmap::new(resized.width(), resized.height()) {
                     sub_pix.data_mut().copy_from_slice(resized.as_raw());
-                    pixmap.draw_pixmap(
+                    layer_pixmap.draw_pixmap(
                         m.x as i32,
                         m.y as i32,
                         sub_pix.as_ref(),
@@ -180,7 +191,7 @@ pub fn render_frame_pixmap(project: &AniProject, frame_idx: usize, transparent_b
         }
 
         for s in &fd.strokes {
-            draw_skia_stroke(&mut pixmap, s, Transform::identity(), 1.0);
+            draw_skia_stroke(&mut layer_pixmap, s, Transform::identity(), 1.0);
         }
 
         for inst in &fd.symbol_instances {
@@ -191,10 +202,22 @@ pub fn render_frame_pixmap(project: &AniProject, frame_idx: usize, transparent_b
                     .post_rotate(inst.rotation_deg)
                     .post_translate(inst.x + inst.anchor_offset_x, inst.y + inst.anchor_offset_y);
                 for s in sym_strokes {
-                    draw_skia_stroke(&mut pixmap, s, ts, inst.scale);
+                    draw_skia_stroke(&mut layer_pixmap, s, ts, inst.scale);
                 }
             }
         }
+
+        pixmap.draw_pixmap(
+            0,
+            0,
+            layer_pixmap.as_ref(),
+            &tiny_skia::PixmapPaint {
+                opacity: layer_alpha,
+                ..tiny_skia::PixmapPaint::default()
+            },
+            Transform::identity(),
+            None,
+        );
     }
     pixmap
 }
