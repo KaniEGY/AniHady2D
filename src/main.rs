@@ -1113,6 +1113,220 @@ impl StickApp {
         }
     }
 
+    fn refresh_online_rooms(&mut self) {
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || { let _ = tx.send(collab::discover_rooms()); });
+        self.online_discovery = Some(rx);
+    }
+
+    fn poll_online_events(&mut self, ctx: &egui::Context) {
+        let discovered = self.online_discovery.as_ref().and_then(|rx| rx.try_recv().ok());
+        if let Some(rooms) = discovered {
+            self.online_rooms = rooms;
+            self.online_discovery = None;
+        }
+        let events = self.online_session.as_ref().map(|s| s.events()).unwrap_or_default();
+        for event in events {
+            match event {
+                OnlineEvent::Connected(project) => {
+                    self.save_undo_state();
+                    self.timeline_length = project.total_frames.max(1);
+                    self.current_frame = 1;
+                    self.active_layer_idx = 0;
+                    self.project = project;
+                    self.current_project_path = None;
+                    self.has_unsaved_changes = true;
+                    self.online_message.clear();
+                    self.workspace_mode = match self.online_mode {
+                        OnlineMode::Drawing => WorkspaceMode::DrawingOnly,
+                        OnlineMode::Animation => WorkspaceMode::AnimationStudio,
+                    };
+                }
+                OnlineEvent::Strokes { layer, frame, strokes } => {
+                    if collab::apply_strokes(&mut self.project, layer, frame, strokes) {
+                        self.timeline_length = self.timeline_length.max(self.project.total_frames);
+                        self.has_unsaved_changes = true;
+                        // Undo snapshots from before a remote operation could erase another user's edits.
+                        self.undo_stack.clear();
+                        self.redo_stack.clear();
+                    }
+                }
+                OnlineEvent::Snapshot(project) => {
+                    self.project = project;
+                    self.timeline_length = self.project.total_frames.max(1);
+                    self.current_frame = self.current_frame.min(self.timeline_length);
+                    self.active_layer_idx = self.active_layer_idx.min(self.project.layers.len().saturating_sub(1));
+                    self.undo_stack.clear();
+                    self.redo_stack.clear();
+                    self.selected_stroke_indices.clear();
+                    self.has_unsaved_changes = true;
+                }
+                OnlineEvent::Members(n) => self.online_members = n,
+                OnlineEvent::Notice(message) => self.online_message = message,
+                OnlineEvent::Disconnected(message) => {
+                    self.online_message = message;
+                    self.online_session = None;
+                    // Keep the local project and any unsaved edits intact after disconnect.
+                    self.has_unsaved_changes = true;
+                    self.status_message = self.online_message.clone();
+                }
+            }
+        }
+        if self.online_session.is_some() || self.online_discovery.is_some() {
+            ctx.request_repaint_after(Duration::from_millis(160));
+        }
+    }
+
+    fn render_online_lobby(&mut self, ctx: &egui::Context) {
+        let lang = self.config.lang;
+        egui::CentralPanel::default().show(ctx, |ui| {
+            ui.vertical_centered(|ui| {
+                ui.add_space(36.0);
+                ui.heading(egui::RichText::new(tr(lang, "STICK ONLINE", "ستيك أونلاين"))
+                    .size(33.0).color(egui::Color32::from_rgb(79, 195, 247)));
+                ui.add_space(10.0);
+                ui.label(tr(lang, "Your computer hosts the room. No dedicated Stick server.",
+                    "جهاز صاحب الغرفة هو الهوست، بدون سيرفر مخصص للبرنامج."));
+                ui.add_space(18.0);
+                match self.online_page {
+                    OnlinePage::ChooseMode => {
+                        ui.heading(tr(lang, "What do you want to do together?", "عايزين تعملوا إيه سوا؟"));
+                        ui.add_space(15.0);
+                        if ui.add_sized([320.0, 64.0], egui::Button::new(tr(lang, "Draw Together", "نرسم سوا"))
+                            .fill(egui::Color32::from_rgb(245, 116, 26))).clicked() {
+                            self.online_mode = OnlineMode::Drawing;
+                            self.online_page = OnlinePage::ChooseAction;
+                        }
+                        ui.add_space(14.0);
+                        if ui.add_sized([320.0, 64.0], egui::Button::new(tr(lang, "Animate Together", "أنيميشن سوا"))
+                            .fill(egui::Color32::from_rgb(0, 125, 205))).clicked() {
+                            self.online_mode = OnlineMode::Animation;
+                            self.online_page = OnlinePage::ChooseAction;
+                        }
+                    }
+                    OnlinePage::ChooseAction => {
+                        ui.heading(tr(lang, "Create or Join a Room", "إنشاء غرفة أو الانضمام لغرفة"));
+                        ui.add_space(18.0);
+                        if ui.add_sized([300.0, 58.0], egui::Button::new(tr(lang, "Create Room", "إنشاء غرفة"))).clicked() {
+                            self.online_page = OnlinePage::CreateRoom;
+                            self.online_message.clear();
+                        }
+                        ui.add_space(12.0);
+                        if ui.add_sized([300.0, 58.0], egui::Button::new(tr(lang, "Join Room", "انضمام لغرفة"))).clicked() {
+                            self.online_page = OnlinePage::JoinRoom;
+                            self.online_message.clear();
+                            self.refresh_online_rooms();
+                        }
+                    }
+                    OnlinePage::CreateRoom => {
+                        ui.heading(tr(lang, "Host a room", "إنشاء غرفة جديدة"));
+                        ui.add_space(16.0);
+                        egui::Grid::new("host_room_fields").min_col_width(140.0).spacing([12.0, 12.0]).show(ui, |ui| {
+                            ui.label(tr(lang, "Room name", "اسم الغرفة"));
+                            ui.add(egui::TextEdit::singleline(&mut self.online_room_name).desired_width(250.0));
+                            ui.end_row();
+                            ui.label(tr(lang, "Password (optional)", "كلمة السر (اختياري)"));
+                            ui.add(egui::TextEdit::singleline(&mut self.online_password).password(true).desired_width(250.0));
+                            ui.end_row();
+                            ui.label(tr(lang, "Max players", "العدد الأقصى"));
+                            ui.add(egui::Slider::new(&mut self.online_capacity, 2..=12).integer());
+                            ui.end_row();
+                        });
+                        ui.add_space(18.0);
+                        if ui.add_sized([220.0, 44.0], egui::Button::new(tr(lang, "Create and Start", "إنشاء وبدء الغرفة"))
+                            .fill(egui::Color32::from_rgb(18, 160, 113))).clicked() {
+                            let mut project = AniProject::default();
+                            project.total_frames = 1;
+                            match OnlineSession::host_room(self.online_room_name.trim().to_owned(),
+                                    self.online_password.clone(), self.online_capacity, self.online_mode, project.clone()) {
+                                Ok(session) => {
+                                    self.save_undo_state();
+                                    self.project = project;
+                                    self.timeline_length = 1;
+                                    self.current_frame = 1;
+                                    self.active_layer_idx = 0;
+                                    self.current_project_path = None;
+                                    self.has_unsaved_changes = true;
+                                    self.online_session = Some(session);
+                                    self.online_members = 1;
+                                    self.online_message.clear();
+                                    self.workspace_mode = match self.online_mode {
+                                        OnlineMode::Drawing => WorkspaceMode::DrawingOnly,
+                                        OnlineMode::Animation => WorkspaceMode::AnimationStudio,
+                                    };
+                                }
+                                Err(err) => self.online_message = err,
+                            }
+                        }
+                    }
+                    OnlinePage::JoinRoom => {
+                        ui.heading(tr(lang, "Available LAN rooms", "الغرف الموجودة على الشبكة المحلية"));
+                        if ui.button(tr(lang, "Refresh rooms", "تحديث الغرف")).clicked() { self.refresh_online_rooms(); }
+                        if self.online_discovery.is_some() {
+                            ui.spinner();
+                        } else if self.online_rooms.is_empty() {
+                            ui.label(tr(lang, "No local rooms found. Use direct IP to join over the Internet.",
+                                "مفيش غرف محلية ظهرت. تقدر تدخل عنوان الهوست يدويًا."));
+                        }
+                        for room in self.online_rooms.clone() {
+                            let mode = if room.mode == OnlineMode::Drawing { "Drawing" } else { "Animation" };
+                            let label = format!("{}  |  {}  |  {}/{}  {}",
+                                room.title, mode, room.members, room.limit, if room.locked { "Locked" } else { "Open" });
+                            if ui.button(label).clicked() {
+                                self.online_address = room.address;
+                                self.online_room_name = room.title;
+                                self.online_mode = room.mode;
+                            }
+                        }
+                        ui.add_space(12.0);
+                        ui.label(tr(lang, "Host IPv4 address (IP:port)", "عنوان الهوست (IP:port)"));
+                        ui.add(egui::TextEdit::singleline(&mut self.online_address)
+                            .hint_text("192.168.1.5:47554").desired_width(300.0));
+                        ui.label(tr(lang, "Room password (leave empty for public rooms)", "كلمة سر الغرفة (فاضية للغرف المفتوحة)"));
+                        ui.add(egui::TextEdit::singleline(&mut self.online_password).password(true).desired_width(300.0));
+                        ui.add_space(12.0);
+                        let connecting = self.online_session.is_some();
+                        if ui.add_enabled(!connecting, egui::Button::new(tr(lang, "Join this room", "دخول الغرفة"))).clicked() {
+                            let nickname = self.user_profile.username.trim().to_owned();
+                            match OnlineSession::join_room(self.online_address.trim().to_owned(),
+                                    self.online_password.clone(), if nickname.is_empty() { "Artist".into() } else { nickname },
+                                    self.online_mode) {
+                                Ok(mut session) => {
+                                    session.title = self.online_room_name.clone();
+                                    self.online_session = Some(session);
+                                    self.online_message = tr(lang, "Connecting to host...", "جاري الاتصال بالهوست...");
+                                }
+                                Err(err) => self.online_message = err,
+                            }
+                        }
+                        if connecting { ui.spinner(); }
+                    }
+                }
+                if !self.online_message.is_empty() {
+                    ui.add_space(14.0);
+                    ui.colored_label(egui::Color32::from_rgb(255, 170, 80), &self.online_message);
+                }
+                ui.add_space(20.0);
+                ui.label(egui::RichText::new(tr(lang,
+                    "LAN rooms appear automatically. Internet joining needs the host's public IP and TCP port forwarding (47554). This preview syncs newly drawn strokes, not every layer, transform, media or timeline edit. Network traffic is not end-to-end encrypted.",
+                    "الغرف بتظهر تلقائيًا على نفس الشبكة. الاتصال من الإنترنت محتاج IP عام وتحويل المنفذ TCP 47554. النسخة الأولية بتزامن الخطوط الجديدة، مش كل تعديلات الطبقات والتحويل والتايم لاين. الاتصال غير مشفر بالكامل."))
+                    .small().color(egui::Color32::GRAY));
+                ui.add_space(20.0);
+                if ui.button(tr(lang, "Back", "رجوع")).clicked() {
+                    match self.online_page {
+                        OnlinePage::ChooseMode => self.workspace_mode = WorkspaceMode::Launcher,
+                        OnlinePage::ChooseAction => self.online_page = OnlinePage::ChooseMode,
+                        OnlinePage::CreateRoom | OnlinePage::JoinRoom => {
+                            if let Some(session) = self.online_session.take() { session.close(); }
+                            self.online_page = OnlinePage::ChooseAction;
+                        }
+                    }
+                    self.online_message.clear();
+                }
+            });
+        });
+    }
+
     fn is_active_layer_locked(&self) -> bool {
         self.project.layers.get(self.active_layer_idx).map(|l| l.locked).unwrap_or(false)
     }
