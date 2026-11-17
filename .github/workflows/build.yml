@@ -34,7 +34,7 @@ jobs:
           # Desktop OAuth Client ID is public, never a client secret.
           # Set repository Actions variable STICK_GOOGLE_CLIENT_ID in Settings.
           STICK_GOOGLE_CLIENT_ID: ${{ vars.STICK_GOOGLE_CLIENT_ID }}
-        run: cargo test
+        run: cargo test -- --test-threads=1
 
       - name: Build Release EXE
         env:

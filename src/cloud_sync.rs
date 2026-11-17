@@ -31,21 +31,60 @@ pub struct CloudProfile {
     pub total_frames_drawn: u64,
     pub total_seconds_spent: u64,
     pub total_painted_layers: u64,
+    /// Base64 of a bounded 256px PNG; never a device-specific local path.
+    #[serde(default)]
+    pub avatar_png_base64: Option<String>,
+    /// None means an older cloud backup without avatar metadata.
+    #[serde(default)]
+    pub avatar_present: Option<bool>,
 }
 impl CloudProfile {
     pub fn from_user(p:&crate::profile::UserProfile)->Self {
+        let avatar_png_base64 = p.avatar_path.as_deref().and_then(|path| {
+            let bytes = std::fs::read(path).ok()?;
+            // Reject large input files before decoding untrusted images.
+            if bytes.len() > 12 * 1024 * 1024 { return None; }
+            let image = image::load_from_memory(&bytes).ok()?.thumbnail(256, 256);
+            let mut png = std::io::Cursor::new(Vec::new());
+            image.write_to(&mut png, image::ImageFormat::Png).ok()?;
+            let png = png.into_inner();
+            if png.len() > 512 * 1024 { return None; }
+            Some(base64::engine::general_purpose::STANDARD.encode(png))
+        });
         Self { username:p.username.clone(),xp:p.xp,
             total_frames_drawn:p.total_frames_drawn,
             total_seconds_spent:p.total_seconds_spent,
-            total_painted_layers:p.total_painted_layers }
+            total_painted_layers:p.total_painted_layers,
+            avatar_present: Some(p.avatar_path.is_some()),
+            avatar_png_base64 }
     }
     pub fn apply(&self,p:&mut crate::profile::UserProfile) {
-        // Never take over tokens, cloud account or device-specific avatar paths.
-        p.username=self.username.clone();
+        // Never overwrite tokens, Google account selection or any arbitrary path from Drive.
+        p.username=self.username.chars().take(48).collect();
         p.xp=self.xp;
         p.total_frames_drawn=self.total_frames_drawn;
         p.total_seconds_spent=self.total_seconds_spent;
         p.total_painted_layers=self.total_painted_layers;
+        if self.avatar_present == Some(false) {
+            p.avatar_path = None;
+        } else if let Some(encoded) = &self.avatar_png_base64 {
+            if encoded.len() <= 750_000 {
+                if let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(encoded) {
+                    if bytes.len() <= 512 * 1024 && image::load_from_memory(&bytes)
+                        .ok().is_some_and(|img| img.width() <= 256 && img.height() <= 256) {
+                        let base = std::env::var_os("LOCALAPPDATA").map(PathBuf::from)
+                            .unwrap_or_else(std::env::temp_dir)
+                            .join("StickStudio").join("CloudProfile");
+                        if std::fs::create_dir_all(&base).is_ok() {
+                            let path = base.join("avatar.png");
+                            if std::fs::write(&path, &bytes).is_ok() {
+                                p.avatar_path = Some(path.to_string_lossy().into_owned());
+                            }
+                        }
+                    }
+                }
+            }
+        }
         p.save();
     }
 }
@@ -289,6 +328,13 @@ pub fn backup(client_id:&str,account_id:&str,profile:CloudProfile,paths:Vec<Path
     }
     Ok(successes)
 }
+/// Lightweight profile-only sync so XP, name and avatar do not wait for a project save.
+pub fn backup_profile(client_id:&str,account_id:&str,profile:CloudProfile)->Result<usize,String>{
+    let token=access_token(client_id,account_id)?;
+    let existing=list(&token)?;
+    upload(&token,"StickProfile.json",&serde_json::to_vec(&profile).map_err(|e|e.to_string())?,&existing)?;
+    Ok(1)
+}
 pub fn list_cloud(client_id:&str,account_id:&str)->Result<Vec<CloudFile>,String>{
     let token=access_token(client_id,account_id)?;
     list(&token)
@@ -350,6 +396,14 @@ mod tests {
         assert_eq!(encode("openid email"),"openid%20email");
         assert!(client_id_check("1234-abc.apps.googleusercontent.com").is_ok());
         assert!(client_id_check("malicious;command").is_err());
+    }
+    #[test]
+    fn old_cloud_profile_without_avatar_still_deserializes() {
+        let record = r#"{"username":"Artist","xp":330,"total_frames_drawn":4,"total_seconds_spent":20,"total_painted_layers":1}"#;
+        let p: CloudProfile = serde_json::from_str(record).unwrap();
+        assert_eq!(p.xp, 330);
+        assert_eq!(p.avatar_present, None);
+        assert!(p.avatar_png_base64.is_none());
     }
     #[test]
     fn cloud_names_never_include_local_parent_paths(){
