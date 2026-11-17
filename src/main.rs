@@ -340,6 +340,8 @@ struct AppConfig {
     lang: AppLang,
     #[serde(default)]
     last_seen_patch_version: String,
+    #[serde(default)]
+    recent_projects: Vec<String>,
     #[serde(default = "default_true_val")]
     sound_effects_enabled: bool,
     #[serde(default)]
@@ -414,6 +416,7 @@ impl Default for AppConfig {
         Self {
             lang: AppLang::Arabic,
             last_seen_patch_version: String::new(),
+            recent_projects: Vec::new(),
             sound_effects_enabled: true,
             show_grid: false,
             grid_size: 40.0,
@@ -1415,12 +1418,21 @@ impl StickApp {
         if let Some((_, sink)) = self.audio_sink.take() { sink.stop(); }
     }
 
+    fn remember_recent_project(&mut self, path: &Path) {
+        let full = path.to_string_lossy().to_string();
+        self.config.recent_projects.retain(|x| x != &full);
+        self.config.recent_projects.insert(0, full);
+        self.config.recent_projects.truncate(8);
+        self.config.save();
+    }
+
     fn trigger_save(&mut self) -> bool {
         if let Some(existing_path) = self.current_project_path.clone() {
             self.project.total_frames = self.timeline_length;
             match persistence::save_project_safe(&self.project, &existing_path) {
                 Ok(_) => {
                     self.has_unsaved_changes = false;
+                    self.remember_recent_project(&existing_path);
                     self.play_sfx(SfxType::NewFrame);
                     self.status_message = tr(self.config.lang, "Saved atomically!", "تم الحفظ الذري الآمن!");
                     return true;
@@ -1448,6 +1460,7 @@ impl StickApp {
             }
             match persistence::save_project_safe(&self.project, &path) {
                 Ok(_) => {
+                    self.remember_recent_project(&path);
                     self.current_project_path = Some(path);
                     self.has_unsaved_changes = false;
                     self.play_sfx(SfxType::NewFrame);
@@ -1465,9 +1478,16 @@ impl StickApp {
     }
 
     fn trigger_open_project(&mut self) {
-        if let Some(p) = rfd::FileDialog::new().add_filter("Stick", &["stick", "ah2d"]).pick_file() {
-            match persistence::open_project_safe(&p) {
+        if let Some(p) = rfd::FileDialog::new()
+            .add_filter("Stick", &["stick", "ah2d"]).pick_file() {
+            self.open_project_at_path(p);
+        }
+    }
+
+    fn open_project_at_path(&mut self, p: PathBuf) {
+        match persistence::open_project_safe(&p) {
                 Ok(outcome) => {
+                    self.remember_recent_project(&p);
                     self.save_undo_state();
                     self.timeline_length = outcome.project.total_frames.max(1);
                     self.current_frame = 1;
@@ -1513,7 +1533,6 @@ impl StickApp {
                     self.show_project_notice = true;
                 }
             }
-        }
     }
 
     fn import_image_dialog(&mut self) {
