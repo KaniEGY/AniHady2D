@@ -3,6 +3,8 @@ name: Build and Release Stick
 on:
   push:
     branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
   workflow_dispatch:
 
 permissions:
@@ -37,7 +39,7 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force -Path dist
           Copy-Item target/release/Stick.exe dist/Stick.exe
-          "${{ steps.meta.outputs.version }}" | Out-File -FilePath dist/version.txt -Encoding ascii -NoNewline
+          "${{ steps.meta.outputs.version }}.${{ github.run_number }}" | Out-File -FilePath dist/version.txt -Encoding ascii -NoNewline
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
@@ -46,10 +48,12 @@ jobs:
           path: dist/
 
       - name: Publish Direct Release
+        if: github.event_name != 'pull_request'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ steps.meta.outputs.version }}.${{ github.run_number }}
           name: Stick v${{ steps.meta.outputs.version }} (Build ${{ github.run_number }})
+          body_path: RELEASE_NOTES.md
           files: |
             dist/Stick.exe
             dist/version.txt
