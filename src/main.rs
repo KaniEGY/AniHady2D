@@ -1129,6 +1129,13 @@ impl StickApp {
         for event in events {
             match event {
                 OnlineEvent::Connected(project) => {
+                    if self.has_unsaved_changes {
+                        if let Err(err) = persistence::atomic_save::write_recovery_snapshot(&self.project, "online_before_join") {
+                            self.online_message = format!("Cannot back up local work: {}", err);
+                            self.online_session = None;
+                            continue;
+                        }
+                    }
                     self.save_undo_state();
                     self.timeline_length = project.total_frames.max(1);
                     self.current_frame = 1;
@@ -1152,6 +1159,12 @@ impl StickApp {
                     }
                 }
                 OnlineEvent::Snapshot(project) => {
+                    if self.has_unsaved_changes {
+                        if let Err(err) = persistence::atomic_save::write_recovery_snapshot(&self.project, "online_before_resync") {
+                            self.online_message = format!("Cannot back up local work: {}", err);
+                            continue;
+                        }
+                    }
                     self.project = project;
                     self.timeline_length = self.project.total_frames.max(1);
                     self.current_frame = self.current_frame.min(self.timeline_length);
@@ -1304,7 +1317,7 @@ impl StickApp {
                 }
                 if !self.online_message.is_empty() {
                     ui.add_space(14.0);
-                    ui.colored_label(egui::Color32::from_rgb(255, 170, 80), &self.online_message);
+                    ui.colored_label(egui::Color32::from_rgb(255, 170, 80), self.online_message.as_str());
                 }
                 ui.add_space(20.0);
                 ui.label(egui::RichText::new(tr(lang,
