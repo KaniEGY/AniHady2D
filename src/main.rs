@@ -463,6 +463,8 @@ struct AppConfig {
     cloud_google_client_id: String,
     #[serde(default)]
     cloud_email: String,
+    #[serde(default)]
+    cloud_auto_backup: bool,
     tool_select: String,
     #[serde(default = "default_lasso_key")]
     tool_lasso: String,
@@ -574,6 +576,7 @@ impl Default for AppConfig {
             icon_cursor_ring: false,
             cloud_google_client_id: default_google_client_id(),
             cloud_email: String::new(),
+            cloud_auto_backup: false,
             tool_select: "V".to_string(),
             tool_lasso: "L".to_string(),
             tool_free_transform: "Q".to_string(),
@@ -1396,6 +1399,22 @@ impl StickApp {
         }
     }
 
+    fn start_cloud_backup(&mut self) {
+        if self.cloud_job.is_some(){return;}
+        let Some(account)=self.user_profile.cloud_account_id.clone() else{return};
+        let client=self.config.cloud_google_client_id.clone();
+        let profile=cloud_sync::CloudProfile::from_user(&self.user_profile);
+        let mut paths:Vec<PathBuf>=self.config.recent_projects.iter()
+            .map(PathBuf::from).collect();
+        if let Some(path)=&self.current_project_path {paths.push(path.clone());}
+        paths.sort();paths.dedup();
+        self.cloud_job=Some(cloud_sync::spawn_job(move||{
+            cloud_sync::backup(&client,&account,profile,paths)
+                .map(cloud_sync::Event::BackedUp)
+        }));
+        self.cloud_message="Uploading Google Drive backups...".to_owned();
+    }
+
     fn poll_cloud_job(&mut self) {
         let event=self.cloud_job.as_ref().and_then(|rx|rx.try_recv().ok());
         if let Some(event)=event {
@@ -2210,6 +2229,7 @@ impl StickApp {
                 Ok(_) => {
                     self.has_unsaved_changes = false;
                     self.remember_recent_project(&existing_path);
+                    if self.config.cloud_auto_backup { self.start_cloud_backup(); }
                     self.play_sfx(SfxType::NewFrame);
                     self.status_message = tr(self.config.lang, "Saved atomically!", "تم الحفظ الذري الآمن!");
                     return true;
@@ -3746,24 +3766,18 @@ impl eframe::App for StickApp {
                             ui.colored_label(egui::Color32::LIGHT_GREEN,
                                 format!("{}: {}",tr(lang,"Linked account","الحساب المرتبط"),
                                     if self.config.cloud_email.is_empty(){"Google"}else{self.config.cloud_email.as_str()}));
-                            ui.small(tr(lang,"Remote backups are private in the app's Drive folder. Sign-in is checked when you run an action.",
-                                "النسخ السحابية خاصة بالتطبيق داخل Google Drive. صلاحية الدخول بتتراجع عند تنفيذ عملية."));
+                            ui.small(tr(lang,"Backups are stored in a private Google Drive app-data folder. Only saved project files are uploaded.",
+                                "النسخ محفوظة بشكل خاص في مساحة التطبيق على Google Drive، والمشاريع اللي اتحفظت محليًا بس هي اللي بتترفع."));
+                            if ui.checkbox(&mut self.config.cloud_auto_backup,
+                                tr(lang,"Automatically back up after saving a project",
+                                    "احفظ نسخة سحابية تلقائيًا بعد حفظ المشروع")).changed(){
+                                self.config.save();
+                            }
                             ui.horizontal_wrapped(|ui|{
                                 if ui.add_enabled(self.cloud_job.is_none(),
                                     egui::Button::new(tr(lang,"Back up level and saved projects",
                                         "احفظ المستوى والمشاريع المحفوظة سحابيًا"))).clicked(){
-                                    let profile=cloud_sync::CloudProfile::from_user(&self.user_profile);
-                                    let mut paths:Vec<PathBuf>=self.config.recent_projects.iter()
-                                        .map(PathBuf::from).collect();
-                                    if let Some(p)=self.current_project_path.clone(){paths.push(p);}
-                                    paths.sort();paths.dedup();
-                                    let client=self.config.cloud_google_client_id.clone();
-                                    let account=id.clone();
-                                    self.cloud_job=Some(cloud_sync::spawn_job(move||{
-                                        cloud_sync::backup(&client,&account,profile,paths)
-                                            .map(cloud_sync::Event::BackedUp)
-                                    }));
-                                    self.cloud_message=tr(lang,"Uploading backups...","جاري رفع النسخ...").to_owned();
+                                    self.start_cloud_backup();
                                 }
                                 if ui.add_enabled(self.cloud_job.is_none(),
                                     egui::Button::new(tr(lang,"Browse cloud backups","عرض النسخ السحابية"))).clicked(){
