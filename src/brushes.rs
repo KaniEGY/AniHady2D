@@ -96,6 +96,16 @@ pub fn draw_stroke_pro<F: Fn(egui::Pos2) -> egui::Pos2>(
     let eff_alpha = ((c[3] as f32) * combined_opacity) as u8;
     let color = egui::Color32::from_rgba_unmultiplied(c[0], c[1], c[2], eff_alpha);
 
+    // Drawing engine step 1: identical pressure-aware G-Pen geometry on
+    // screen and in exports. Existing project files and other brushes remain unchanged.
+    if !stroke.is_vector && stroke.brush_preset == KritaBrushPreset::GPenInk {
+        for dab in crate::brush_engine::sample_pressure_dabs(&stroke.points, stroke.base_width) {
+            let p = to_screen(egui::pos2(dab.x + ox, dab.y + oy));
+            painter.circle_filled(p, (dab.radius * scale.abs()).max(0.25), color);
+        }
+        return;
+    }
+
     if stroke.points.len() == 1 {
         let p = to_screen(egui::pos2(stroke.points[0].x + ox, stroke.points[0].y + oy));
         let r = (stroke.base_width * stroke.points[0].pressure * scale) * 0.5;
