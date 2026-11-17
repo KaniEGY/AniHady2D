@@ -943,6 +943,7 @@ fn build_geometric_stroke(kind: GeometricShapeKind, p0: egui::Pos2, p1: egui::Po
 struct StickApp {
     workspace_mode: WorkspaceMode,
     online_page: OnlinePage,
+    online_enabled: bool,
     online_mode: OnlineMode,
     online_room_name: String,
     online_password: String,
@@ -1076,6 +1077,7 @@ impl StickApp {
         Self {
             workspace_mode: initial_mode,
             online_page: OnlinePage::ChooseMode,
+            online_enabled: false,
             online_mode: OnlineMode::Drawing,
             online_room_name: "My Studio".to_owned(),
             online_password: String::new(),
@@ -1309,6 +1311,26 @@ impl StickApp {
                 ui.add_space(10.0);
                 ui.label(tr(lang, "Your computer hosts the room. No dedicated Stick server.",
                     "جهاز صاحب الغرفة هو الهوست، بدون سيرفر مخصص للبرنامج."));
+                ui.add_space(12.0);
+                if ui.checkbox(&mut self.online_enabled,
+                    tr(lang, "Enable online networking for this session",
+                        "تشغيل اتصال الأونلاين للجلسة دي فقط")).changed() {
+                    if !self.online_enabled {
+                        if let Some(session)=self.online_session.take(){session.close();}
+                        self.online_discovery=None;
+                        self.online_remote_info=None;
+                        self.online_rooms.clear();
+                    }
+                }
+                if !self.online_enabled {
+                    ui.colored_label(egui::Color32::from_rgb(238,192,110),
+                        tr(lang, "Offline mode. No room discovery or host connection runs until you enable online.",
+                            "وضع أوفلاين: لا بحث عن غرف ولا اتصال بسيرفر قبل ما تشغّل الأونلاين بنفسك."));
+                    if ui.button(tr(lang, "Back to start", "الرجوع للرئيسية")).clicked(){
+                        self.workspace_mode=WorkspaceMode::Launcher;
+                    }
+                    return;
+                }
                 ui.add_space(18.0);
                 match self.online_page {
                     OnlinePage::ChooseMode => {
@@ -1422,6 +1444,11 @@ impl StickApp {
                             if info.connected {
                                 ui.colored_label(egui::Color32::LIGHT_GREEN,
                                     format!("Tailscale connected • {} visible friend devices", info.peers.len()));
+                                if info.peers.is_empty() {
+                                    ui.colored_label(egui::Color32::from_rgb(255,192,104),
+                                        tr(lang, "No permitted Tailscale peers. Share the host device with your friend or invite them to the same tailnet, then refresh.",
+                                            "Tailscale متصل لكن مفيش أجهزة أصحاب مسموح لها تظهر. شارك جهاز الهوست مع صاحبك أو ضيفه لنفس الشبكة، وبعدين حدث الغرف."));
+                                }
                             } else {
                                 ui.label(tr(lang,
                                     "Internet friends: install Tailscale, sign in and share the host device or join the same tailnet.",
@@ -1530,7 +1557,10 @@ impl StickApp {
                 ui.add_space(20.0);
                 if ui.button(tr(lang, "Back", "رجوع")).clicked() {
                     match self.online_page {
-                        OnlinePage::ChooseMode => self.workspace_mode = WorkspaceMode::Launcher,
+                        OnlinePage::ChooseMode => {
+                            self.workspace_mode = WorkspaceMode::Launcher;
+                            self.online_enabled = false;
+                        },
                         OnlinePage::ChooseAction => self.online_page = OnlinePage::ChooseMode,
                         OnlinePage::CreateRoom | OnlinePage::JoinRoom => {
                             if let Some(session) = self.online_session.take() { session.close(); }
@@ -2636,7 +2666,8 @@ impl eframe::App for StickApp {
                         self.online_page = OnlinePage::ChooseMode;
                         self.online_message.clear();
                         self.workspace_mode = WorkspaceMode::OnlineLobby;
-                        self.refresh_online_rooms();
+                        // Merely viewing the lobby must not probe the network.
+                        // Networking starts only after explicit opt-in.
                     }
                 });
                 ui.add_space(16.0);
@@ -3523,15 +3554,28 @@ impl eframe::App for StickApp {
                 ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
                 self.show_exit_dialog = true;
             } else {
-                play_sfx_async(self.config.sound_effects_enabled, SfxType::ExitFarewell, true);
+                // Never block window teardown on an audio device/worker.
+                // The old wait_finish=true could keep Windows waiting forever.
+                self.allow_close = true;
             }
         }
 
         if self.show_exit_dialog {
             egui::Window::new("Exit").collapsible(false).resizable(false).anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0]).show(ctx, |ui| {
                 ui.horizontal(|ui| {
-                    if ui.button("Save & Exit").clicked() && self.trigger_save() { self.allow_close = true; ctx.send_viewport_cmd(egui::ViewportCommand::Close); }
-                    if ui.button("Exit").clicked() { self.allow_close = true; ctx.send_viewport_cmd(egui::ViewportCommand::Close); }
+                    if ui.button(tr(lang,"Save & Exit","احفظ واخرج")).clicked() && self.trigger_save() {
+                        self.show_exit_dialog=false;
+                        self.allow_close = true;
+                        if let Some(session)=self.online_session.take(){session.close();}
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                    }
+                    if ui.button(tr(lang,"Exit without saving","اخرج من غير حفظ")).clicked() {
+                        self.show_exit_dialog=false;
+                        self.allow_close = true;
+                        if let Some(session)=self.online_session.take(){session.close();}
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                    }
+                    if ui.button(tr(lang,"Cancel","إلغاء")).clicked(){self.show_exit_dialog=false;}
                 });
             });
         }
@@ -3576,6 +3620,10 @@ impl eframe::App for StickApp {
             if leave {
                 if let Some(session) = self.online_session.take() { session.close(); }
                 self.online_participants.clear();
+                self.online_enabled = false;
+                self.online_discovery = None;
+                self.online_remote_info = None;
+                self.online_rooms.clear();
                 self.workspace_mode = WorkspaceMode::Launcher;
             }
         }
