@@ -181,6 +181,8 @@ struct HostShared {
     local: Participant,
     room_code: String,
     project: Mutex<AniProject>,
+    /// Serialize application + broadcast so parallel peer threads cannot reorder edits.
+    edit_order: Mutex<()>,
     password: String,
     title: String,
     mode: OnlineMode,
@@ -287,6 +289,9 @@ fn host_peer(mut stream: TcpStream, host: Arc<HostShared>) -> io::Result<()> {
                 }
             }
             Ok(Packet::Edits { edits }) => {
+                // Acquiring the gate until after relay is essential: otherwise
+                // peer B could broadcast edit #2 ahead of peer A's edit #1.
+                let _order = host.edit_order.lock().map_err(|_| io::Error::other("Edit gate poisoned"))?;
                 let accepted = host.project.lock().map(|mut p|
                     project_sync::apply_edits(&mut p, &edits).is_ok()).unwrap_or(false);
                 if accepted {
@@ -345,7 +350,7 @@ impl OnlineSession {
             running: running.clone(), peers: Mutex::new(HashMap::new()),
             local: Participant { id: 0, name: nickname, level, color: member_color(0) },
             room_code: room_code.clone(),
-            project: Mutex::new(project.clone()), password: password.clone(),
+            project: Mutex::new(project.clone()), edit_order: Mutex::new(()), password: password.clone(),
             title: title.clone(), mode, limit, events: event_tx,
             peer_ids: AtomicU64::new(1),
         });
@@ -477,6 +482,7 @@ impl OnlineSession {
         let encoded = serde_json::to_vec(&packet).map_err(|e| e.to_string())?;
         if encoded.len() > MAX_PACKET { return Err("Project edit is too large for online sync".into()); }
         if let Some(host) = &self.host {
+            let _order = host.edit_order.lock().map_err(|_| "Edit gate poisoned")?;
             let mut canonical = host.project.lock().map_err(|_| "Room project lock poisoned")?;
             project_sync::apply_edits(&mut canonical, &edits)?;
             drop(canonical);
@@ -501,6 +507,7 @@ impl OnlineSession {
     /// Explicit host-authoritative structure resync; clients never replace host state.
     pub fn resync_from_host(&self, project: AniProject) {
         if let Some(host) = &self.host {
+            let Ok(_order) = host.edit_order.lock() else { return; };
             if let Ok(mut state) = host.project.lock() { *state = project.clone(); }
             self.set_baseline(&project);
             host.broadcast(&Packet::Snapshot { project: Box::new(public_project(project)) }, None);
