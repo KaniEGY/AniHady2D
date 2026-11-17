@@ -408,6 +408,8 @@ struct AppConfig {
     show_left_dock: bool,
     #[serde(default = "default_true_val")]
     show_right_dock: bool,
+    #[serde(default = "default_right_split")]
+    right_panel_split: f32,
     #[serde(default = "default_true_val")]
     show_timeline_dock: bool,
     #[serde(default = "default_grid_size")]
@@ -466,6 +468,7 @@ fn default_perspective_opacity() -> f32 { 0.32 }
 fn default_vanishing_x() -> f32 { 0.5 }
 fn default_vanishing_y() -> f32 { 0.30 }
 fn default_timeline_height() -> f32 { 310.0 }
+fn default_right_split() -> f32 { 0.45 }
 fn default_grid_size() -> f32 { 40.0 }
 fn default_autosave_mins() -> u64 { 5 }
 fn default_tl_bg() -> [u8; 4] { [28, 29, 34, 255] }
@@ -501,6 +504,7 @@ impl Default for AppConfig {
             show_top_bar: true,
             show_left_dock: true,
             show_right_dock: true,
+            right_panel_split: default_right_split(),
             show_timeline_dock: true,
             grid_size: 40.0,
             timeline_bg_color: default_tl_bg(),
@@ -1025,7 +1029,6 @@ struct StickApp {
     layer_rename_buffer: String,
     layer_filter: String,
     layer_clipboard: Option<Layer>,
-    right_properties_ratio: f32,
     symmetry_mode: SymmetryMode,
     stabilizer_strength: f32,
     stabilized_cursor: Option<egui::Pos2>,
@@ -1156,7 +1159,6 @@ impl StickApp {
             layer_rename_buffer: String::new(),
             layer_filter: String::new(),
             layer_clipboard: None,
-            right_properties_ratio: 0.36,
             symmetry_mode: SymmetryMode::Off,
             stabilizer_strength: 0.30,
             stabilized_cursor: None,
@@ -3721,11 +3723,15 @@ impl eframe::App for StickApp {
             ui.horizontal(|ui| {
                 ui.strong(tr(lang, "Tool Properties", "خصائص الأداة"));
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.add(egui::Slider::new(&mut self.right_properties_ratio, 0.23..=0.75)
-                        .show_value(false).text(tr(lang, "Split", "تقسيم")));
+                    if ui.add(egui::Slider::new(&mut self.config.right_panel_split, 0.18..=0.85)
+                        .show_value(false).text(tr(lang, "Split", "تقسيم"))).changed() {
+                        self.config.save();
+                    }
                 });
             });
-            let tool_height = (ui.available_height() * self.right_properties_ratio).max(160.0);
+            let panel_height = ui.available_height();
+            let tool_height = ((panel_height - 44.0).max(180.0)
+                * self.config.right_panel_split.clamp(0.18, 0.85)).max(110.0);
             ui.allocate_ui_with_layout(
                 egui::vec2(ui.available_width(), tool_height),
                 egui::Layout::top_down(egui::Align::Min),
@@ -3735,7 +3741,8 @@ impl eframe::App for StickApp {
                             self.render_tool_properties_ui(ui, lang);
             ui.add_space(8.0);
             ui.separator();
-            ui.strong(tr(lang, "Colors", "الألوان"));
+            egui::CollapsingHeader::new(tr(lang, "Colors", "الألوان"))
+                .default_open(true).show(ui, |ui| {
             ui.label(tr(lang, "Click a swatch or use the custom color picker:", "اختار لون جاهز أو افتح منتقي الألوان:"));
             ui.horizontal_wrapped(|ui| {
                 for (rgb, en_name) in BASIC_COLORS {
@@ -3758,18 +3765,36 @@ impl eframe::App for StickApp {
                 ui.label(tr(lang, "Custom color:", "لون مخصص:"));
                 ui.color_edit_button_srgba_unmultiplied(&mut self.brush_color);
             });
+            });
             ui.add_space(8.0);
             ui.separator();
-            ui.strong(tr(lang, "Symmetry Mirroring", "الرسم المتماثل"));
+            egui::CollapsingHeader::new(tr(lang, "Symmetry Mirroring", "الرسم المتماثل"))
+                .default_open(true).show(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.selectable_value(&mut self.symmetry_mode, SymmetryMode::Off, "Off");
                 ui.selectable_value(&mut self.symmetry_mode, SymmetryMode::Horizontal, "H");
                 ui.selectable_value(&mut self.symmetry_mode, SymmetryMode::Vertical, "V");
             });
+            });
             ui.add_space(6.0);
                         }); // independent tool-props scroll
                 }); // adjustable upper dock
-            ui.separator();
+            // A genuine draggable splitter between Properties and the Layers dock.
+            let (handle_rect, handle) = ui.allocate_exact_size(
+                egui::vec2(ui.available_width(), 13.0), egui::Sense::click_and_drag());
+            ui.painter().rect_filled(handle_rect, 3.0,
+                if handle.hovered() || handle.dragged() {
+                    egui::Color32::from_rgb(57, 96, 119)
+                } else { egui::Color32::from_rgb(47, 50, 59) });
+            for dx in [-11.0,0.0,11.0] {
+                ui.painter().circle_filled(handle_rect.center()+egui::vec2(dx,0.0),
+                    1.8,egui::Color32::from_gray(186));
+            }
+            if handle.dragged() {
+                self.config.right_panel_split = (self.config.right_panel_split
+                    + handle.drag_delta().y / panel_height.max(250.0)).clamp(0.18, 0.85);
+                self.config.save();
+            }
             ui.horizontal(|ui| {
                 ui.label(egui::RichText::new(tr(lang, "LAYERS", "الطبقات")).size(16.0)
                     .strong().color(egui::Color32::from_rgb(115, 208, 244)));
