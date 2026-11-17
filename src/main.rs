@@ -99,7 +99,8 @@ enum SfxType {
     ZoomStep,
     ExportSuccess,
     ExitFarewell,
-    LevelUpFanfare,
+    LevelUpFanfare(u8),
+    ToolSelect(u8),
 }
 
 fn play_sfx_async(enabled: bool, sfx: SfxType, wait_finish: bool) {
@@ -132,11 +133,26 @@ fn play_sfx_async(enabled: bool, sfx: SfxType, wait_finish: bool) {
                         sink.append(SineWave::new(520.0).take_duration(Duration::from_millis(130)).amplify(0.18));
                         sink.append(SineWave::new(340.0).take_duration(Duration::from_millis(170)).amplify(0.18));
                     }
-                    SfxType::LevelUpFanfare => {
-                        sink.append(SineWave::new(440.0).take_duration(Duration::from_millis(90)).amplify(0.22));
-                        sink.append(SineWave::new(554.37).take_duration(Duration::from_millis(90)).amplify(0.22));
-                        sink.append(SineWave::new(659.25).take_duration(Duration::from_millis(110)).amplify(0.24));
-                        sink.append(SineWave::new(880.0).take_duration(Duration::from_millis(300)).amplify(0.28));
+                    SfxType::LevelUpFanfare(variant) => {
+                        // 10 pitch bands x 10 motifs = 100 distinct procedural jingles.
+                        let base = 350.0 + (variant / 10) as f32 * 32.0;
+                        let motif = (variant % 10) as usize;
+                        let notes = [1.0, 1.125, 1.25, 1.3333, 1.5, 1.6667, 1.75];
+                        for i in 0..4usize {
+                            let index = (i * 2 + motif) % notes.len();
+                            let duration = 55 + motif as u64 * 3 + i as u64 * 23;
+                            sink.append(SineWave::new(base * notes[index])
+                                .take_duration(Duration::from_millis(duration))
+                                .amplify(0.12 + 0.015 * i as f32));
+                        }
+                    }
+                    SfxType::ToolSelect(tool) => {
+                        let base = 280.0 + tool as f32 * 53.0;
+                        sink.append(SineWave::new(base)
+                            .take_duration(Duration::from_millis(38)).amplify(0.08));
+                        sink.append(SineWave::new(base * (1.10 + tool as f32 * 0.016))
+                            .take_duration(Duration::from_millis(25 + tool as u64 * 2))
+                            .amplify(0.05));
                     }
                 }
                 sink.sleep_until_end();
@@ -974,7 +990,7 @@ impl StickApp {
             return;
         }
         let _ = create_desktop_shortcut(&target_exe);
-        self.play_sfx(SfxType::LevelUpFanfare);
+        self.play_sfx(SfxType::LevelUpFanfare(0));
         self.workspace_mode = WorkspaceMode::Launcher;
         self.status_message = "تم التسطيب وإنشاء اختصار Stick على سطح المكتب!".to_string();
     }
@@ -1009,7 +1025,7 @@ impl StickApp {
             let (new_lvl, _, _) = self.user_profile.get_level_progress();
             self.level_up_custom_msg = UserProfile::get_level_up_system_message(new_lvl).to_string();
             self.level_up_banner_timer = now_time + 5.5;
-            self.play_sfx(SfxType::LevelUpFanfare);
+            self.play_sfx(SfxType::LevelUpFanfare(0));
         }
     }
 
