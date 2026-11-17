@@ -1567,110 +1567,139 @@ impl StickApp {
                         }
                     }
                     OnlinePage::JoinRoom => {
-                        ui.heading(tr(lang, "LAN and Tailscale friend rooms", "غرف الشبكة المحلية والأصحاب على Tailscale"));
-                        if let Some(info) = &self.online_remote_info {
-                            if info.connected {
-                                ui.colored_label(egui::Color32::LIGHT_GREEN,
-                                    format!("Tailscale connected • {} visible friend devices", info.peers.len()));
-                                if info.peers.is_empty() {
-                                    ui.colored_label(egui::Color32::from_rgb(255,192,104),
-                                        tr(lang, "No permitted Tailscale peers. Share the host device with your friend or invite them to the same tailnet, then refresh.",
-                                            "Tailscale متصل لكن مفيش أجهزة أصحاب مسموح لها تظهر. شارك جهاز الهوست مع صاحبك أو ضيفه لنفس الشبكة، وبعدين حدث الغرف."));
-                                }
-                            } else {
-                                ui.label(tr(lang,
-                                    "Internet friends: install Tailscale, sign in and share the host device or join the same tailnet.",
-                                    "للعب مع صحابك عبر الإنترنت: ثبّتوا Tailscale، وسجّلوا دخول، وشارك جهاز الهوست أو ادخلوا نفس شبكة Tailscale."));
-                                ui.hyperlink_to("Tailscale", "https://tailscale.com/download");
+                        ui.heading(tr(lang,"Join a room","الانضمام لغرفة"));
+                        ui.small(tr(lang,
+                            "Rooms from your LAN or authorized Tailscale friends appear here.",
+                            "هنا بتظهر غرف نفس الشبكة أو أصحابك المسموح لهم على Tailscale."));
+                        ui.add_space(10.0);
+                        ui.horizontal(|ui|{
+                            if ui.button(tr(lang,"Refresh","تحديث الغرف")).clicked(){
+                                self.refresh_online_rooms();
                             }
-                        }
-                        if ui.button(tr(lang, "Refresh rooms", "تحديث الغرف")).clicked() { self.refresh_online_rooms(); }
-                        if self.online_discovery.is_some() {
-                            ui.spinner();
-                        } else if self.online_rooms.is_empty() {
-                            ui.label(tr(lang, "No rooms found. If your friend's room is missing, enter their Tailscale 100.x address below.",
-                                "مفيش غرف ظهرت. لو غرفة صاحبك مش موجودة، اكتب عنوان Tailscale بتاعه اللي بيبدأ بـ100 تحت."));
-                        }
-                        for room in self.online_rooms.clone() {
-                            let mode = if room.mode == OnlineMode::Drawing { "Drawing" } else { "Animation" };
-                            let label = format!("{}  |  {}  |  {}/{}  •  #{}  {}",
-                                room.title, mode, room.members, room.limit, room.room_code,
-                                if room.locked { "🔒" } else { "Open" });
-                            if ui.button(label).clicked() {
-                                self.online_address = room.address;
-                                self.online_code_input = room.room_code;
-                                self.online_room_name = room.title;
-                                self.online_mode = room.mode;
-                                if !room.locked && self.online_session.is_none() {
-                                    // Open LAN rooms join with one click; protected rooms
-                                    // instead leave the password field available below.
-                                    self.online_password.clear();
-                                    let nickname = self.user_profile.username.trim().to_owned();
-                                    let level = self.user_profile.get_level_progress().0;
-                                    match OnlineSession::join_room(self.online_address.clone(),
-                                        String::new(),
-                                        if nickname.is_empty() { "Artist".into() } else { nickname },
-                                        level, self.online_mode) {
-                                        Ok(mut session) => {
-                                            session.title = self.online_room_name.clone();
-                                            session.room_code = self.online_code_input.clone();
-                                            self.online_session = Some(session);
-                                            self.online_message = tr(lang, "Connecting to open room...", "جاري الدخول للغرفة المفتوحة...");
-                                        }
-                                        Err(error) => self.online_message = error,
-                                    }
-                                }
-                            }
-                        }
-                        ui.add_space(12.0);
-                        ui.label(tr(lang, "8-digit room code (discovered LAN/Tailscale rooms)", "كود الغرفة 8 أرقام (الغرف المكتشفة على LAN أو Tailscale)"));
-                        ui.horizontal(|ui| {
-                            ui.add(egui::TextEdit::singleline(&mut self.online_code_input)
-                                .char_limit(8).desired_width(180.0).hint_text("12345678"));
-                            if ui.button(tr(lang, "Find room", "دور على الغرفة")).clicked() {
-                                match collab::find_room_by_code(&self.online_rooms, &self.online_code_input) {
-                                    Some(room) => {
-                                        self.online_address = room.address.clone();
-                                        self.online_room_name = room.title.clone();
-                                        self.online_mode = room.mode;
-                                        self.online_message.clear();
-                                    }
-                                    None => {
-                                        self.online_message = tr(lang,
-                                            "Room code not found. Refresh LAN/Tailscale rooms or enter the host's Tailscale 100.x IP.",
-                                            "الكود مش ظاهر. حدّث قائمة الغرف أو اكتب عنوان Tailscale بتاع الهوست اللي بيبدأ بـ100.");
-                                        self.refresh_online_rooms();
-                                    }
+                            if self.online_discovery.is_some(){ui.spinner();}
+                            if let Some(info)=&self.online_remote_info {
+                                if info.connected {
+                                    ui.colored_label(egui::Color32::LIGHT_GREEN,
+                                        format!("Tailscale • {} {}",info.peers.len(),
+                                            tr(lang,"friends","جهاز متاح")));
                                 }
                             }
                         });
-                        ui.label(tr(lang, "Host IPv4 address (IP:port)", "عنوان الهوست (IP:port)"));
-                        ui.add(egui::TextEdit::singleline(&mut self.online_address)
-                            .hint_text("100.75.20.10:47554").desired_width(300.0));
-                        ui.label(tr(lang, "Room password (leave empty for public rooms)", "كلمة سر الغرفة (فاضية للغرف المفتوحة)"));
-                        ui.add(egui::TextEdit::singleline(&mut self.online_password).password(true).desired_width(300.0));
-                        ui.add_space(12.0);
-                        let connecting = self.online_session.is_some();
-                        if ui.add_enabled(!connecting, egui::Button::new(tr(lang, "Join this room", "دخول الغرفة"))).clicked() {
-                            let nickname = self.user_profile.username.trim().to_owned();
-                            let level = self.user_profile.get_level_progress().0;
-                            let address = if self.online_address.trim().is_empty() {
-                                collab::find_room_by_code(&self.online_rooms, &self.online_code_input)
-                                    .map(|room| room.address.clone()).unwrap_or_default()
-                            } else { self.online_address.trim().to_owned() };
-                            match OnlineSession::join_room(address,
-                                    self.online_password.clone(), if nickname.is_empty() { "Artist".into() } else { nickname },
-                                    level, self.online_mode) {
-                                Ok(mut session) => {
-                                    session.title = self.online_room_name.clone();
-                                    session.room_code = self.online_code_input.clone();
-                                    self.online_session = Some(session);
-                                    self.online_message = tr(lang, "Connecting to host...", "جاري الاتصال بالهوست...");
+                        ui.separator();
+                        if self.online_rooms.is_empty() {
+                            ui.label(tr(lang,
+                                "No rooms found. You can still join directly using your friend's Tailscale IP.",
+                                "مفيش غرف ظاهرة. تقدر تدخل مباشرة بعنوان Tailscale بتاع صاحبك."));
+                        } else {
+                            let rooms=self.online_rooms.clone();
+                            egui::ScrollArea::vertical().max_height(245.0).show(ui,|ui|{
+                                for room in rooms {
+                                    ui.group(|ui|{
+                                        ui.horizontal(|ui|{
+                                            ui.vertical(|ui|{
+                                                ui.strong(&room.title);
+                                                ui.small(format!("{}  •  {}/{}  •  #{}",
+                                                    if room.mode==OnlineMode::Drawing{
+                                                        tr(lang,"Drawing","رسم")
+                                                    } else {tr(lang,"Animation","أنيميشن")},
+                                                    room.members,room.limit,room.room_code));
+                                            });
+                                            if room.locked {ui.label("🔒");}
+                                            if ui.add_enabled(self.online_session.is_none(),
+                                                egui::Button::new(
+                                                    if room.locked {tr(lang,"Select","اختيار")}
+                                                    else {tr(lang,"Join","دخول")})).clicked(){
+                                                self.online_address=room.address.clone();
+                                                self.online_code_input=room.room_code.clone();
+                                                self.online_room_name=room.title.clone();
+                                                self.online_mode=room.mode;
+                                                self.online_password.clear();
+                                                if room.locked {
+                                                    self.online_message=tr(lang,
+                                                        "This room is locked. Enter its password below.",
+                                                        "الغرفة دي بكلمة سر. اكتبها في خانة الدخول المباشر تحت.").to_owned();
+                                                } else {
+                                                    let nickname=self.user_profile.username.trim().to_owned();
+                                                    let level=self.user_profile.get_level_progress().0;
+                                                    match OnlineSession::join_room(
+                                                        room.address.clone(),String::new(),
+                                                        if nickname.is_empty(){"Artist".into()}else{nickname},
+                                                        level,room.mode){
+                                                        Ok(mut session)=>{
+                                                            session.title=room.title.clone();
+                                                            session.room_code=room.room_code.clone();
+                                                            self.online_session=Some(session);
+                                                            self.online_message=tr(lang,
+                                                                "Connecting to room...","جاري الاتصال بالغرفة...").to_owned();
+                                                        }
+                                                        Err(error)=>self.online_message=error,
+                                                    }
+                                                }
+                                            }
+                                        });
+                                    });
                                 }
-                                Err(err) => self.online_message = err,
+                            });
+                        }
+                        ui.add_space(12.0);
+                        ui.separator();
+                        ui.strong(tr(lang,"Join directly","الدخول المباشر"));
+                        ui.small(tr(lang,
+                            "Enter the host's 100.x.x.x:47554 (Tailscale) or LAN IP. A room code alone isn't a global invite.",
+                            "حط عنوان الهوست 100.x.x.x:47554 من Tailscale، أو عنوانه على نفس الشبكة."));
+                        ui.add(egui::TextEdit::singleline(&mut self.online_address)
+                            .desired_width(325.0).hint_text("100.74.20.10:47554"));
+                        ui.add(egui::TextEdit::singleline(&mut self.online_password).password(true)
+                            .desired_width(325.0).hint_text(tr(lang,
+                                "Password (only if required)","كلمة السر (لو موجودة)")));
+                        let connecting=self.online_session.is_some();
+                        if ui.add_enabled(!connecting,
+                            egui::Button::new(tr(lang,"Connect to host","اتصل بالغرفة"))).clicked(){
+                            let nickname=self.user_profile.username.trim().to_owned();
+                            let level=self.user_profile.get_level_progress().0;
+                            match OnlineSession::join_room(self.online_address.trim().to_owned(),
+                                self.online_password.clone(),
+                                if nickname.is_empty(){"Artist".into()}else{nickname},
+                                level,self.online_mode) {
+                                Ok(mut session)=>{
+                                    session.title=self.online_room_name.clone();
+                                    session.room_code=self.online_code_input.clone();
+                                    self.online_session=Some(session);
+                                    self.online_message=tr(lang,"Connecting to host...",
+                                        "جاري الاتصال بجهاز الهوست...").to_owned();
+                                }
+                                Err(err)=>self.online_message=err,
                             }
                         }
-                        if connecting { ui.spinner(); }
+                        if connecting{ui.spinner();}
+                        ui.collapsing(tr(lang,"Room code / troubleshooting",
+                            "كود الغرفة / حل مشاكل الاتصال"),|ui|{
+                            ui.label(tr(lang,
+                                "Eight-digit codes search only rooms discovered above. For other networks share the host's Tailscale IP.",
+                                "الكود بيدور فقط في الغرف الظاهرة فوق. لو على نت مختلف استخدم عنوان Tailscale بتاع الهوست."));
+                            ui.horizontal(|ui|{
+                                ui.add(egui::TextEdit::singleline(&mut self.online_code_input)
+                                    .char_limit(8).desired_width(135.0).hint_text("12345678"));
+                                if ui.button(tr(lang,"Find room","بحث")).clicked(){
+                                    if let Some(room)=collab::find_room_by_code(
+                                        &self.online_rooms,&self.online_code_input){
+                                        self.online_address=room.address.clone();
+                                        self.online_room_name=room.title.clone();
+                                        self.online_mode=room.mode;
+                                        self.online_message.clear();
+                                    } else {
+                                        self.online_message=tr(lang,
+                                            "Code not found. Refresh rooms or enter the host's Tailscale IP.",
+                                            "الكود مش ظاهر. حدّث الغرف أو استخدم عنوان Tailscale الخاص بالهوست.").into();
+                                    }
+                                }
+                            });
+                            ui.hyperlink_to("Tailscale", "https://tailscale.com/download");
+                            ui.small(tr(lang,
+                                "The host must keep Stick open; both devices must be permitted to reach each other. TCP 47554 must be allowed in the host firewall. Do not disable the firewall.",
+                                "لازم صاحب الغرفة يسيب Stick شغال، والأجهزة تكون مسموح لها تتواصل. اسمح لـStick ببورت TCP 47554 في جدار حماية الهوست، من غير تعطيل الحماية."));
+                        });
+
                     }
                 }
                 if !self.online_message.is_empty() {
