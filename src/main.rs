@@ -925,6 +925,7 @@ struct StickApp {
     pending_delete_layer: Option<usize>,
     layer_rename_index: Option<usize>,
     layer_rename_buffer: String,
+    layer_filter: String,
     layer_clipboard: Option<Layer>,
     right_properties_ratio: f32,
     symmetry_mode: SymmetryMode,
@@ -1053,8 +1054,9 @@ impl StickApp {
             pending_delete_layer: None,
             layer_rename_index: None,
             layer_rename_buffer: String::new(),
+            layer_filter: String::new(),
             layer_clipboard: None,
-            right_properties_ratio: 0.46,
+            right_properties_ratio: 0.36,
             symmetry_mode: SymmetryMode::Off,
             stabilizer_strength: 0.30,
             stabilized_cursor: None,
@@ -3526,8 +3528,8 @@ impl eframe::App for StickApp {
         let mut paste_layer_index: Option<usize> = None;
         let mut rename_layer_index: Option<usize> = None;
         if self.config.show_right_dock {
-        egui::SidePanel::right("right_panel").resizable(true).default_width(318.0)
-            .min_width(250.0).show(ctx, |ui| {
+        egui::SidePanel::right("right_panel").resizable(true).default_width(376.0)
+            .min_width(285.0).show(ctx, |ui| {
             ui.horizontal(|ui| {
                 ui.strong(tr(lang, "Tool Properties", "خصائص الأداة"));
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -3580,12 +3582,18 @@ impl eframe::App for StickApp {
                         }); // independent tool-props scroll
                 }); // adjustable upper dock
             ui.separator();
-            ui.strong(tr(lang, "▤ Layers • Right-click for more", "▤ الطبقات • كليك يمين للخيارات"));
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new(tr(lang, "LAYERS", "الطبقات")).size(16.0)
+                    .strong().color(egui::Color32::from_rgb(115, 208, 244)));
+                ui.label(format!("({})", self.project.layers.len()));
+            });
+            ui.add(egui::TextEdit::singleline(&mut self.layer_filter)
+                .hint_text(tr(lang, "Search layers...", "ابحث عن لير..."))
+                .desired_width(f32::INFINITY));
             egui::ScrollArea::vertical().id_salt("layer_dock_scroll")
                 .auto_shrink([false, false]).show(ui, |ui| {
             ui.horizontal(|ui| {
-                ui.strong(tr(lang, "Layers", "الطبقات"));
-                if ui.small_button("+ Layer").clicked() {
+                if ui.small_button(tr(lang, "+ New Layer", "+ لير جديد")).clicked() {
                     self.save_undo_state();
                     let mut kf = HashMap::new();
                     kf.insert(1, Default::default());
@@ -3615,20 +3623,60 @@ impl eframe::App for StickApp {
                 });
             }
             let can_delete_layers = self.project.layers.len() > 1;
+            let dims = (self.project.width.max(1) as f32, self.project.height.max(1) as f32);
+            let current_frame = self.current_frame;
+            let filter = self.layer_filter.trim().to_lowercase();
             for (idx, layer) in self.project.layers.iter_mut().enumerate() {
+                if !filter.is_empty() && !layer.name.to_lowercase().contains(&filter) { continue; }
                 let selected_row = self.active_layer_idx == idx;
                 egui::Frame::none()
                     .fill(if selected_row { egui::Color32::from_rgb(34, 65, 90) }
                         else { egui::Color32::from_rgb(37, 39, 46) })
-                    .rounding(5.0)
-                    .inner_margin(egui::Margin::symmetric(5.0, 4.0))
+                    .stroke(egui::Stroke::new(if selected_row { 1.4 } else { 0.5 },
+                        if selected_row { egui::Color32::from_rgb(78, 183, 235) }
+                        else { egui::Color32::from_gray(67) }))
+                    .rounding(6.0)
+                    .inner_margin(egui::Margin::symmetric(6.0, 7.0))
                     .show(ui, |ui| {
                 ui.horizontal(|ui| {
                     let has_art = layer.keyframes.values().any(|frame|
                         !frame.strokes.is_empty() || !frame.text_items.is_empty() || !frame.media_items.is_empty());
-                    ui.label(egui::RichText::new(if has_art { "◆" } else { "◇" })
-                        .color(if has_art { egui::Color32::from_rgb(105, 218, 207) }
-                               else { egui::Color32::from_gray(115) }).size(15.0));
+                    // Live thumbnail based on the layer's stored drawing strokes.
+                    let (thumb, _) = ui.allocate_exact_size(egui::vec2(48.0, 38.0), egui::Sense::hover());
+                    ui.painter().rect_filled(thumb, 3.0, egui::Color32::from_gray(82));
+                    let inner = thumb.shrink(3.0);
+                    ui.painter().rect_filled(inner, 2.0, egui::Color32::from_gray(236));
+                    if let Some((_, data)) = layer.keyframes.iter()
+                        .filter(|(f,_)| **f <= current_frame).max_by_key(|(f,_)| **f) {
+                        for stroke in data.strokes.iter().take(70) {
+                            let color = egui::Color32::from_rgb(stroke.color[0], stroke.color[1], stroke.color[2]);
+                            let project_to_thumb = |p: &StrokePoint| egui::pos2(
+                                inner.left() + (p.x / dims.0).clamp(0.0,1.0)*inner.width(),
+                                inner.top() + (p.y / dims.1).clamp(0.0,1.0)*inner.height());
+                            if stroke.points.len() == 1 {
+                                let p = &stroke.points[0];
+                                if p.x.is_finite() && p.y.is_finite() {
+                                    ui.painter().circle_filled(project_to_thumb(p), 1.4, color);
+                                }
+                            } else {
+                                for pair in stroke.points.windows(2).step_by((stroke.points.len()/28).max(1)) {
+                                    if pair.iter().all(|p| p.x.is_finite() && p.y.is_finite()) {
+                                        ui.painter().line_segment([project_to_thumb(&pair[0]),
+                                            project_to_thumb(&pair[1])], egui::Stroke::new(1.1, color));
+                                    }
+                                }
+                            }
+                        }
+                        if !data.media_items.is_empty() || !data.text_items.is_empty() {
+                            ui.painter().text(inner.center(), egui::Align2::CENTER_CENTER,
+                                "▧", egui::FontId::proportional(13.0),
+                                egui::Color32::from_rgb(40, 110, 161));
+                        }
+                    }
+                    if !has_art {
+                        ui.painter().circle_stroke(inner.center(), 5.0,
+                            egui::Stroke::new(1.0, egui::Color32::from_gray(150)));
+                    }
                     if ui.checkbox(&mut layer.visible, "")
                         .on_hover_text(tr(lang, "Show or hide layer", "أظهر أو اخفي اللير")).changed() {
                         self.has_unsaved_changes = true;
@@ -3638,11 +3686,22 @@ impl eframe::App for StickApp {
                         layer.locked = !layer.locked;
                         self.has_unsaved_changes = true;
                     }
-                    let layer_response = ui.selectable_label(self.active_layer_idx == idx, &layer.name);
+                    let layer_response = ui.vertical(|ui| {
+                        let response = ui.selectable_label(selected_row,
+                            egui::RichText::new(&layer.name).strong().size(14.0));
+                        let stroke_count: usize = layer.keyframes.values().map(|f| f.strokes.len()).sum();
+                        ui.label(egui::RichText::new(format!("{} {} • {} {}{}",
+                            layer.keyframes.len(), tr(lang, "frames", "فريم"),
+                            stroke_count, tr(lang, "strokes", "خط"),
+                            if layer.is_guide { " • GUIDE" } else { "" }))
+                            .small().color(egui::Color32::from_gray(160)));
+                        response
+                    }).inner;
                     if layer_response.clicked() {
                         self.active_layer_idx = idx;
                         self.selected_stroke_indices.clear();
                     }
+                    if layer_response.double_clicked() { rename_layer_index = Some(idx); }
                     layer_response.context_menu(|ui| {
                         ui.strong(&layer.name);
                         ui.separator();
@@ -3655,6 +3714,13 @@ impl eframe::App for StickApp {
                         if ui.add_enabled(self.layer_clipboard.is_some(),
                             egui::Button::new(tr(lang, "Paste Layer", "الصق اللير"))).clicked() {
                             paste_layer_index = Some(idx); ui.close_menu();
+                        }
+                        if ui.button(tr(lang,
+                            if layer.is_guide { "Disable Guide Layer" } else { "Make Guide Layer (not exported)" },
+                            if layer.is_guide { "إلغاء وضع الإرشاد" } else { "لير إرشادي (مش بيتصدر)" })).clicked() {
+                            layer.is_guide = !layer.is_guide;
+                            self.has_unsaved_changes = true;
+                            ui.close_menu();
                         }
                         if ui.button(tr(lang, "Duplicate", "دبلكيت اللير")).clicked() {
                             layer_menu_action = Some((idx, layer_ops::LayerAction::Duplicate));
