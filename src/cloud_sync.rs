@@ -137,7 +137,7 @@ pub fn sign_in(client_id:&str)->Result<Identity,String> {
         .map_err(|e|format!("Cannot bind OAuth callback: {e}"))?;
     listener.set_nonblocking(true).map_err(|e|e.to_string())?;
     let port=listener.local_addr().map_err(|e|e.to_string())?.port();
-    let redirect=format!("http://127.0.0.1:{port}/oauth2callback");
+    let redirect=format!("http://127.0.0.1:{port}");
     let verifier=URL_SAFE_NO_PAD.encode(random_bytes::<64>()?);
     let challenge=URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes()));
     let state=URL_SAFE_NO_PAD.encode(random_bytes::<24>()?);
@@ -161,7 +161,7 @@ pub fn sign_in(client_id:&str)->Result<Identity,String> {
                 let n=stream.read(&mut data).map_err(|e|e.to_string())?;
                 let req=String::from_utf8_lossy(&data[..n]);
                 let target=req.split_whitespace().nth(1).unwrap_or("");
-                if !target.starts_with("/oauth2callback?") {continue;}
+                if !target.starts_with("/?") {continue;}
                 let query=target.split_once('?').map(|(_,q)|q).unwrap_or("");
                 let secure=parameter(query,"state").as_deref()==Some(&state);
                 let code=if secure {parameter(query,"code")}else{None};
