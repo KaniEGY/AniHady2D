@@ -1,6 +1,6 @@
 # Stick Online — friends over the Internet and LAN
 
-Stick is **hosted on the creator's own computer**. It listens on TCP 47554 for collaborators and uses UDP 47553 to discover rooms. This implementation uses protocol v3 and synchronizes document edits via the host. There is **no central Stick account, global room directory or server operated by Stick**.
+Stick is **hosted on the creator's own computer**. It listens on TCP 47554 for collaborators and uses UDP 47553 to discover rooms. This implementation uses protocol v4 and synchronizes document edits via the host. There is **no central Stick account, global room directory or server operated by Stick**.
 
 ## Play with friends on different Internet connections (recommended)
 
@@ -19,7 +19,7 @@ Stick is **hosted on the creator's own computer**. It listens on TCP 47554 for c
 - TCP **47554** carries all edits and the joining snapshot.
 - UDP **47553** advertises rooms using LAN broadcast or unicast to visible Tailscale peers.
 - Two instances on the same PC can test `127.0.0.1:47554`.
-- Both ends must run compatible Stick protocol v3 builds.
+- Both ends must run compatible Stick protocol v4 builds.
 
 ## Troubleshooting
 
@@ -28,7 +28,10 @@ Stick is **hosted on the creator's own computer**. It listens on TCP 47554 for c
 - **Tailscale not connected:** install it, sign in, connect and make sure the friend is permitted to reach the host device. Press **Refresh rooms** after it is running.
 - **Room not listed but direct address works:** UDP **47553** discovery may be blocked. If desired, allow UDP discovery traffic **only from trusted LAN/Tailscale devices**; manual IP joining does not need the UDP discovery port.
 - **Connection times out:** Tailscale peer visibility, access policies and host firewall may prevent reaching TCP 47554. Do not switch off Windows Firewall globally.
-- **Host leaves:** the room closes; each client keeps its local project. This is not a cloud-synced permanent room.
+- **Graceful host exit:** Stick sends a host-handoff message to the oldest currently admitted guest, who creates a new host on TCP 47554. Other participants automatically reconnect to the new host with their existing room password and eight-digit room code; the latest host document snapshot is handed to the successor. Every new host can repeat this handoff on graceful departure. This requires that peers can reach the successor on LAN or Tailscale and permit incoming TCP 47554. Brief reconnection is expected. This does **not** recover unexpected power loss, crashes, or unreachable successors; save local copies.
+- **Host controls:** only the room host can kick guests or choose their roster/tool cursor colors. Kicked clients receive a reason and cannot keep contributing to the previous connection. Color choices can reset when a new host takes over.
+- **Order caveat:** after takeover, reconnecting guests receive a new admission order. The oldest guest of the *currently hosted connection* is selected at each subsequent handoff, not a permanent global history.
+- Rooms are not a cloud-synced permanent service, and there is no worldwide central room directory.
 
 ## Collaboration limitations / الأمان
 
@@ -44,6 +47,8 @@ Stick is **hosted on the creator's own computer**. It listens on TCP 47554 for c
 - [ ] Direct guest join using the host's 100.x address when UDP discovery is blocked.
 - [ ] Test room listing over Tailscale when UDP discovery is allowed.
 - [ ] Test password rejection, capacity, disconnect, reopened room and LAN behavior.
+- [ ] On 3 real PCs: host leaves gracefully, first guest becomes host, remaining guest reconnects, draws, and then the second host leaves and hands off again. Test password protected room, color changes, kick and reconnect attempts.
+- [ ] Unplug the host PC without warning: make sure clients keep local artwork and get an explicit disconnect, not a false promise of recovery.
 - [ ] Test erasing, adding/deleting layers, animation keyframes, and explicit host resync on both PCs.
 - [ ] Test selection transform at zoom 25%, 100%, 400% and each of its four corner handles.
 - [ ] Confirm old project save/reopen and Previous Versions rollback remain functional.

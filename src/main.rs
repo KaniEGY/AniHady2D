@@ -375,7 +375,7 @@ enum UpdateState {
     Checking,
     UpToDate,
     UpdateAvailable(updater::ReleaseInfo),
-    Downloading(String),
+    Downloading { received: u64, total: u64 },
     ReadyToRestart { version: String, staged_exe: PathBuf },
     Error(String),
 }
@@ -1391,6 +1391,63 @@ impl StickApp {
                     self.online_members = roster.len();
                     self.online_participants = roster;
                 }
+                OnlineEvent::HostHandoff { address, promote, title, room_code, limit, project } => {
+                    let password = self.online_session.as_ref()
+                        .map(|s| s.password.clone()).unwrap_or_default();
+                    self.leave_online_session();
+                    let nickname = self.user_profile.username.trim().to_owned();
+                    let nickname = if nickname.is_empty() { "Artist".into() } else { nickname };
+                    let level = self.user_profile.get_level_progress().0;
+                    self.online_room_name = title.clone();
+                    self.online_code_input = room_code.clone();
+                    self.online_password = password.clone();
+                    let result = if promote {
+                        if let Some(snapshot) = project {
+                            let session = OnlineSession::host_room_with_code(
+                                title, password, limit, self.online_mode,
+                                snapshot.clone(), nickname, level, Some(room_code));
+                            session.map(|new_session| {
+                                // Transfer takes the previous host's canonical snapshot,
+                                // not a guessed copy of the guest's unsent edits.
+                                if self.has_unsaved_changes {
+                                    let _ = persistence::atomic_save::write_recovery_snapshot(
+                                        &self.project, "online_before_host_transfer");
+                                }
+                                self.project = snapshot;
+                                self.timeline_length = self.project.total_frames.max(1);
+                                self.active_layer_idx = self.active_layer_idx.min(self.project.layers.len().saturating_sub(1));
+                                self.undo_stack.clear();
+                                self.redo_stack.clear();
+                                self.online_members = 1;
+                                self.online_participants = vec![Participant {
+                                    id: 0, name: self.user_profile.username.clone(),
+                                    level, color: [64, 185, 250],
+                                }];
+                                self.online_session = Some(new_session);
+                                self.has_unsaved_changes = true;
+                                self.online_message = tr(self.config.lang,
+                                    "You are the new room host. Other members are reconnecting.",
+                                    "إنت دلوقتي الهوست الجديد، وباقي الأعضاء بيعيدوا الاتصال.").to_owned();
+                            })
+                        } else {
+                            Err("Host transfer did not include the room project".to_owned())
+                        }
+                    } else {
+                        OnlineSession::rejoin_after_handoff(address, password,
+                            nickname, level, self.online_mode).map(|mut new_session| {
+                                new_session.title = title;
+                                new_session.room_code = room_code;
+                                self.online_session = Some(new_session);
+                                self.online_message = tr(self.config.lang,
+                                    "Reconnecting to the new host...", "جاري الاتصال بالهوست الجديد...").into();
+                        })
+                    };
+                    if let Err(err) = result {
+                        self.online_message = format!("Host transfer failed: {err}");
+                        self.status_message = self.online_message.clone();
+                        self.has_unsaved_changes = true;
+                    }
+                }
                 OnlineEvent::Notice(message) => self.online_message = message,
                 OnlineEvent::Disconnected(message) => {
                     self.online_message = message;
@@ -1403,6 +1460,25 @@ impl StickApp {
         }
         if self.online_session.is_some() || self.online_discovery.is_some() {
             ctx.request_repaint_after(Duration::from_millis(160));
+        }
+    }
+
+    fn leave_online_session(&mut self) {
+        if let Some(session) = self.online_session.take() {
+            if session.is_host {
+                // Flush this editor's pending local changes before choosing the
+                // authoritative document snapshot that the successor inherits.
+                if let Err(err) = session.sync_local_changes(&self.project) {
+                    self.online_message = format!("Could not flush edits before handoff: {err}");
+                }
+                match session.handoff_before_leave() {
+                    Ok(true) => self.online_message =
+                        "Room ownership offered to the earliest connected guest.".into(),
+                    Ok(false) => {}
+                    Err(err) => self.online_message = format!("Host transfer could not finish: {err}"),
+                }
+            }
+            session.close();
         }
     }
 
@@ -1490,7 +1566,7 @@ impl StickApp {
                     tr(lang, "Enable online networking for this session",
                         "تشغيل اتصال الأونلاين للجلسة دي فقط")).changed() {
                     if !self.online_enabled {
-                        if let Some(session)=self.online_session.take(){session.close();}
+                        self.leave_online_session();
                         self.online_discovery=None;
                         self.online_remote_info=None;
                         self.online_rooms.clear();
@@ -1766,7 +1842,7 @@ impl StickApp {
                         },
                         OnlinePage::ChooseAction => self.online_page = OnlinePage::ChooseMode,
                         OnlinePage::CreateRoom | OnlinePage::JoinRoom => {
-                            if let Some(session) = self.online_session.take() { session.close(); }
+                            self.leave_online_session();
                             self.online_page = OnlinePage::ChooseAction;
                         }
                     }
@@ -2483,18 +2559,27 @@ impl StickApp {
             self.show_project_notice = true;
             return;
         }
-        *self.update_state.lock().unwrap() = UpdateState::Downloading(
-            tr(self.config.lang, "Downloading and checking the update...", "بننزّل التحديث وبنتأكد إنه سليم..."),
-        );
+        *self.update_state.lock().unwrap() = UpdateState::Downloading {
+            received: 0,
+            total: info.size,
+        };
         let state = Arc::clone(&self.update_state);
         std::thread::spawn(move || {
             let next = match std::env::current_exe() {
-                Ok(current) => match updater::download_verified(&info, &current) {
-                    Ok(staged_exe) => UpdateState::ReadyToRestart {
-                        version: info.version.clone(),
-                        staged_exe,
-                    },
-                    Err(error) => UpdateState::Error(error),
+                Ok(current) => {
+                    let progress_state = Arc::clone(&state);
+                    let progress_ctx = ctx.clone();
+                    match updater::download_verified_with_progress(&info, &current, move |received, total| {
+                        if let Ok(mut guard) = progress_state.lock() {
+                            *guard = UpdateState::Downloading { received, total };
+                        }
+                        progress_ctx.request_repaint();
+                    }) {
+                        Ok(staged_exe) => UpdateState::ReadyToRestart {
+                            version: info.version.clone(), staged_exe,
+                        },
+                        Err(error) => UpdateState::Error(error),
+                    }
                 },
                 Err(error) => UpdateState::Error(format!("Couldn't find Stick.exe: {error}")),
             };
@@ -2556,9 +2641,21 @@ impl StickApp {
                                 self.show_update_dialog = false;
                             }
                         }
-                        UpdateState::Downloading(message) => {
-                            ui.spinner();
-                            ui.label(message);
+                        UpdateState::Downloading { received, total } => {
+                            ui.label(tr(lang, "Downloading update...", "جاري تحميل التحديث..."));
+                            let fraction = if total == 0 { 0.0 } else {
+                                (received as f32 / total as f32).clamp(0.0, 1.0)
+                            };
+                            ui.add(egui::ProgressBar::new(fraction)
+                                .desired_width(310.0).show_percentage());
+                            ui.label(format!("{:.1} / {:.1} MB  •  {}%",
+                                received as f64 / 1_048_576.0,
+                                total as f64 / 1_048_576.0,
+                                (fraction * 100.0).round() as u32));
+                            if received == total {
+                                ui.small(tr(lang, "Checking SHA-256 and preparing installation...",
+                                    "جاري التحقق من سلامة الملف وتجهيز التثبيت..."));
+                            }
                         }
                         UpdateState::ReadyToRestart { version, staged_exe } => {
                             if self.has_unsaved_changes || self.current_stroke.is_some() {
@@ -3923,21 +4020,40 @@ impl eframe::App for StickApp {
             });
         }
         if self.show_support_dialog {
-            egui::Window::new(tr(lang, "Support Stick Studio", "ادعم Stick Studio"))
-                .collapsible(false).resizable(false).default_width(450.0)
+            let mut open = true;
+            let mut close_clicked = false;
+            egui::Window::new(tr(lang, "Support Stick Studio 💛", "💛 ادعم Stick Studio"))
+                .open(&mut open).collapsible(false).resizable(false)
+                .default_width(490.0)
                 .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0]).show(ctx, |ui| {
-                    ui.heading(tr(lang, "💛 Optional support", "💛 الدعم اختياري"));
-                    ui.separator();
-                    ui.label(tr(lang,
-                        "This is my InstaPay support link. I like money, but you really don't have to send anything! Whether you support me or not, I'll keep building and updating the app depending on my mood. 😔",
-                        "ده رابط الدعم المادي عن طريق إنستا باي. أنا راجل مادي بس بقولك مش لازم تبعت حاجة، لأن سواء دعمتني أو لأ البرنامج هيتطور وهيتحدث على حسب نفسيتي 😔"));
-                    ui.add_space(12.0);
-                    ui.hyperlink_to(tr(lang, "Open InstaPay support link", "افتح رابط الدعم على إنستا باي"), SUPPORT_URL);
-                    if ui.button(tr(lang, "Close", "إغلاق")).clicked() { self.show_support_dialog = false; }
+                    ui.set_min_width(475.0);
+                    ui.vertical_centered(|ui| {
+                        ui.label(egui::RichText::new("💛")
+                            .size(31.0).color(egui::Color32::from_rgb(255, 208, 66)));
+                        ui.heading(tr(lang, "Optional support", "الدعم اختياري تمامًا"));
+                    });
+                    ui.add_space(10.0);
+                    egui::Frame::none()
+                        .fill(egui::Color32::from_rgb(34, 37, 49))
+                        .rounding(9.0)
+                        .inner_margin(egui::Margin::same(14.0))
+                        .show(ui, |ui| {
+                            ui.label(egui::RichText::new(tr(lang,
+                                "I'm broke, poor, and barely getting by... but you really don't have to send any money 🙂. As I said, development will continue from time to time as long as people enjoy Stick. Support is only for anyone who likes the program and thinks I deserve a little reward 🥳. That's all!",
+                                "انا صحيح كحيان و فقير و جربوع ومش لاقي اكل ولكن .... انت مش لازم تبعت فلوس 🙂يب زي ما بقولك تطوير البرنامج هيفضل شغال من فترة للتانيه طول ما الناس عجبها البرنامج ولكن جزء الدعم ده لو حد عجبه البرنامج وشايف اني استحق مكافئه🥳 وبس"
+                            )).size(15.0).color(egui::Color32::from_rgb(238, 237, 245)));
+                        });
+                    ui.add_space(14.0);
+                    ui.horizontal(|ui| {
+                        ui.hyperlink_to(tr(lang, "💛 Support via InstaPay", "💛 رابط المكافأة على إنستا باي"), SUPPORT_URL);
+                        if ui.button(tr(lang, "Close", "إغلاق")).clicked() { close_clicked = true; }
+                    });
                 });
+            self.show_support_dialog = open && !close_clicked;
         }
 
         self.render_update_dialog(ctx, lang);
+        self.render_feedback_dialog(ctx);
 
         if self.show_symbol_dialog {
             egui::Window::new("Symbol").collapsible(false).resizable(false).anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0]).show(ctx, |ui| {
@@ -3967,6 +4083,7 @@ impl eframe::App for StickApp {
             } else {
                 // Never block window teardown on an audio device/worker.
                 // The old wait_finish=true could keep Windows waiting forever.
+                self.leave_online_session();
                 self.allow_close = true;
             }
         }
@@ -3977,13 +4094,13 @@ impl eframe::App for StickApp {
                     if ui.button(tr(lang,"Save & Exit","احفظ واخرج")).clicked() && self.trigger_save() {
                         self.show_exit_dialog=false;
                         self.allow_close = true;
-                        if let Some(session)=self.online_session.take(){session.close();}
+                        self.leave_online_session();
                         ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                     }
                     if ui.button(tr(lang,"Exit without saving","اخرج من غير حفظ")).clicked() {
                         self.show_exit_dialog=false;
                         self.allow_close = true;
-                        if let Some(session)=self.online_session.take(){session.close();}
+                        self.leave_online_session();
                         ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                     }
                     if ui.button(tr(lang,"Cancel","إلغاء")).clicked(){self.show_exit_dialog=false;}
@@ -4018,6 +4135,54 @@ impl eframe::App for StickApp {
                             tr(lang, "Copy room code", "نسخ كود الغرفة")).clicked() {
                             ui.output_mut(|out| out.copied_text = code.clone());
                         }
+                        ui.menu_button(tr(lang, "Host controls", "إدارة الغرفة"), |ui| {
+                            ui.set_min_width(300.0);
+                            ui.label(egui::RichText::new(tr(lang,
+                                "Host permissions • participants and tool colors",
+                                "صلاحيات الهوست • الأعضاء وألوان الأدوات")).strong());
+                            ui.separator();
+                            let palette: [[u8; 3]; 8] = [
+                                [64,185,250], [247,115,87], [159,125,248], [47,207,147],
+                                [240,186,54], [229,98,184], [76,200,210], [248,102,135],
+                            ];
+                            for participant in self.online_participants.clone() {
+                                ui.horizontal(|ui| {
+                                    let color = egui::Color32::from_rgb(
+                                        participant.color[0], participant.color[1], participant.color[2]);
+                                    ui.colored_label(color, format!("● {}  Lv.{}",
+                                        participant.name, participant.level));
+                                    if participant.id == 0 {
+                                        ui.small(tr(lang, "HOST", "الهوست"));
+                                    } else if ui.small_button(tr(lang, "Kick", "طرد")).clicked() {
+                                        if let Err(err) = session.kick_member(participant.id) {
+                                            self.online_message = err;
+                                        }
+                                        ui.close_menu();
+                                    }
+                                });
+                                ui.horizontal_wrapped(|ui| {
+                                    ui.small(tr(lang, "Tool color:", "لون الأدوات:"));
+                                    for rgb in palette {
+                                        let swatch = egui::Color32::from_rgb(rgb[0], rgb[1], rgb[2]);
+                                        let (rect, click) = ui.allocate_exact_size(
+                                            egui::vec2(19.0, 19.0), egui::Sense::click());
+                                        ui.painter().rect_filled(rect, 3.0, swatch);
+                                        if participant.color == rgb {
+                                            ui.painter().rect_stroke(rect.expand(1.0), 3.0,
+                                                egui::Stroke::new(2.0, egui::Color32::WHITE));
+                                        }
+                                        if click.clicked() {
+                                            if let Err(err) = session.change_member_color(participant.id, rgb) {
+                                                self.online_message = err;
+                                            }
+                                        }
+                                    }
+                                });
+                                ui.separator();
+                            }
+                            ui.small(tr(lang, "The oldest joined guest becomes host when you leave normally. A sudden PC crash cannot guarantee a handoff.",
+                                "أول ضيف دخل الغرفة يستلم الهوست لما تخرج طبيعي. لو الجهاز فصل فجأة، النقل مش مضمون."));
+                        });
                         if ui.small_button(tr(lang, "Sync full project", "مزامنة المشروع بالكامل")).clicked() { resync = true; }
                     }
                     if ui.small_button(tr(lang, "Leave Room", "مغادرة الغرفة")).clicked() { leave = true; }
@@ -4029,7 +4194,7 @@ impl eframe::App for StickApp {
                 }
             }
             if leave {
-                if let Some(session) = self.online_session.take() { session.close(); }
+                self.leave_online_session();
                 self.online_participants.clear();
                 self.online_enabled = false;
                 self.online_discovery = None;
@@ -4090,10 +4255,11 @@ impl eframe::App for StickApp {
                     self.show_export_studio = true;
                 }
                 if ui.button(tr(lang, "Check for Updates", "تحديث البرنامج")).clicked() { self.check_for_updates(ctx.clone()); }
-                ui.hyperlink_to(
-                    tr(lang, "Feedback", "ابلغ عن مشكلة"),
-                    "https://github.com/KaniEGY/Stick/issues/new/choose",
-                );
+                if ui.link(egui::RichText::new(
+                    tr(lang, "Feedback", "ابلغ عن مشكلة"))
+                    .color(egui::Color32::from_rgb(80, 190, 255))).clicked() {
+                    self.show_feedback_dialog = true;
+                }
 
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     let (gr, gresp) = ui.allocate_exact_size(egui::vec2(34.0, 27.0), egui::Sense::click());

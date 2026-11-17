@@ -10,7 +10,7 @@ use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::hash::{BuildHasher, Hasher};
 use std::io::{self, Read, Write};
-use std::net::{Ipv4Addr, SocketAddr, TcpListener, TcpStream, UdpSocket};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpListener, TcpStream, UdpSocket};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
@@ -20,7 +20,7 @@ pub const TCP_PORT: u16 = 47554;
 const DISCOVERY_PORT: u16 = 47553;
 const DISCOVER_REQUEST: &[u8] = b"STICK_STUDIO_LAN_DISCOVER_V1";
 // Protocol v2 includes peer roster and LAN room codes; old v1 peers are rejected.
-const PROTOCOL: u16 = 3;
+const PROTOCOL: u16 = 4;
 const MAX_PACKET: usize = 8 * 1024 * 1024;
 const MAX_MEMBERS: usize = 12;
 const MAX_FRAME: usize = 20_000;
@@ -81,6 +81,9 @@ enum Packet {
     Snapshot { project: Box<AniProject> },
     Members { count: usize },
     Roster { participants: Vec<Participant> },
+    Kicked { reason: String },
+    HostHandoff { address: String, promote: bool, title: String, room_code: String,
+        limit: usize, project: Option<Box<AniProject>> },
     Goodbye,
 }
 
@@ -93,6 +96,8 @@ pub enum OnlineEvent {
     Snapshot(AniProject),
     Members(usize),
     Roster(Vec<Participant>),
+    HostHandoff { address: String, promote: bool, title: String, room_code: String,
+        limit: usize, project: Option<AniProject> },
     Notice(String),
 }
 
@@ -178,8 +183,9 @@ fn local_address() -> String {
 
 struct HostShared {
     running: Arc<AtomicBool>,
-    peers: Mutex<HashMap<u64, (mpsc::Sender<Packet>, Participant)>>,
+    peers: Mutex<HashMap<u64, (mpsc::Sender<Packet>, Participant, IpAddr)>>,
     local: Participant,
+    local_color: Mutex<[u8; 3]>,
     room_code: String,
     project: Mutex<AniProject>,
     /// Serialize application + broadcast so parallel peer threads cannot reorder edits.
@@ -196,7 +202,7 @@ impl HostShared {
     fn member_count(&self) -> usize { self.peers.lock().map(|p| p.len()+1).unwrap_or(1) }
     fn broadcast(&self, msg: &Packet, exclude: Option<u64>) {
         if let Ok(peers) = self.peers.lock() {
-            for (id, (tx,_)) in peers.iter() {
+            for (id, (tx, _, _)) in peers.iter() {
                 if Some(*id) != exclude { let _ = tx.send(clone_packet(msg)); }
             }
         }
@@ -206,8 +212,10 @@ impl HostShared {
         self.broadcast(&Packet::Members { count }, None);
         let _ = self.events.send(OnlineEvent::Members(count));
         let roster = self.peers.lock().ok().map(|peers| {
-            let mut list: Vec<Participant> = vec![self.local.clone()];
-            list.extend(peers.values().map(|(_, p)| p.clone()));
+            let mut local = self.local.clone();
+            if let Ok(color) = self.local_color.lock() { local.color = *color; }
+            let mut list: Vec<Participant> = vec![local];
+            list.extend(peers.values().map(|(_, p, _)| p.clone()));
             list.sort_by_key(|p| p.id);
             list
         }).unwrap_or_else(|| vec![self.local.clone()]);
@@ -223,17 +231,26 @@ fn clone_packet(packet: &Packet) -> Packet {
         Packet::Snapshot { project } => Packet::Snapshot { project: project.clone() },
         Packet::Members { count } => Packet::Members { count: *count },
         Packet::Roster { participants } => Packet::Roster { participants: participants.clone() },
+        Packet::Kicked { reason } => Packet::Kicked { reason: reason.clone() },
+        Packet::HostHandoff { address, promote, title, room_code, limit, project } =>
+            Packet::HostHandoff { address: address.clone(), promote: *promote, title: title.clone(),
+                room_code: room_code.clone(), limit: *limit, project: project.clone() },
         _ => Packet::Goodbye,
     }
 }
 
 fn writer_loop(mut stream: TcpStream, rx: mpsc::Receiver<Packet>, running: Arc<AtomicBool>) {
-    while running.load(Ordering::Relaxed) {
+    // Drain queued handoffs and kick notices before closing guest sockets.
+    loop {
         match rx.recv_timeout(Duration::from_millis(250)) {
             Ok(packet) => {
-                if packet_write(&mut stream, &packet).is_err() || matches!(packet, Packet::Goodbye) { break; }
+                let finish = matches!(packet,
+                    Packet::Goodbye | Packet::Kicked { .. } | Packet::HostHandoff { .. });
+                if packet_write(&mut stream, &packet).is_err() || finish { break; }
             }
-            Err(mpsc::RecvTimeoutError::Timeout) => {}
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                if !running.load(Ordering::Relaxed) { break; }
+            }
             Err(mpsc::RecvTimeoutError::Disconnected) => break,
         }
     }
@@ -263,6 +280,7 @@ fn host_peer(mut stream: TcpStream, host: Arc<HostShared>) -> io::Result<()> {
     }
     // Serialize admission and snapshot under the peer lock to enforce capacity.
     let id = host.peer_ids.fetch_add(1, Ordering::Relaxed);
+    let guest_ip = stream.peer_addr()?.ip();
     let (out_tx, out_rx) = mpsc::channel();
     {
         // Admission must share the edit ordering gate: Welcome cannot
@@ -276,15 +294,18 @@ fn host_peer(mut stream: TcpStream, host: Arc<HostShared>) -> io::Result<()> {
         // Snapshot and registration are ordered with subsequent host operations.
         let project = host.project.lock().map_err(|_| io::Error::other("Room project lock poisoned"))?.clone();
         packet_write(&mut stream, &Packet::Welcome { project: Box::new(public_project(project)) })?;
-        peers.insert(id, (out_tx, Participant { id, name, level: level.min(1000), color: member_color(id) }));
+        peers.insert(id, (out_tx, Participant { id, name, level: level.min(1000), color: member_color(id) }, guest_ip));
     }
     host.announce_members();
     let writer = stream.try_clone()?;
     let running = host.running.clone();
     thread::spawn(move || writer_loop(writer, out_rx, running));
     loop {
+        if !host.peers.lock().map(|peers| peers.contains_key(&id)).unwrap_or(false) { break; }
         match packet_read(&mut stream, &host.running) {
             Ok(Packet::Strokes { layer, frame, strokes }) => {
+                // A kicked guest must never sneak in one final queued edit.
+                if !host.peers.lock().map(|p| p.contains_key(&id)).unwrap_or(false) { break; }
                 let accepted = host.project.lock().map(|mut p|
                     apply_strokes(&mut p, layer, frame, strokes.clone())).unwrap_or(false);
                 if accepted {
@@ -293,6 +314,7 @@ fn host_peer(mut stream: TcpStream, host: Arc<HostShared>) -> io::Result<()> {
                 }
             }
             Ok(Packet::Edits { edits }) => {
+                if !host.peers.lock().map(|p| p.contains_key(&id)).unwrap_or(false) { break; }
                 // Acquiring the gate until after relay is essential: otherwise
                 // peer B could broadcast edit #2 ahead of peer A's edit #1.
                 let _order = host.edit_order.lock().map_err(|_| io::Error::other("Edit gate poisoned"))?;
@@ -307,7 +329,7 @@ fn host_peer(mut stream: TcpStream, host: Arc<HostShared>) -> io::Result<()> {
                     let state = host.project.lock().ok().map(|p| public_project(p.clone()));
                     if let Some(state) = state {
                         if let Ok(peers) = host.peers.lock() {
-                            if let Some((tx, _)) = peers.get(&id) {
+                            if let Some((tx, _, _)) = peers.get(&id) {
                                 let _ = tx.send(Packet::Snapshot { project: Box::new(state) });
                             }
                         }
@@ -331,6 +353,8 @@ pub struct OnlineSession {
     pub is_host: bool,
     pub members: usize,
     pub room_code: String,
+    /// Kept only in memory for a planned handoff/reconnection.
+    pub password: String,
     event_rx: mpsc::Receiver<OnlineEvent>,
     outgoing: Option<mpsc::Sender<Packet>>,
     host: Option<Arc<HostShared>>,
@@ -341,6 +365,12 @@ pub struct OnlineSession {
 
 impl OnlineSession {
     pub fn host_room(title: String, password: String, limit: usize, mode: OnlineMode, project: AniProject, nickname: String, level: u32) -> Result<Self, String> {
+        Self::host_room_with_code(title, password, limit, mode, project, nickname, level, None)
+    }
+
+    pub fn host_room_with_code(title: String, password: String, limit: usize,
+        mode: OnlineMode, project: AniProject, nickname: String, level: u32,
+        retained_code: Option<String>) -> Result<Self, String> {
         if title.trim().is_empty() || title.chars().count() > 48 { return Err("Room name must have 1–48 characters".into()); }
         if password.chars().count() > 128 { return Err("Password is too long".into()); }
         if !(2..=MAX_MEMBERS).contains(&limit) { return Err("Room capacity must be 2–12".into()); }
@@ -349,10 +379,13 @@ impl OnlineSession {
         listener.set_nonblocking(true).map_err(|e| e.to_string())?;
         let (event_tx, event_rx) = mpsc::channel();
         let running = Arc::new(AtomicBool::new(true));
-        let room_code = new_room_code();
+        let room_code = retained_code.filter(|code|
+            code.len() == 8 && code.bytes().all(|c| c.is_ascii_digit()))
+            .unwrap_or_else(new_room_code);
         let host = Arc::new(HostShared {
             running: running.clone(), peers: Mutex::new(HashMap::new()),
             local: Participant { id: 0, name: nickname, level, color: member_color(0) },
+            local_color: Mutex::new(member_color(0)),
             room_code: room_code.clone(),
             project: Mutex::new(project.clone()), edit_order: Mutex::new(()), password: password.clone(),
             title: title.clone(), mode, limit, events: event_tx,
@@ -398,31 +431,45 @@ impl OnlineSession {
             }
         });
         Ok(Self { title, mode, address: local_address(), is_host: true, members: 1,
-            room_code, event_rx, outgoing: None, host: Some(host), baseline: Mutex::new(Some(project)), running })
+            room_code, password, event_rx, outgoing: None, host: Some(host),
+            baseline: Mutex::new(Some(project)), running })
     }
 
     pub fn join_room(address: String, password: String, nickname: String, level: u32, mode: OnlineMode) -> Result<Self, String> {
+        Self::join_room_internal(address, password, nickname, level, mode, false)
+    }
+
+    /// A peer may receive the redirect before the newly elected host binds.
+    pub fn rejoin_after_handoff(address: String, password: String, nickname: String,
+        level: u32, mode: OnlineMode) -> Result<Self, String> {
+        Self::join_room_internal(address, password, nickname, level, mode, true)
+    }
+
+    fn join_room_internal(address: String, password: String, nickname: String,
+        level: u32, mode: OnlineMode, is_handoff: bool) -> Result<Self, String> {
         let address = if address.contains(':') { address } else { format!("{}:{}", address, TCP_PORT) };
         let addr: SocketAddr = address.parse().map_err(|_| "Enter a valid IPv4 address and port, such as 192.168.1.5:47554".to_string())?;
+        let guest_password = password.clone();
         let (event_tx, event_rx) = mpsc::channel();
         let (out_tx, out_rx) = mpsc::channel();
         let running = Arc::new(AtomicBool::new(true));
         let running_worker = running.clone();
         thread::spawn(move || {
             let result = (|| -> Result<(), String> {
-                let mut stream = TcpStream::connect_timeout(&addr, Duration::from_secs(5)).map_err(|e| {
-                    let mut message = format!("Connection failed: {}", e);
-                    if matches!(addr.ip(), std::net::IpAddr::V4(ip) if ip.is_private()) {
-                        message.push_str(
-                            ". This is a LAN-only address. For a friend on another network, use the host's 100.x Tailscale IP after connecting both devices through Tailscale."
-                        );
-                    } else {
-                        message.push_str(
-                            ". The host must keep the room open. Check access to TCP 47554, firewall rules, and that both devices can reach one another."
-                        );
+                let mut retry_count = 0;
+                let mut stream = loop {
+                    match TcpStream::connect_timeout(&addr,
+                        if is_handoff { Duration::from_millis(500) } else { Duration::from_secs(5) }) {
+                        Ok(stream) => break stream,
+                        Err(_) if is_handoff && retry_count < 25 => {
+                            retry_count += 1;
+                            thread::sleep(Duration::from_millis(220));
+                        }
+                        Err(e) => return Err(format!("Connection failed: {}. Verify that the new host can accept TCP 47554 (LAN/Tailscale/firewall).", e)),
                     }
-                    message
-                })?;
+                };
+                // All connection attempts use the intended address, never
+                // a public proxy or an untrusted third-party room directory.
                 stream.set_read_timeout(Some(Duration::from_millis(300))).map_err(|e| e.to_string())?;
                 stream.set_write_timeout(Some(Duration::from_secs(3))).map_err(|e| e.to_string())?;
                 packet_write(&mut stream, &Packet::Hello { name: nickname, level: level.min(1000), protocol: PROTOCOL, mode }).map_err(|e| e.to_string())?;
@@ -449,6 +496,14 @@ impl OnlineSession {
                         Ok(Packet::Edits { edits }) => { let _ = event_tx.send(OnlineEvent::Edits(edits)); }
                         Ok(Packet::Members { count }) => { let _ = event_tx.send(OnlineEvent::Members(count)); }
                         Ok(Packet::Roster { participants }) => { let _ = event_tx.send(OnlineEvent::Roster(participants)); }
+                        Ok(Packet::Kicked { reason }) => return Err(reason),
+                        Ok(Packet::HostHandoff { address, promote, title, room_code, limit, project }) => {
+                            let _ = event_tx.send(OnlineEvent::HostHandoff {
+                                address, promote, title, room_code, limit, project: project.map(|p| *p),
+                            });
+                            running_worker.store(false, Ordering::Relaxed);
+                            return Ok(());
+                        }
                         Ok(Packet::Goodbye) => break,
                         Err(e) => return Err(format!("Lost connection: {}", e)),
                         _ => {}
@@ -461,7 +516,8 @@ impl OnlineSession {
             }
         });
         Ok(Self { title: String::new(), mode, address, is_host: false, members: 1,
-            room_code: String::new(), event_rx, outgoing: Some(out_tx), host: None, baseline: Mutex::new(None), running })
+            room_code: String::new(), password: guest_password, event_rx, outgoing: Some(out_tx),
+            host: None, baseline: Mutex::new(None), running })
     }
 
     pub fn events(&self) -> Vec<OnlineEvent> { self.event_rx.try_iter().collect() }
@@ -529,6 +585,63 @@ impl OnlineSession {
             host.broadcast(&Packet::Snapshot { project: Box::new(public_project(project)) }, None);
         }
     }
+    /// First admitted guest inherits this room on a graceful host exit.
+    /// A crashed/offline old host cannot send this transfer without a relay.
+    pub fn handoff_before_leave(&self) -> Result<bool, String> {
+        let Some(host) = &self.host else { return Ok(false); };
+        let _gate = host.edit_order.lock().map_err(|_| "Room edit gate poisoned")?;
+        let peers = host.peers.lock().map_err(|_| "Room participants unavailable")?;
+        let Some((&successor_id, (_, _, successor_ip))) =
+            peers.iter().min_by_key(|(id, _)| *id) else { return Ok(false); };
+        let address = format!("{}:{}", successor_ip, TCP_PORT);
+        // A host must transfer its authoritative document, including remote
+        // edits already accepted by the network worker.
+        let snapshot = host.project.lock().map_err(|_| "Room project unavailable")?
+            .clone();
+        let snapshot = public_project(snapshot);
+        let mut transfers = Vec::new();
+        for (&id, (tx, _, _)) in peers.iter() {
+            let promote = id == successor_id;
+            let packet = Packet::HostHandoff {
+                address: address.clone(), promote,
+                title: self.title.clone(), room_code: self.room_code.clone(),
+                limit: host.limit,
+                project: if promote { Some(Box::new(snapshot.clone())) } else { None },
+            };
+            if serde_json::to_vec(&packet).map_err(|e| e.to_string())?.len() > MAX_PACKET {
+                return Err("Room project is too large to transfer the host safely".into());
+            }
+            transfers.push((tx.clone(), packet));
+        }
+        for (tx, packet) in transfers {
+            tx.send(packet).map_err(|_| "A participant disconnected during host transfer")?;
+        }
+        Ok(true)
+    }
+
+    pub fn kick_member(&self, id: u64) -> Result<(), String> {
+        if id == 0 { return Err("Host cannot kick itself".into()); }
+        let host = self.host.as_ref().ok_or("Only the host can kick members")?;
+        let (sender, _, _) = host.peers.lock().map_err(|_| "Room participant lock failed")?
+            .remove(&id).ok_or("Member already disconnected")?;
+        let _ = sender.send(Packet::Kicked { reason: "The room host removed you".into() });
+        host.announce_members();
+        Ok(())
+    }
+
+    pub fn change_member_color(&self, id: u64, color: [u8; 3]) -> Result<(), String> {
+        let host = self.host.as_ref().ok_or("Only the host can change member colors")?;
+        if id == 0 {
+            *host.local_color.lock().map_err(|_| "Host color lock failed")? = color;
+        } else {
+            let mut peers = host.peers.lock().map_err(|_| "Room participant lock failed")?;
+            let (_, member, _) = peers.get_mut(&id).ok_or("Member already disconnected")?;
+            member.color = color;
+        }
+        host.announce_members();
+        Ok(())
+    }
+
     pub fn close(&self) {
         if let Some(tx) = &self.outgoing { let _ = tx.send(Packet::Goodbye); }
         self.running.store(false, Ordering::Relaxed);
@@ -721,11 +834,73 @@ mod tests {
         assert_eq!(host_document.layers.len(), 2);
         assert_eq!(host_document.layers[0].name, "Guest's new layer");
         assert!(host_document.layers[0].keyframes.contains_key(&4));
+
+        // Host-only moderation propagates through the live roster.
+        host.change_member_color(1, [247, 115, 87]).expect("host recolors first guest");
+        let deadline = std::time::Instant::now() + Duration::from_secs(4);
+        let mut color_received = false;
+        while std::time::Instant::now() < deadline {
+            for event in guest.events() {
+                if let OnlineEvent::Roster(members) = event {
+                    if members.iter().any(|p| p.name == "Guest" && p.color == [247,115,87]) {
+                        color_received = true;
+                    }
+                }
+            }
+            if color_received { break; }
+            thread::sleep(Duration::from_millis(25));
+        }
+        assert!(color_received, "host color edits must reach the guest");
+
+        // The earliest guest is elected. Real takeover/binding requires
+        // separate Windows PCs because both instances here use TCP 47554.
+        assert!(host.handoff_before_leave().expect("handoff should queue"));
+        host.close();
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        let mut first_promoted = false;
+        let mut second_redirected = false;
+        while std::time::Instant::now() < deadline {
+            for event in guest.events() {
+                if let OnlineEvent::HostHandoff { promote, project, room_code, .. } = event {
+                    assert!(promote, "earliest guest should become the host");
+                    assert!(project.is_some());
+                    assert_eq!(room_code, host.room_code);
+                    first_promoted = true;
+                }
+            }
+            for event in guest_two.events() {
+                if let OnlineEvent::HostHandoff { promote, project, .. } = event {
+                    assert!(!promote);
+                    assert!(project.is_none());
+                    second_redirected = true;
+                }
+            }
+            if first_promoted && second_redirected { break; }
+            thread::sleep(Duration::from_millis(25));
+        }
+        assert!(first_promoted && second_redirected,
+            "all connected peers must receive the controlled host transfer");
         guest.close();
         guest_two.close();
-        host.close();
     }
 
+    #[test]
+    fn host_transfer_packets_serialize_with_room_identity() {
+        let packet = Packet::HostHandoff { address: "100.77.8.9:47554".into(),
+            promote: true, title: "Artist room".into(), room_code: "12345678".into(),
+            limit: 8, project: Some(Box::new(AniProject::default())) };
+        let wire = serde_json::to_vec(&packet).unwrap();
+        let decoded: Packet = serde_json::from_slice(&wire).unwrap();
+        match decoded {
+            Packet::HostHandoff { address, promote, room_code, project, .. } => {
+                assert_eq!(address, "100.77.8.9:47554");
+                assert!(promote);
+                assert_eq!(room_code, "12345678");
+                assert!(project.is_some());
+            }
+            _ => panic!("Handoff should deserialize"),
+        }
+    }
     #[test]
     fn packet_roundtrip() {
         let packet = Packet::Members { count: 7 };

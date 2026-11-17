@@ -14,6 +14,11 @@
 - **Known boundaries:** bucket fill operates on recognized closed stroke contours (now with improved near-closure tolerance), not arbitrary raster flood fill. Imported artwork/text still needs further parity tests for every transform. No Krita GPL code is copied into Stick.
 
 ### What's new
+- **Download progress:** verified GitHub releases now show a real download progress bar, completed percent, and transferred/total megabytes before SHA-256 verification and restart.
+- **Top-bar feedback:** the blue Feedback label now opens the same in-app Instagram / GitHub report dialog as the launcher.
+- **Support modal:** improved its layout, included the developer's requested humorous optional-support message, and retained the original InstaPay link.
+- **Online host moderation:** room host can kick members and change each member's cursor/tool color; roster colors relay to all clients.
+- **Graceful host handoff (protocol v4):** the oldest admitted guest can take over the room and remaining clients reconnect when the current host leaves normally. Unexpected crashes, unreachable new hosts and full multi-PC QA remain unresolved; see STICK_ONLINE_GUIDE.md. This update is not a worldwide room directory.
 - **Artist cloud profile continuity:** opt-in automatic profile-only Google Drive sync for XP, displayed artist name, progress and a bounded 256px avatar PNG; the local avatar path is never uploaded. Restoring a profile refreshes the visible avatar. Requires app-owner OAuth setup and actual Windows sign-in validation.
 - **Settings discovery:** main top-right gear is larger, amber and high-contrast with a tooltip.
 - **Online test stability:** Windows integration tests run serially to prevent hard-coded local TCP-port contention; this does not establish worldwide room discovery or internet-wide collaboration.
@@ -106,6 +111,11 @@
 - **القيود الحالية:** الدلو بيلون المسارات المقفولة اللي بيتعرف عليها، ولسه مش Flood Fill كامل على أي سطح Raster. لم يتم نسخ أكواد Krita الخاضعة لترخيص GPL.
 
 ### إيه الجديد؟
+- **شريط التحميل:** النسبة المئوية وحجم الملف المحمّل أثناء تحديث Stick، ثم التحقق من سلامة الملف قبل التثبيت.
+- **الإبلاغ:** زر «ابلغ عن مشكلة» فوق بيفتح نفس نافذة GitHub وInstagram الموجودة في الشاشة الرئيسية.
+- **الدعم:** شكل نافذة القلب الأصفر اتنظّم ونص الدعم اتغيّر حسب طلب المطوّر، مع الحفاظ على رابط InstaPay.
+- **إدارة الهوست:** طرد أعضاء الغرفة وتغيير لونهم ولون مؤشر أدواتهم من قائمة إدارة الغرفة، مع مزامنة الألوان.
+- **نقل الهوست عند المغادرة الطبيعية:** عند خروج صاحب الروم، أول ضيف دخل في جلسة الهوست الحالية يقدر يستلم السيرفر، وباقي الأعضاء يعيدوا الاتصال تلقائيًا عبر LAN أو Tailscale. البروتوكول بقى v4. ده مش حل لانقطاع الكهرباء المفاجئ أو غياب الاتصال بالهوست الجديد، ولسه محتاج اختبار على أكثر من جهاز.
 - **الحفظ السحابي لملف الفنان:** المزامنة الاختيارية بقت ترفع مستوى الفنان والاسم والتقدم والصورة الشخصية المصغرة بشكل مستقل عن حفظ المشروع. الصورة بتتخزن كصورة صغيرة مش كمسار من الجهاز، وتظهر عند الاستعادة. لازم إعداد OAuth واختبار جوجل فعليًا.
 - **ترس الإعدادات:** أكبر ولونه ذهبي واضح في أعلى اليمين، مع شرح عند الوقوف عليه.
 - **اختبارات الأونلاين:** تشغيل اختبارات الاتصال بالتتابع لتجنب تعارض المنفذ المحلي. كود الـ8 أرقام ما زال مش خدمة غرف عالمية.
