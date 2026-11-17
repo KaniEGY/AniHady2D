@@ -3,7 +3,7 @@
 //! This does not claim to be a raster flood-fill engine. Fully arbitrary
 //! painted pixel boundaries need a raster layer and should be implemented
 //! separately so old projects remain compatible and the app stays light.
-use crate::project::{Stroke, StrokePoint};
+use crate::project::{BrushTipShape, KritaBrushPreset, Stroke, StrokePoint};
 
 fn distance_sq_to_segment(x: f32, y: f32, a: &StrokePoint, b: &StrokePoint) -> f32 {
     let vx = b.x - a.x;
@@ -68,6 +68,115 @@ pub fn find_topmost_shape(strokes: &[Stroke], x: f32, y: f32) -> Option<usize> {
     })
 }
 
+/// Trace near-touching stroke endpoints to recover closed contours drawn with
+/// several pen strokes. This remains vector-contour fill, not pixel flood fill.
+/// Click location must lie inside the recovered polygon.
+pub fn linked_closed_contour(strokes: &[Stroke], x: f32, y: f32) -> Option<Vec<StrokePoint>> {
+    if strokes.is_empty() || strokes.len() > 128 { return None; }
+    let mut smallest: Option<(f32, Vec<StrokePoint>)> = None;
+
+    fn dist_sq(a: &StrokePoint, b: &StrokePoint) -> f32 {
+        (a.x-b.x)*(a.x-b.x)+(a.y-b.y)*(a.y-b.y)
+    }
+
+    let valid = |s: &Stroke| s.points.len() >= 2 && s.points.len() <= 8_192
+        && s.points.iter().all(|p| p.x.is_finite() && p.y.is_finite())
+        && s.fill_color.is_none();
+
+    for (start_index, start) in strokes.iter().enumerate() {
+        if !valid(start) { continue; }
+        for start_reversed in [false,true] {
+            let mut assembled = start.points.clone();
+            if start_reversed { assembled.reverse(); }
+            let origin = assembled[0].clone();
+            let mut used = vec![false; strokes.len()];
+            used[start_index] = true;
+            let mut count = 1usize;
+            let mut width = start.base_width.abs();
+
+            // A small cap prevents pathological branching or memory growth.
+            while count <= 20 && assembled.len() <= 8192 {
+                let end = assembled.last().unwrap().clone();
+                let tolerance = (width * 2.5).clamp(16.0, 30.0);
+                if count >= 2 && dist_sq(&end, &origin) <= tolerance*tolerance {
+                    let mut closed = assembled.clone();
+                    closed.push(origin.clone());
+                    let trial = Stroke {
+                        points: closed.clone(),
+                        color: [0,0,0,0],
+                        fill_color: None,
+                        base_width: 1.0,
+                        is_vector: true,
+                        brush_preset: KritaBrushPreset::GPenInk,
+                        opacity: 1.0,
+                        brush_texture_id: None,
+                        tip_shape: BrushTipShape::Round,
+                    };
+                    if contour_contains(&trial, x, y) {
+                        let area: f32 = closed.windows(2)
+                            .map(|pair| pair[0].x*pair[1].y-pair[1].x*pair[0].y)
+                            .sum::<f32>().abs() * 0.5;
+                        if area > 25.0 && smallest.as_ref().is_none_or(|(old,_)| area < *old) {
+                            smallest = Some((area,closed));
+                        }
+                    }
+                    break;
+                }
+                let mut best: Option<(usize,bool,f32)> = None;
+                for (idx, stroke) in strokes.iter().enumerate() {
+                    if used[idx] || !valid(stroke) { continue; }
+                    let local_tolerance = tolerance.max(
+                        (stroke.base_width.abs() * 2.5).clamp(16.0,30.0));
+                    let first_d = dist_sq(&end,&stroke.points[0]);
+                    let last_d = dist_sq(&end,stroke.points.last().unwrap());
+                    for (reversed,d) in [(false,first_d),(true,last_d)] {
+                        if d <= local_tolerance * local_tolerance &&
+                            best.is_none_or(|(_,_,prev)| d < prev) {
+                            best = Some((idx,reversed,d));
+                        }
+                    }
+                }
+                let Some((next_index,reversed,_)) = best else { break; };
+                used[next_index] = true;
+                count += 1;
+                let next = &strokes[next_index];
+                width = width.max(next.base_width.abs());
+                if reversed {
+                    assembled.extend(next.points.iter().rev().skip(1).cloned());
+                } else {
+                    assembled.extend(next.points.iter().skip(1).cloned());
+                }
+            }
+        }
+    }
+    smallest.map(|(_,p)| p)
+}
+
+pub fn can_fill_contour(strokes: &[Stroke], x: f32, y: f32) -> bool {
+    find_topmost_shape(strokes, x, y).is_some() ||
+        linked_closed_contour(strokes, x, y).is_some()
+}
+
+pub fn apply_contour_fill(strokes: &mut Vec<Stroke>, x: f32, y: f32, color: [u8; 4]) -> bool {
+    if apply_shape_fill(strokes, x, y, color) { return true; }
+    if let Some(points) = linked_closed_contour(strokes, x, y) {
+        // Insert underneath linework so the original contours stay visible.
+        strokes.insert(0, Stroke {
+            points,
+            color: [0,0,0,0],
+            fill_color: Some(color),
+            base_width: 1.0,
+            is_vector: true,
+            brush_preset: KritaBrushPreset::GPenInk,
+            opacity: 1.0,
+            brush_texture_id: None,
+            tip_shape: BrushTipShape::Round,
+        });
+        return true;
+    }
+    false
+}
+
 pub fn apply_shape_fill(strokes: &mut [Stroke], x: f32, y: f32, color: [u8; 4]) -> bool {
     if let Some(index) = find_topmost_shape(strokes, x, y) {
         strokes[index].fill_color = Some(color);
@@ -126,6 +235,32 @@ mod tests {
             (10.0, 50.0)]);
         ring.is_vector = false;
         assert!(!contour_contains(&ring, 30.0, 30.0));
+    }
+
+    #[test]
+    fn bucket_joins_multiple_touching_brush_strokes_around_a_region() {
+        let mut segments = vec![
+            shape(&[(10.0,10.0),(60.0,10.0)]),
+            shape(&[(60.0,10.0),(60.0,60.0)]),
+            shape(&[(60.0,60.0),(10.0,60.0)]),
+            shape(&[(10.0,60.0),(10.0,10.0)]),
+        ];
+        assert!(can_fill_contour(&segments, 35.0,35.0));
+        assert!(apply_contour_fill(&mut segments,35.0,35.0,[200,20,40,255]));
+        assert_eq!(segments.len(),5);
+        assert_eq!(segments[0].fill_color,Some([200,20,40,255]));
+        assert_eq!(segments[0].color[3],0);
+    }
+
+    #[test]
+    fn disconnected_open_strokes_do_not_create_a_fill() {
+        let mut segments = vec![
+            shape(&[(10.0,10.0),(60.0,10.0)]),
+            shape(&[(60.0,10.0),(60.0,60.0)]),
+            shape(&[(60.0,60.0),(10.0,60.0)]),
+        ];
+        assert!(!can_fill_contour(&segments,35.0,35.0));
+        assert!(!apply_contour_fill(&mut segments,35.0,35.0,[200,20,40,255]));
     }
 
     #[test]
