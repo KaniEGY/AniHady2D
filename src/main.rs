@@ -371,6 +371,22 @@ struct AppConfig {
     sound_effects_enabled: bool,
     #[serde(default)]
     show_grid: bool,
+    #[serde(default)]
+    perspective_mode: u8,
+    #[serde(default = "default_perspective_spacing")]
+    perspective_spacing: f32,
+    #[serde(default = "default_perspective_width")]
+    perspective_line_width: f32,
+    #[serde(default = "default_perspective_color")]
+    perspective_color: [u8; 4],
+    #[serde(default = "default_perspective_opacity")]
+    perspective_opacity: f32,
+    #[serde(default = "default_vanishing_x")]
+    vanishing_x: f32,
+    #[serde(default = "default_vanishing_y")]
+    vanishing_y: f32,
+    #[serde(default = "default_timeline_height")]
+    timeline_dock_height: f32,
     #[serde(default = "default_true_val")]
     show_top_bar: bool,
     #[serde(default = "default_true_val")]
@@ -428,6 +444,13 @@ struct AppConfig {
 }
 
 fn default_true_val() -> bool { true }
+fn default_perspective_spacing() -> f32 { 40.0 }
+fn default_perspective_width() -> f32 { 1.0 }
+fn default_perspective_color() -> [u8;4] { [58, 154, 227, 255] }
+fn default_perspective_opacity() -> f32 { 0.32 }
+fn default_vanishing_x() -> f32 { 0.5 }
+fn default_vanishing_y() -> f32 { 0.30 }
+fn default_timeline_height() -> f32 { 310.0 }
 fn default_grid_size() -> f32 { 40.0 }
 fn default_autosave_mins() -> u64 { 5 }
 fn default_tl_bg() -> [u8; 4] { [28, 29, 34, 255] }
@@ -452,6 +475,14 @@ impl Default for AppConfig {
             recent_projects: Vec::new(),
             sound_effects_enabled: true,
             show_grid: false,
+            perspective_mode: 0,
+            perspective_spacing: default_perspective_spacing(),
+            perspective_line_width: default_perspective_width(),
+            perspective_color: default_perspective_color(),
+            perspective_opacity: default_perspective_opacity(),
+            vanishing_x: default_vanishing_x(),
+            vanishing_y: default_vanishing_y(),
+            timeline_dock_height: default_timeline_height(),
             show_top_bar: true,
             show_left_dock: true,
             show_right_dock: true,
@@ -2951,6 +2982,7 @@ impl eframe::App for StickApp {
                     ui.selectable_value(&mut self.settings_tab, 3, tr(lang, "Colors & Timeline", "ألوان وتايم لاين"));
                     ui.selectable_value(&mut self.settings_tab, 4, tr(lang, "Personalization", "التخصيص"));
                     ui.selectable_value(&mut self.settings_tab, 5, tr(lang, "Previous Versions", "النسخة الاحتياطية"));
+                    ui.selectable_value(&mut self.settings_tab, 6, tr(lang, "Perspective", "المنظور"));
                 });
                 ui.separator();
                 match self.settings_tab {
@@ -3215,6 +3247,46 @@ impl eframe::App for StickApp {
                                 }
                             });
                         }
+                    }
+                    6 => {
+                        ui.heading(tr(lang, "Drawing guides / Perspective", "أدوات المنظور وخطوط الإرشاد"));
+                        ui.small(tr(lang,
+                            "These are non-destructive on-screen guides. They follow canvas rotation and zoom and do not become part of exported artwork.",
+                            "الخطوط دي إرشادية على الشاشة فقط، بتتحرك مع الكانفا ومش بتدخل في ملف الرسم أو التصدير."));
+                        ui.horizontal_wrapped(|ui| {
+                            ui.selectable_value(&mut self.config.perspective_mode, 0, tr(lang, "Off", "إيقاف"));
+                            ui.selectable_value(&mut self.config.perspective_mode, 1, tr(lang, "Square grid", "مربعات"));
+                            ui.selectable_value(&mut self.config.perspective_mode, 2, tr(lang, "Parallel lines", "خطوط متساوية"));
+                            ui.selectable_value(&mut self.config.perspective_mode, 3, tr(lang, "1-point perspective", "منظور بنقطة تلاشي"));
+                        });
+                        ui.separator();
+                        let mut changed = false;
+                        changed |= ui.add(egui::Slider::new(&mut self.config.perspective_spacing, 8.0..=300.0)
+                            .text(tr(lang, "Grid size / line spacing", "حجم المربعات / مسافة الخطوط"))).changed();
+                        changed |= ui.add(egui::Slider::new(&mut self.config.perspective_line_width, 0.5..=5.0)
+                            .text(tr(lang, "Line thickness", "سمك الخط"))).changed();
+                        changed |= ui.add(egui::Slider::new(&mut self.config.perspective_opacity, 0.02..=1.0)
+                            .text(tr(lang, "Opacity", "الشفافية"))).changed();
+                        ui.horizontal(|ui| {
+                            ui.label(tr(lang, "Guide color", "لون الخطوط"));
+                            changed |= ui.color_edit_button_srgba_unmultiplied(&mut self.config.perspective_color).changed();
+                        });
+                        if self.config.perspective_mode == 3 {
+                            changed |= ui.add(egui::Slider::new(&mut self.config.vanishing_x, 0.05..=0.95)
+                                .text(tr(lang, "Vanishing X", "نقطة التلاشي أفقي"))).changed();
+                            changed |= ui.add(egui::Slider::new(&mut self.config.vanishing_y, 0.05..=0.85)
+                                .text(tr(lang, "Vanishing Y", "نقطة التلاشي رأسي"))).changed();
+                        }
+                        if ui.button(tr(lang, "Reset perspective settings", "رجّع إعدادات المنظور الأصلية")).clicked() {
+                            self.config.perspective_spacing = default_perspective_spacing();
+                            self.config.perspective_line_width = default_perspective_width();
+                            self.config.perspective_color = default_perspective_color();
+                            self.config.perspective_opacity = default_perspective_opacity();
+                            self.config.vanishing_x = default_vanishing_x();
+                            self.config.vanishing_y = default_vanishing_y();
+                            changed = true;
+                        }
+                        if changed { self.config.save(); }
                     }
                     _ => {}
                 }
@@ -3827,7 +3899,9 @@ impl eframe::App for StickApp {
         let mut frame_menu_action: Option<(usize, usize, timeline_ops::FrameAction)> = None;
         // شريط التايم لاين السفلي في وضع الأنيميشن
         if self.workspace_mode == WorkspaceMode::AnimationStudio && self.config.show_timeline_dock {
-            egui::TopBottomPanel::bottom("timeline_panel").resizable(true).default_height(295.0).show(ctx, |ui| {
+            let timeline_result = egui::TopBottomPanel::bottom("timeline_panel").resizable(true)
+                .default_height(self.config.timeline_dock_height.clamp(140.0, 850.0))
+                .min_height(120.0).show(ctx, |ui| {
                 let bg = self.config.timeline_bg_color;
                 ui.painter().rect_filled(ui.max_rect(), 0.0,
                     egui::Color32::from_rgb(bg[0],bg[1],bg[2]));
@@ -3885,6 +3959,10 @@ impl eframe::App for StickApp {
                     ui.label(tr(lang, "Timeline zoom", "تكبير التايم لاين"));
                     ui.add(egui::Slider::new(&mut self.timeline_cell_width, 16.0..=84.0)
                         .show_value(false));
+                    if ui.add(egui::Slider::new(&mut self.config.timeline_dock_height, 140.0..=850.0)
+                        .text(tr(lang, "Panel height", "ارتفاع التايم لاين"))).changed() {
+                        self.config.save();
+                    }
                     if ui.small_button(tr(lang, "+24 frames", "زوّد 24 فريم")).clicked() {
                         self.save_undo_state();
                         self.timeline_length = self.timeline_length.saturating_add(24).min(20_000);
@@ -4011,6 +4089,14 @@ impl eframe::App for StickApp {
                     }
                 });
             });
+            // Preserve the height chosen by dragging the top border, not just the slider.
+            let actual = timeline_result.response.rect.height();
+            if ctx.input(|i| i.pointer.primary_down() && i.pointer.hover_pos()
+                    .is_some_and(|p| (p.y - timeline_result.response.rect.top()).abs() <= 13.0))
+                && (actual - self.config.timeline_dock_height).abs() > 3.0 {
+                self.config.timeline_dock_height = actual.clamp(140.0, 850.0);
+                self.config.save();
+            }
         }
 
         if self.show_timeline_settings && self.workspace_mode == WorkspaceMode::AnimationStudio {
@@ -4181,6 +4267,66 @@ impl eframe::App for StickApp {
                 egui::Color32::from_rgba_unmultiplied(bg[0], bg[1], bg[2], bg[3]),
                 egui::Stroke::NONE,
             ));
+
+            // Non-destructive drawing guides; composed in stage coordinates and transformed
+            // with the actual paper. They do not affect project strokes or exports.
+            if self.config.perspective_mode > 0 {
+                let step = self.config.perspective_spacing.clamp(8.0, 300.0);
+                let lw = self.config.perspective_line_width.clamp(0.5, 5.0);
+                let gc = self.config.perspective_color;
+                let alpha = ((gc[3] as f32) * self.config.perspective_opacity.clamp(0.02, 1.0))
+                    .round() as u8;
+                let paint = egui::Stroke::new(lw,
+                    egui::Color32::from_rgba_unmultiplied(gc[0], gc[1], gc[2], alpha));
+                match self.config.perspective_mode {
+                    1 => {
+                        for n in 1..=((stage_w / step).ceil() as usize).min(500) {
+                            let x = n as f32 * step;
+                            if x < stage_w {
+                                painter.line_segment([to_screen(egui::pos2(x, 0.0)),
+                                    to_screen(egui::pos2(x, stage_h))], paint);
+                            }
+                        }
+                        for n in 1..=((stage_h / step).ceil() as usize).min(500) {
+                            let y = n as f32 * step;
+                            if y < stage_h {
+                                painter.line_segment([to_screen(egui::pos2(0.0, y)),
+                                    to_screen(egui::pos2(stage_w, y))], paint);
+                            }
+                        }
+                    }
+                    2 => {
+                        for n in 1..=((stage_h / step).ceil() as usize).min(500) {
+                            let y = n as f32 * step;
+                            if y < stage_h {
+                                painter.line_segment([to_screen(egui::pos2(0.0, y)),
+                                    to_screen(egui::pos2(stage_w, y))], paint);
+                            }
+                        }
+                    }
+                    3 => {
+                        let vp = egui::pos2(stage_w * self.config.vanishing_x.clamp(0.05,0.95),
+                            stage_h * self.config.vanishing_y.clamp(0.05,0.85));
+                        let rays = ((stage_w / step).ceil() as usize).clamp(4, 48);
+                        for n in 0..=rays {
+                            let x = stage_w * n as f32 / rays as f32;
+                            painter.line_segment([to_screen(vp), to_screen(egui::pos2(x, stage_h))], paint);
+                        }
+                        let lines = ((stage_h / step).ceil() as usize).clamp(2, 36);
+                        for n in 1..=lines {
+                            let fraction = n as f32 / (lines + 1) as f32;
+                            let depth = fraction * fraction;
+                            let y = vp.y + (stage_h - vp.y) * depth;
+                            let left = vp.x * (1.0 - depth);
+                            let right = vp.x + (stage_w - vp.x) * depth;
+                            painter.line_segment([to_screen(egui::pos2(left, y)),
+                                to_screen(egui::pos2(right, y))], paint);
+                        }
+                        painter.circle_stroke(to_screen(vp), 4.0, paint);
+                    }
+                    _ => {}
+                }
+            }
 
             if !space_down && !alt_down && self.active_tool_ui != ActiveToolUI::HandCanvas && is_over_canvas && !any_modal_open && !self.is_active_layer_locked() {
                 if let Some(pos) = pointer_pos {
