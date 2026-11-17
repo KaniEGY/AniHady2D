@@ -1,6 +1,6 @@
 # Stick Online — LAN-first collaboration (preview)
 
-Stick Online extends the existing Drawing and Animation editors. It does not require a developer-operated server: one participant hosts a room using their own PC. **This preview is not a complete multi-user editor.**
+Stick Online extends the existing Drawing and Animation editors. It does not require a developer-operated server: one participant hosts a room using their own PC. **The current protocol (v3) synchronizes document-level edits across LAN participants. It is still a preview until two-PC Windows GUI acceptance testing has passed.**
 
 ## How to start
 
@@ -10,7 +10,7 @@ Stick Online extends the existing Drawing and Animation editors. It does not req
 4. Hosting: name your room, optionally provide a unique password, and select a maximum of 2–12 total participants (including the host).
 5. Joining on the same LAN: press **Refresh rooms**, select the room from the list and supply its password if necessary.
 6. If automatic discovery is blocked, enter the host's **LAN IPv4:47554**, for example **192.168.1.24:47554**, then select Join.
-7. In the editor, the green Online status bar displays the room and current participant count. The host can explicitly send a full project snapshot using **Sync full project**. **Leave Room** disconnects without deleting your local project.
+7. In the editor, the green Online status bar displays the room and current participant count. All participants automatically send drawing, erasing, fill, layer, frame, text and project edits through the host. **Sync full project** is an exceptional recovery action; the host remains the authority for editing order. **Leave Room** disconnects without deleting your local project.
 
 ## Network requirements
 
@@ -50,3 +50,12 @@ The GitHub Actions unit test and release build checks do not replace this two-PC
 - Host and guest advertise display names and local, unverified progression levels. Each connected guest is assigned a distinct UI accent from the per-room palette. This is NOT cloud identity, anti-cheat or Google account linking.
 - A new room now hosts the currently open project rather than wiping it to a blank canvas. Save/Export local copies via the normal Stick file actions. Other operations besides committed strokes are NOT fully synchronized.
 - Protocol v2 is intentionally incompatible with older Stick online beta builds. All participants must upgrade to this version.
+
+## v3 document edit synchronization
+
+- The PC that creates the room is the **actual TCP host/server**; the UI explains this before creation. Guests connect to it over LAN or directly by accessible IPv4.
+- The host serializes incremental project edits and broadcasts accepted changes to all other participants. Edits cover strokes, bucket fill, erasing, layer create/delete/reorder/visibility, keyframes and frame contents, text and document-level settings.
+- Concurrent edits targeting different frames/fields can merge. Simultaneous edits targeting the same array position (e.g., deleting a layer while another artist edits its strokes) can still conflict. Ask the host to send **Sync full project** if clients diverge.
+- Files referenced by an absolute path (external image/audio) are **not transferred**. Their paths are suppressed from outgoing project edits and snapshots; the editor needs a future asset-transfer design for shared media.
+- Protocol v3 rejects older v1/v2 clients. All participants must install a matching build. UDP discovery works within the same reachable LAN; room code is a locator for discovered rooms, not an Internet invite or authentication token.
+- This release is **not** an end-to-end encrypted multi-user service, NAT traversal or a worldwide searchable room directory.
