@@ -3912,10 +3912,17 @@ impl eframe::App for StickApp {
                         let oauth_ready = cloud_sync::oauth_client_is_configured(
                             self.config.cloud_google_client_id.trim());
                         if !oauth_ready {
+                            // Short lines keep legacy Arabic visual shaping from
+                            // being corrupted by line wrapping in the settings tab.
                             ui.colored_label(egui::Color32::from_rgb(255,194,88),
-                                tr(lang,
-                                    "Google login is not configured yet. The developer must create a Desktop OAuth client, enable Google Drive API, and set STICK_GOOGLE_CLIENT_ID in GitHub Actions. You can enter the public Desktop Client ID below.",
-                                    "تسجيل جوجل لسه محتاج إعداد من المطوّر: إنشاء OAuth Desktop، وتفعيل Google Drive API، وإضافة STICK_GOOGLE_CLIENT_ID في GitHub Actions. ممكن تحط الـ Client ID العام في الخانة تحت."));
+                                tr(lang, "Google sign-in is not configured for this build.",
+                                    "تسجيل الدخول بجوجل لسه مش متفعّل في النسخة دي."));
+                            ui.small(tr(lang,
+                                "Developer: enable Drive API and configure Desktop OAuth in Google Cloud.",
+                                "المطوّر لازم يفعّل Google Drive API ويجهّز OAuth Desktop."));
+                            ui.small(tr(lang,
+                                "Then set STICK_GOOGLE_CLIENT_ID in GitHub Actions and publish a new build.",
+                                "وبعدين يضيف STICK_GOOGLE_CLIENT_ID في GitHub وينشر نسخة جديدة."));
                         }
                         ui.collapsing(tr(lang,"Developer OAuth setup","إعداد المطوّر لجوجل"),|ui|{
                             if ui.add(egui::TextEdit::singleline(&mut self.config.cloud_google_client_id)
