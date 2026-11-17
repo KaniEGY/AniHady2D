@@ -4427,27 +4427,45 @@ impl eframe::App for StickApp {
                         self.has_unsaved_changes = true;
                     }
                 });
-                let cell_w = self.timeline_cell_width;
+                let modern = self.config.timeline_style == 1;
+                let cell_w = if modern { self.timeline_cell_width.max(30.0) }
+                    else { self.timeline_cell_width };
+                let label_w = if modern { 218.0 } else { 198.0 };
+                let header_h = if modern { 39.0 } else { 30.0 };
+                let row_h = if modern {
+                    self.config.timeline_new_row_height.clamp(36.0, 76.0)
+                } else { 34.0 };
                 let cols = self.timeline_length.max(30);
                 egui::ScrollArea::both().id_salt("timeline_frame_scroller").show(ui, |ui| {
                     ui.horizontal(|ui| {
-                        ui.allocate_ui(egui::vec2(198.0, 30.0), |ui| {
-                            ui.strong(egui::RichText::new(tr(lang, "LAYERS  /  FRAMES", "الطبقات  /  الفريمات"))
+                        ui.allocate_ui(egui::vec2(label_w, header_h), |ui| {
+                            ui.strong(egui::RichText::new(
+                                if modern { tr(lang, "TRACKS / EXPOSURES", "الطبقات / الفريمات") }
+                                else { tr(lang, "LAYERS  /  FRAMES", "الطبقات  /  الفريمات") })
                                 .color(egui::Color32::from_rgb(117, 196, 241)));
                         });
                         for f in 1..=cols {
                             let is_c = self.current_frame == f;
-                            let (r, resp) = ui.allocate_exact_size(egui::vec2(cell_w, 30.0), egui::Sense::click_and_drag());
-                            if self.loop_enabled && f >= self.loop_start_frame && f <= self.loop_end_frame {
-                                ui.painter().rect_filled(r.shrink(1.0), 2.0, egui::Color32::from_rgb(57, 103, 83));
-                            }
-                            if is_c {
-                                let h = self.config.timeline_playhead_color;
-                                ui.painter().rect_filled(r, 3.0,
-                                    egui::Color32::from_rgb(h[0], h[1], h[2]));
-                            }
-                            if is_c || f == 1 || f % 5 == 0 {
-                                ui.painter().text(r.center(), egui::Align2::CENTER_CENTER, format!("{}", f), egui::FontId::proportional(11.0), egui::Color32::WHITE);
+                            let (r, resp) = ui.allocate_exact_size(
+                                egui::vec2(cell_w, header_h), egui::Sense::click_and_drag());
+                            if modern {
+                                timeline_styles::draw_header(ui.painter(), r, f, self.project.fps,
+                                    is_c, self.loop_enabled
+                                        && f >= self.loop_start_frame && f <= self.loop_end_frame,
+                                    self.config.timeline_show_timecodes);
+                            } else {
+                                if self.loop_enabled && f >= self.loop_start_frame && f <= self.loop_end_frame {
+                                    ui.painter().rect_filled(r.shrink(1.0), 2.0, egui::Color32::from_rgb(57, 103, 83));
+                                }
+                                if is_c {
+                                    let h = self.config.timeline_playhead_color;
+                                    ui.painter().rect_filled(r, 3.0,
+                                        egui::Color32::from_rgb(h[0], h[1], h[2]));
+                                }
+                                if is_c || f == 1 || f % 5 == 0 {
+                                    ui.painter().text(r.center(), egui::Align2::CENTER_CENTER, format!("{}", f),
+                                        egui::FontId::proportional(11.0), egui::Color32::WHITE);
+                                }
                             }
                             if resp.clicked() || (pointer_down && resp.hovered()) {
                                 if f > self.timeline_length { self.timeline_length = f; self.project.total_frames = f; }
@@ -4457,7 +4475,7 @@ impl eframe::App for StickApp {
                     });
                     for (l_idx, layer) in self.project.layers.iter().enumerate() {
                         ui.horizontal(|ui| {
-                            ui.allocate_ui(egui::vec2(198.0, 34.0), |ui| {
+                            ui.allocate_ui(egui::vec2(label_w, row_h), |ui| {
                                 ui.horizontal(|ui| {
                                     if ui.small_button(if layer.visible { "◉" } else { "○" })
                                         .on_hover_text(tr(lang, "Toggle visibility", "إظهار أو إخفاء اللير"))
@@ -4483,7 +4501,7 @@ impl eframe::App for StickApp {
                                     || !fd.media_items.is_empty() || !fd.text_items.is_empty()
                                     || !fd.symbol_instances.is_empty());
                                 let tw = eff.map(|fd| fd.tween_mode).unwrap_or(TweenMode::None);
-                                let (cr, cresp) = ui.allocate_exact_size(egui::vec2(cell_w, 34.0), egui::Sense::click());
+                                let (cr, cresp) = ui.allocate_exact_size(egui::vec2(cell_w, row_h), egui::Sense::click());
                                 let cell = self.config.timeline_cell_color;
                                 let accent = self.config.ui_accent_color;
                                 let bg = if self.active_layer_idx == l_idx && self.current_frame == f {
