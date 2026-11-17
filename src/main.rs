@@ -2003,6 +2003,24 @@ impl eframe::App for StickApp {
                     tr(lang, "Report a bug or suggest a feature", "بلّغ عن مشكلة أو اقترح ميزة"),
                     "https://github.com/KaniEGY/Stick/issues/new/choose",
                 );
+                if !self.config.recent_projects.is_empty() {
+                    ui.add_space(22.0);
+                    ui.separator();
+                    ui.heading(tr(lang, "Recent Projects", "مشاريعك الأخيرة"));
+                    for recent in self.config.recent_projects.clone().iter().take(8) {
+                        let filename = std::path::Path::new(recent)
+                            .file_name().and_then(|f| f.to_str())
+                            .unwrap_or(recent.as_str()).to_string();
+                        if ui.button(format!("📁 {}", filename))
+                            .on_hover_text(recent.clone()).clicked() {
+                            self.open_project_at_path(PathBuf::from(recent));
+                        }
+                    }
+                    if ui.small_button(tr(lang, "Clear Recent List", "امسح قائمة المشاريع الأخيرة")).clicked() {
+                        self.config.recent_projects.clear();
+                        self.config.save();
+                    }
+                }
             });
             // Show version notes on the first run after an update, even
             // before the user chooses Drawing or Animation workspace.
