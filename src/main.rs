@@ -3255,7 +3255,9 @@ impl eframe::App for StickApp {
             let custom_brush_cursor = matches!(self.active_tool_ui,
                 ActiveToolUI::Brush | ActiveToolUI::VectorPen | ActiveToolUI::EraserRed | ActiveToolUI::EraserGreen);
             let show_dot = is_inside_stage && !any_modal_open && !space_down && !alt_down && custom_brush_cursor;
-            let tool_cursor = if show_dot {
+            let show_tool_icon = is_inside_stage && !any_modal_open && !space_down
+                && !alt_down && !custom_brush_cursor && self.active_tool_ui != ActiveToolUI::HandCanvas;
+            let tool_cursor = if show_dot || show_tool_icon {
                 egui::CursorIcon::None
             } else if space_down || self.active_tool_ui == ActiveToolUI::HandCanvas {
                 egui::CursorIcon::Grab
@@ -3657,6 +3659,58 @@ impl eframe::App for StickApp {
                     }
                 }
             }
+            // Persistent visual selection and a draggable scale handle.
+            if matches!(self.active_tool_ui, ActiveToolUI::SelectNormal | ActiveToolUI::FreeTransform) {
+                if let Some(bounds) = self.selected_canvas_bounds() {
+                    let screen_bounds = egui::Rect::from_two_pos(
+                        to_screen(bounds.min), to_screen(bounds.max)
+                    );
+                    painter.rect_stroke(screen_bounds, 0.0, egui::Stroke::new(
+                        1.6, egui::Color32::from_rgb(54, 194, 255)
+                    ));
+                    if self.active_tool_ui == ActiveToolUI::FreeTransform {
+                        for corner in [screen_bounds.left_top(), screen_bounds.right_top(),
+                                       screen_bounds.left_bottom(), screen_bounds.right_bottom()] {
+                            let handle = egui::Rect::from_center_size(corner, egui::vec2(9.0, 9.0));
+                            painter.rect_filled(handle, 1.0, egui::Color32::WHITE);
+                            painter.rect_stroke(handle, 1.0, egui::Stroke::new(
+                                1.5, egui::Color32::from_rgb(54, 194, 255)
+                            ));
+                        }
+                    }
+                }
+            }
+            if self.active_tool_ui == ActiveToolUI::VectorDirectSelect {
+                if let Some(layer) = self.project.layers.get(self.active_layer_idx) {
+                    if layer.visible {
+                        let frame = self.project.evaluate_layer_at_frame(layer, self.current_frame);
+                        let mut nodes_drawn = 0usize;
+                        for (stroke_index, stroke) in frame.strokes.iter().enumerate() {
+                            if !stroke.is_vector { continue; }
+                            for (node_index, node) in stroke.points.iter().enumerate() {
+                                if nodes_drawn >= 1_500 { break; }
+                                let p = to_screen(egui::pos2(node.x, node.y));
+                                if canvas_rect.contains(p) {
+                                    let selected = self.selected_vector_node == Some((stroke_index, node_index));
+                                    let color = if selected {
+                                        egui::Color32::from_rgb(255, 202, 58)
+                                    } else {
+                                        egui::Color32::from_rgb(80, 198, 255)
+                                    };
+                                    painter.rect_filled(
+                                        egui::Rect::from_center_size(p, egui::vec2(
+                                            if selected { 11.0 } else { 7.0 },
+                                            if selected { 11.0 } else { 7.0 }
+                                        )), 1.0, color
+                                    );
+                                    nodes_drawn += 1;
+                                }
+                            }
+                            if nodes_drawn >= 1_500 { break; }
+                        }
+                    }
+                }
+            }
             if let Some(stroke) = &self.current_stroke { draw_stroke_pro(&painter, stroke, None, 1.0, scale, 0.0, 0.0, &to_screen); }
             if let (Some(p0), Some(p1)) = (self.shape_drag_start, self.shape_drag_current) {
                 let mut shape = build_geometric_stroke(self.selected_shape_kind, p0, p1, self.brush_color, self.brush_size);
@@ -3669,11 +3723,57 @@ impl eframe::App for StickApp {
             if show_dot {
                 if let Some(p) = pointer_pos {
                     let radius = (self.brush_size * self.zoom_level * 0.5).clamp(2.5, 125.0);
-                    let erasing = matches!(self.active_tool_ui, ActiveToolUI::EraserRed | ActiveToolUI::EraserGreen);
-                    let outline = if erasing { egui::Color32::from_rgb(248, 113, 113) } else { egui::Color32::BLACK };
-                    painter.circle_stroke(p, radius + 1.0, egui::Stroke::new(2.2, egui::Color32::WHITE));
-                    painter.circle_stroke(p, radius, egui::Stroke::new(1.3, outline));
-                    painter.circle_filled(p, 1.7, outline);
+                    if self.active_tool_ui == ActiveToolUI::EraserRed
+                        || self.active_tool_ui == ActiveToolUI::EraserGreen {
+                        let color = if self.active_tool_ui == ActiveToolUI::EraserRed {
+                            egui::Color32::from_rgb(255, 96, 113)
+                        } else {
+                            egui::Color32::from_rgb(45, 221, 145)
+                        };
+                        painter.circle_stroke(p, radius, egui::Stroke::new(2.0, color));
+                        painter.circle_filled(p, 2.5, color);
+                    } else {
+                        match self.active_krita_brush {
+                            KritaBrushPreset::ChiselMarker if self.active_tool_ui == ActiveToolUI::Brush => {
+                                painter.rect_stroke(egui::Rect::from_center_size(p,
+                                    egui::vec2(radius * 2.0, radius * 1.2)), 0.0,
+                                    egui::Stroke::new(1.8, egui::Color32::from_rgb(255, 165, 67)));
+                            }
+                            KritaBrushPreset::SoftAirbrush if self.active_tool_ui == ActiveToolUI::Brush => {
+                                painter.circle_filled(p, radius,
+                                    egui::Color32::from_rgba_unmultiplied(182, 134, 255, 40));
+                                painter.circle_stroke(p, radius,
+                                    egui::Stroke::new(1.4, egui::Color32::from_rgb(195, 144, 255)));
+                            }
+                            KritaBrushPreset::Watercolor if self.active_tool_ui == ActiveToolUI::Brush => {
+                                painter.circle_stroke(p, radius,
+                                    egui::Stroke::new(1.5, egui::Color32::from_rgb(70, 230, 198)));
+                                painter.circle_filled(p, 2.5, egui::Color32::from_rgb(70, 230, 198));
+                            }
+                            KritaBrushPreset::SketchPencil if self.active_tool_ui == ActiveToolUI::Brush => {
+                                painter.circle_stroke(p, radius,
+                                    egui::Stroke::new(1.2, egui::Color32::from_rgb(240, 202, 75)));
+                                painter.line_segment([p + egui::vec2(-5.0, -5.0),
+                                    p + egui::vec2(5.0, 5.0)],
+                                    egui::Stroke::new(1.2, egui::Color32::from_rgb(240, 202, 75)));
+                            }
+                            _ => {
+                                painter.circle_stroke(p, radius + 1.0,
+                                    egui::Stroke::new(2.0, egui::Color32::WHITE));
+                                painter.circle_stroke(p, radius,
+                                    egui::Stroke::new(1.3, egui::Color32::BLACK));
+                                painter.circle_filled(p, 1.7, egui::Color32::BLACK);
+                            }
+                        }
+                    }
+                }
+            } else if show_tool_icon {
+                if let Some(p) = pointer_pos {
+                    let rect = egui::Rect::from_min_size(p + egui::vec2(8.0, 7.0),
+                        egui::vec2(26.0, 26.0));
+                    painter.rect_filled(rect.expand(2.0), 5.0,
+                        egui::Color32::from_rgba_unmultiplied(21, 24, 35, 235));
+                    draw_tool_ui_icon(&painter, rect, self.active_tool_ui, true);
                 }
             }
         });
