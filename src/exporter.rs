@@ -358,6 +358,18 @@ fn draw_skia_stroke(pixmap: &mut Pixmap, s: &crate::project::Stroke, ts: Transfo
             if let Some(path)=pb.finish() {
                 pixmap.fill_path(&path,&paint,tiny_skia::FillRule::Winding,ts,None);
             }
+        } else if s.points.len()>=2 {
+            // Very long or self-degenerate paths must still export.
+            let mut pb=PathBuilder::new();
+            pb.move_to(s.points[0].x,s.points[0].y);
+            for p in s.points.iter().skip(1){pb.line_to(p.x,p.y);}
+            if let Some(path)=pb.finish(){
+                let mut brush=Stroke::default();
+                brush.width=s.base_width.max(0.25)*width_scale;
+                brush.line_cap=tiny_skia::LineCap::Round;
+                brush.line_join=tiny_skia::LineJoin::Round;
+                pixmap.stroke_path(&path,&paint,&brush,ts,None);
+            }
         }
         return;
     }
