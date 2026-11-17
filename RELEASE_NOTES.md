@@ -4,11 +4,20 @@
 
 ## English (US)
 
+### Artist workspace refresh
+- **Art System / نظام الفنان:** an anime-inspired, bilingual artist profile with editable name, selectable local avatar and rank progress. XP award formulas and rank thresholds are no longer displayed in the settings UI.
+- **Drawing:** improved lasso geometry and drag-to-move; free-rotation selection handle; canvas zoom anchored under mouse; right-drag canvas rotation with the Hand tool; paper, strokes and imported bitmap objects share the view transform.
+- **Tools:** colored cursor previews, right-click quick choices for common tools, two extra geometric shapes (triangle/pentagon), and six persistent brush-tip shapes shared between live rendering and image/video exports.
+- **Workspace:** user-controlled toolbar, properties dock, tool list and timeline visibility; enhanced layer rows; refreshed timeline controls and layout.
+- **Text:** multiline text editor with joined-Arabic preview; local-font-based text rendering in exported images/video.
+- **Persistence:** profile/settings saved under the Windows user profile, with read compatibility for prior executable-adjacent JSON files; new stroke tip field defaults to a round brush in older projects.
+- **Known boundaries:** bucket fill operates on recognized closed stroke contours (now with improved near-closure tolerance), not arbitrary raster flood fill. Imported artwork/text still needs further parity tests for every transform. No Krita GPL code is copied into Stick.
+
 ### What's new
-- New Hunter SYSTEM: start at Level 0, F-Rank; rank up across F/E/D/C/B/A/A+/S as you draw. 100 XP for Level 1, 150 XP for Level 2, then each level requires 15% more XP.
-- Earn 5 XP per minute, 50 XP per 20 newly painted timeline frames and 20 XP per five different layers painted. Frames and layer rewards are remembered in your project.
+- Art System: anime-style bilingual artist profile with editable display name, local avatar image and a level/rank progress bar. Progress formulas are not displayed.
+- Customizable workspace, cursor-anchored smooth zoom, transform rotation handle, draggable lasso selections, right-click tool choices and more versatile brush-tip geometry.
 - A centered 10-second LEVEL UP panel shows one of 1,000 unique motivating lines in easy US English or Egyptian Arabic, with one of 100 small procedural sound variations.
-- Settings gear: new Shortcuts tab to rebind drawing tools; Colors & Timeline tab to customize colors and restore defaults; sound-effects toggle and Hunter progress details.
+- Settings gear: new Shortcuts, Colors & Timeline, and Personalization tabs with panel visibility controls; sound-effects toggle and artist profile.
 - Improved right-side docks: separate scrolling Tool Properties and Layers panels, plus right-click Layer options to Rename, Copy, Paste, Duplicate and Delete.
 - Updated timeline appearance, resize by dragging the upper border, and a Timeline gear for separate forward/backward Onion Skin count, tint and opacity.
 - Use the original red heart on the left to open YouTube/Instagram, and the gold heart at the top center to open the optional InstaPay support dialog.
@@ -48,9 +57,19 @@
 
 ## العربية (المصري)
 
+### تطوير مساحة الفنان
+- **نظام الفنان:** بروفايل بشكل أنمي واسم قابل للتغيير وصورة من الجهاز وشريط تقدم، من غير عرض معادلات احتساب النقاط.
+- **التحديد والتحويل:** اللّاسو بقى يحسب الخطوط المتقاطعة ويتحرك بعد التحديد، وضفنا مقبض لتدوير التحديد بحرية.
+- **الكانفا:** زووم ناحية مؤشر الماوس، تدوير اللوحة بالكليك اليمين مع أداة اليد، وتدوير الورقة نفسها مع الرسومات والصور المستوردة.
+- **الأدوات:** مؤشرات بألوان مميزة، خيارات بالكليك اليمين، مثلث وخماسي، وست أشكال لرأس الفرشة محفوظة مع المشروع وموحدة بين المعاينة والتصدير.
+- **الواجهة:** إخفاء وإظهار الجنبين والشريط العلوي والتايم لاين من التخصيص، وتجديد صفوف الطبقات وشكل الخط الزمني.
+- **النصوص:** محرر نص متعدد الأسطر مع معاينة عربية متصلة، ورسم النصوص في التصدير باستخدام خط محلي من Windows.
+- **التوافق:** حفظ الإعدادات والبروفايل في مجلد المستخدم القابل للكتابة مع استيراد الملفات القديمة، وفرش المشاريع القديمة تفضل دائرية تلقائيًا.
+- **القيود الحالية:** الدلو بيلون المسارات المقفولة اللي بيتعرف عليها، ولسه مش Flood Fill كامل على أي سطح Raster. لم يتم نسخ أكواد Krita الخاضعة لترخيص GPL.
+
 ### إيه الجديد؟
-- نظام Hunter SYSTEM جديد: بتبدأ من المستوى 0 ورتبة F، وتطلع لحد S حسب رسمك. المستوى الأول محتاج 100 XP، والتاني 150 XP، وبعدها المتطلبات بتزيد 15% كل مستوى.
-- كل دقيقة ليك 5 XP، وكل 20 فريم مختلف اترسم عليهم ليك 50 XP، وكل 5 ليرز جديدة اترسم عليها ليك 20 XP. الإنجازات بتتسجل مع المشروع.
+- نظام الفنان (Art System) الجديد: شكل أنمي مع اسم تقدر تعدّله، وصورة شخصية من جهازك، وشريط المستوى والرتبة. تفاصيل احتساب التقدم مش ظاهرة.
+- تخصيص مساحة الرسم، زووم ناحية الماوس، سهم تدوير حر للتحديد، تحريك التحديد الحر، وقائمة كليك يمين للأدوات، وست أشكال لرأس الفرشة.
 - لما المستوى يعلى هتظهر نافذة حماسية في نص الشاشة 10 ثواني، وفيها رسالة من 1000 جملة مختلفة بالمصري أو الإنجليزي، ومعها صوت من 100 تنويعة مختلفة وخفيفة.
 - ترس الإعدادات فيه تخصيص اختصارات الأدوات، وتغيير ألوان الواجهة والتايم لاين، وزر يرجّع الألوان الأصلية، وتحكم في أصوات البرنامج.
 - قسم اليمين اتقسم لخصائص الأدوات والليرز كل واحد بسكرول مستقل. كليك يمين على اللير لتغيير اسمه أو نسخه أو لصقه أو دبلكيت أو حذفه.
