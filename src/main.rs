@@ -2165,6 +2165,7 @@ impl eframe::App for StickApp {
             || self.show_recovery_dialog || self.show_project_details;
         if any_modal_open { typing_in_textbox = true; }
 
+        let old_selected_tool = self.active_tool_ui;
         if !typing_in_textbox {
             if ctrl_z { self.undo(); }
             if ctrl_y { self.redo(); }
@@ -2205,6 +2206,9 @@ impl eframe::App for StickApp {
             if sc_text { self.active_tool_ui = ActiveToolUI::Text; }
             if sc_shape { self.active_tool_ui = ActiveToolUI::ShapeLine; }
             if sc_hand { self.active_tool_ui = ActiveToolUI::HandCanvas; }
+            if self.active_tool_ui != old_selected_tool {
+                self.play_sfx(SfxType::ToolSelect(self.active_tool_ui as u8));
+            }
             if sc_smaller { self.brush_size = (self.brush_size - 2.0).max(1.0); }
             if sc_larger { self.brush_size = (self.brush_size + 2.0).min(120.0); }
             if del_pressed && (!self.selected_stroke_indices.is_empty() || self.selected_text_item_index.is_some())
