@@ -4091,9 +4091,32 @@ impl eframe::App for StickApp {
         let mut frame_menu_action: Option<(usize, usize, timeline_ops::FrameAction)> = None;
         // شريط التايم لاين السفلي في وضع الأنيميشن
         if self.workspace_mode == WorkspaceMode::AnimationStudio && self.config.show_timeline_dock {
-            let timeline_result = egui::TopBottomPanel::bottom("timeline_panel").resizable(true)
-                .default_height(self.config.timeline_dock_height.clamp(140.0, 850.0))
-                .min_height(120.0).show(ctx, |ui| {
+            // Explicit height and an interior drag grip prevent the timeline from
+            // snapping back when the window is redrawn or reopened.
+            let available = (ctx.screen_rect().height() - 160.0).max(180.0);
+            egui::TopBottomPanel::bottom("timeline_panel").resizable(false)
+                .exact_height(self.config.timeline_dock_height.clamp(140.0, available))
+                .show(ctx, |ui| {
+                let (handle_rect, handle) = ui.allocate_exact_size(
+                    egui::vec2(ui.available_width(), 13.0), egui::Sense::drag());
+                ui.painter().rect_filled(handle_rect, 0.0,
+                    if handle.hovered() || handle.dragged() {
+                        egui::Color32::from_rgb(56, 91, 120)
+                    } else { egui::Color32::from_rgb(50, 52, 61) });
+                for dx in [-19.0,-9.0,1.0,11.0] {
+                    ui.painter().line_segment(
+                        [handle_rect.center()+egui::vec2(dx,-2.0),
+                         handle_rect.center()+egui::vec2(dx+7.0,-2.0)],
+                        egui::Stroke::new(2.0, egui::Color32::from_gray(163)));
+                }
+                if handle.dragged() {
+                    let delta = ui.input(|i| i.pointer.delta().y);
+                    if delta.abs() > 0.1 {
+                        self.config.timeline_dock_height =
+                            (self.config.timeline_dock_height - delta).clamp(140.0,available);
+                        self.config.save();
+                    }
+                }
                 let bg = self.config.timeline_bg_color;
                 ui.painter().rect_filled(ui.max_rect(), 0.0,
                     egui::Color32::from_rgb(bg[0],bg[1],bg[2]));
@@ -4281,14 +4304,7 @@ impl eframe::App for StickApp {
                     }
                 });
             });
-            // Preserve the height chosen by dragging the top border, not just the slider.
-            let actual = timeline_result.response.rect.height();
-            if ctx.input(|i| i.pointer.primary_down() && i.pointer.hover_pos()
-                    .is_some_and(|p| (p.y - timeline_result.response.rect.top()).abs() <= 13.0))
-                && (actual - self.config.timeline_dock_height).abs() > 3.0 {
-                self.config.timeline_dock_height = actual.clamp(140.0, 850.0);
-                self.config.save();
-            }
+            // The grip and the height slider both modify the same persisted value.
         }
 
         if self.show_timeline_settings && self.workspace_mode == WorkspaceMode::AnimationStudio {
