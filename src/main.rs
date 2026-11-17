@@ -2,6 +2,8 @@
 
 mod brushes;
 mod brush_engine;
+mod stroke_geometry;
+mod sculpt_tools;
 mod stylus;
 mod updater;
 mod changelog;
@@ -72,6 +74,7 @@ enum ActiveToolUI {
     SelectLasso,
     FreeTransform,
     VectorDirectSelect,
+    Sculpt,
     VectorPen,
     Brush,
     EraserRed,
@@ -258,11 +261,12 @@ fn tr_notice(lang: AppLang, en: &str, ar: &str) -> String {
 }
 
 
-const TOOLBAR_ITEMS: [ActiveToolUI; 13] = [
+const TOOLBAR_ITEMS: [ActiveToolUI; 14] = [
     ActiveToolUI::SelectNormal,
     ActiveToolUI::SelectLasso,
     ActiveToolUI::FreeTransform,
     ActiveToolUI::VectorDirectSelect,
+    ActiveToolUI::Sculpt,
     ActiveToolUI::VectorPen,
     ActiveToolUI::Brush,
     ActiveToolUI::EraserRed,
@@ -280,6 +284,7 @@ fn tool_display_name(tool: ActiveToolUI, lang: AppLang) -> String {
         ActiveToolUI::SelectLasso => ("Lasso", "تحديد حر"),
         ActiveToolUI::FreeTransform => ("Transform", "تحويل"),
         ActiveToolUI::VectorDirectSelect => ("Vector Nodes", "نقاط الفيكتور"),
+        ActiveToolUI::Sculpt => ("Sculpt / Finger", "نحت / صباع"),
         ActiveToolUI::VectorPen => ("Ink Pen", "قلم حبر"),
         ActiveToolUI::Brush => ("Brush", "فرشاة"),
         ActiveToolUI::EraserRed => ("Eraser", "ممحاة"),
@@ -299,6 +304,7 @@ fn tool_shortcut<'a>(tool: ActiveToolUI, config: &'a AppConfig) -> &'a str {
         ActiveToolUI::SelectLasso => &config.tool_lasso,
         ActiveToolUI::FreeTransform => &config.tool_free_transform,
         ActiveToolUI::VectorDirectSelect => &config.tool_vector_select,
+        ActiveToolUI::Sculpt => &config.tool_sculpt,
         ActiveToolUI::VectorPen => &config.tool_pen,
         ActiveToolUI::Brush => &config.tool_brush,
         ActiveToolUI::EraserRed => &config.tool_eraser,
@@ -439,6 +445,8 @@ struct AppConfig {
     #[serde(default = "default_vec_sel_key")]
     tool_vector_select: String,
     tool_pen: String,
+    #[serde(default = "default_sculpt_key")]
+    tool_sculpt: String,
     tool_brush: String,
     tool_eraser: String,
     #[serde(default = "default_partial_eraser_key")]
@@ -484,6 +492,7 @@ fn default_ui_accent_color() -> [u8; 4] { [0, 122, 204, 255] }
 fn default_lasso_key() -> String { "L".to_string() }
 fn default_free_tr_key() -> String { "Q".to_string() }
 fn default_vec_sel_key() -> String { "G".to_string() }
+fn default_sculpt_key() -> String { "J".to_string() }
 fn default_partial_eraser_key() -> String { "T".to_string() }
 fn default_text_key() -> String { "N".to_string() }
 fn default_shape_key() -> String { "U".to_string() }
@@ -523,6 +532,7 @@ impl Default for AppConfig {
             tool_free_transform: "Q".to_string(),
             tool_vector_select: "G".to_string(),
             tool_pen: "P".to_string(),
+            tool_sculpt: default_sculpt_key(),
             tool_brush: "B".to_string(),
             tool_eraser: "E".to_string(),
             tool_eraser_partial: "T".to_string(),
@@ -704,6 +714,7 @@ fn get_tool_ui_color(tool: ActiveToolUI) -> egui::Color32 {
         ActiveToolUI::SelectNormal | ActiveToolUI::SelectLasso => egui::Color32::from_rgb(56, 189, 248),
         ActiveToolUI::FreeTransform => egui::Color32::from_rgb(245, 158, 11),
         ActiveToolUI::VectorDirectSelect => egui::Color32::from_rgb(192, 132, 252),
+        ActiveToolUI::Sculpt => egui::Color32::from_rgb(250, 136, 185),
         ActiveToolUI::VectorPen => egui::Color32::from_rgb(139, 92, 246),
         ActiveToolUI::Brush => egui::Color32::from_rgb(249, 115, 22),
         ActiveToolUI::EraserRed => egui::Color32::from_rgb(239, 68, 68),
@@ -759,6 +770,11 @@ fn draw_tool_ui_icon(painter: &egui::Painter, rect: egui::Rect, tool: ActiveTool
                 painter.circle_filled(*point,1.0,pale);
             }
             painter.line_segment([p(-5.,9.),p(9.,-9.)],egui::Stroke::new(1.0,primary));
+        }
+        ActiveToolUI::Sculpt => {
+            painter.circle_stroke(p(-3.,-2.),8.0,egui::Stroke::new(2.0,primary));
+            painter.line_segment([p(-8.,7.),p(7.,-8.)],egui::Stroke::new(3.4,primary));
+            painter.circle_filled(p(7.,-8.),3.0,pale);
         }
         ActiveToolUI::VectorPen => {
             painter.add(egui::Shape::convex_polygon(
@@ -999,6 +1015,12 @@ struct StickApp {
     shape_drag_current: Option<egui::Pos2>,
     selected_stroke_indices: Vec<usize>,
     selected_vector_node: Option<(usize, usize)>,
+    selected_vector_nodes: Vec<(usize,usize)>,
+    vector_marquee_start: Option<egui::Pos2>,
+    vector_marquee_current: Option<egui::Pos2>,
+    vector_tolerance: f32,
+    sculpt_radius: f32,
+    sculpt_strength: f32,
     transform_drag_anchor: Option<egui::Pos2>,
     transform_rotate_pivot: Option<egui::Pos2>,
     lasso_dragging_selection: bool,
@@ -1133,6 +1155,12 @@ impl StickApp {
             shape_drag_current: None,
             selected_stroke_indices: Vec::new(),
             selected_vector_node: None,
+            selected_vector_nodes: Vec::new(),
+            vector_marquee_start: None,
+            vector_marquee_current: None,
+            vector_tolerance: 2.7,
+            sculpt_radius: 64.0,
+            sculpt_strength: 0.65,
             transform_drag_anchor: None,
             transform_rotate_pivot: None,
             lasso_dragging_selection: false,
@@ -2422,6 +2450,15 @@ impl StickApp {
                     if ui.button(" ↺ 15° ").clicked() { self.save_undo_state(); self.transform_selected_items(1.0, -15.0, false, false); }
                 });
             }
+            ActiveToolUI::Sculpt => {
+                ui.strong(tr(lang,"Sculpt / Finger (J)","النحت / الصباع (J)"));
+                ui.label(tr(lang,"Drag nearby linework to reshape it with soft falloff.",
+                    "اسحب جزء من الخط لتحريكه بنعومة من غير تحريك الرسمة كلها."));
+                ui.add(egui::Slider::new(&mut self.sculpt_radius,8.0..=360.0)
+                    .text(tr(lang,"Radius","حجم التأثير")));
+                ui.add(egui::Slider::new(&mut self.sculpt_strength,0.05..=1.0)
+                    .text(tr(lang,"Strength","قوة التأثير")));
+            }
             ActiveToolUI::VectorPen => {
                 ui.strong(tr(lang, "Vector Ink Pen (P)", "قلم الفيكتور الثابت (بدون ذيل)"));
                 ui.horizontal(|ui| {
@@ -2431,6 +2468,10 @@ impl StickApp {
                 ui.add(egui::Slider::new(&mut self.brush_size, 1.0..=100.0).show_value(false));
                 ui.add(egui::Slider::new(&mut self.brush_opacity, 0.0..=1.0)
                     .text(tr(lang, "Opacity", "الشفافية")));
+                ui.add(egui::Slider::new(&mut self.vector_tolerance,0.4..=8.0)
+                    .text(tr(lang,"Node reduction","تقليل النقاط")));
+                ui.small(tr(lang,"Right-click the Vector Pen for advanced options.",
+                    "كلك يمين على قلم الفيكتور هتلاقي إعدادات متقدمة."));
             }
             ActiveToolUI::Brush => {
                 ui.strong(tr(lang, "Brushes (Icon Presets)", "اختر الفرشة بالأيقونة"));
@@ -4997,10 +5038,14 @@ impl eframe::App for StickApp {
                         }
                     }
                     if stroke.is_vector {
-                        stroke.simplify_vector_nodes(2.2);
-                        stroke.fit_cubic_bezier_spline(8);
+                        // Keep control points editable. Eightfold Catmull-Rom
+                        // expansion was causing thousands of artificial nodes.
+                        stroke.simplify_vector_nodes(self.vector_tolerance);
                     } else {
-                        stroke.fit_cubic_bezier_spline(4);
+                        // Freehand already has samples + smoothing stabilizer.
+                        // Adding four Catmull-Rom subdivisions overshoots sharp
+                        // turns and makes visibly broken/looped brush segments.
+                        // Keep the true pointer trajectory.
                     }
                     self.commit_stroke_with_symmetry(stroke, now_time);
                 }
