@@ -1029,6 +1029,7 @@ struct StickApp {
     selected_vector_nodes: Vec<(usize,usize)>,
     vector_marquee_start: Option<egui::Pos2>,
     vector_marquee_current: Option<egui::Pos2>,
+    vector_axis_drag: Option<char>,
     vector_tolerance: f32,
     sculpt_radius: f32,
     sculpt_strength: f32,
@@ -1170,6 +1171,7 @@ impl StickApp {
             selected_vector_nodes: Vec::new(),
             vector_marquee_start: None,
             vector_marquee_current: None,
+            vector_axis_drag: None,
             vector_tolerance: 2.7,
             sculpt_radius: 64.0,
             sculpt_strength: 0.65,
@@ -4924,6 +4926,26 @@ impl eframe::App for StickApp {
                         }
                         ActiveToolUI::VectorDirectSelect => {
                             if pointer_pressed {
+                                let vector_pivot=self.project.layers.get(self.active_layer_idx)
+                                    .and_then(|layer| {
+                                        let frame=self.project.evaluate_layer_at_frame(layer,self.current_frame);
+                                        let pts:Vec<_>=self.selected_vector_nodes.iter().filter_map(|&(si,pi)|
+                                            frame.strokes.get(si)?.points.get(pi)).collect();
+                                        (!pts.is_empty()).then(|| {
+                                            let x=pts.iter().map(|p|p.x).sum::<f32>()/pts.len() as f32;
+                                            let y=pts.iter().map(|p|p.y).sum::<f32>()/pts.len() as f32;
+                                            egui::pos2(x,y)
+                                        })
+                                    });
+                                let axis=vector_pivot.and_then(|pivot|
+                                    transform_handles::translation_axis(
+                                        egui::Rect::from_center_size(pivot,egui::vec2(1.,1.)),
+                                        stage_pos,scale));
+                                if let Some(axis)=axis {
+                                    self.vector_axis_drag=Some(axis);
+                                    self.save_undo_state();
+                                } else {
+                                self.vector_axis_drag=None;
                                 let picked=self.project.layers.get(self.active_layer_idx)
                                     .and_then(|layer| {
                                         let frame=self.project.evaluate_layer_at_frame(
@@ -4950,12 +4972,18 @@ impl eframe::App for StickApp {
                                     self.vector_marquee_start=Some(stage_pos);
                                     self.vector_marquee_current=Some(stage_pos);
                                 }
+                                } // regular vertex selection, not the axis gizmo
                             } else if pointer_down && self.vector_marquee_start.is_some() {
                                 self.vector_marquee_current=Some(stage_pos);
                             } else if pointer_down && delta.length_sq()>0.0
                                 && !self.selected_vector_nodes.is_empty()
                                 && !self.is_active_layer_locked() {
                                 let nodes=self.selected_vector_nodes.clone();
+                                let constrained=match self.vector_axis_drag {
+                                    Some('x')=>egui::vec2(delta.x,0.),
+                                    Some('y')=>egui::vec2(0.,delta.y),
+                                    _=>delta,
+                                };
                                 self.ensure_editable_keyframe();
                                 if let Some(layer)=self.project.layers.get_mut(self.active_layer_idx){
                                     if let Some(frame)=layer.keyframes.get_mut(&self.current_frame){
@@ -4963,8 +4991,8 @@ impl eframe::App for StickApp {
                                             if let Some(stroke)=frame.strokes.get_mut(si){
                                                 let len=stroke.points.len();
                                                 if let Some(point)=stroke.points.get_mut(pi){
-                                                    point.x+=delta.x;
-                                                    point.y+=delta.y;
+                                                    point.x+=constrained.x;
+                                                    point.y+=constrained.y;
                                                     self.has_unsaved_changes=true;
                                                 }
                                                 // A closed contour must stay closed when
@@ -5101,6 +5129,7 @@ impl eframe::App for StickApp {
             }
 
             if pointer_released {
+                self.vector_axis_drag=None;
                 if let (Some(start),Some(end))=(
                     self.vector_marquee_start.take(),self.vector_marquee_current.take()){
                     let rect=egui::Rect::from_two_pos(start,end);
@@ -5357,6 +5386,29 @@ impl eframe::App for StickApp {
             if let (Some(a),Some(b))=(self.vector_marquee_start,self.vector_marquee_current){
                 painter.rect_stroke(egui::Rect::from_two_pos(to_screen(a),to_screen(b)),0.0,
                     egui::Stroke::new(1.4,egui::Color32::from_rgb(255,169,75)));
+            }
+            if self.active_tool_ui == ActiveToolUI::VectorDirectSelect
+                && !self.selected_vector_nodes.is_empty() {
+                if let Some(layer)=self.project.layers.get(self.active_layer_idx){
+                    let frame=self.project.evaluate_layer_at_frame(layer,self.current_frame);
+                    let pts:Vec<_>=self.selected_vector_nodes.iter().filter_map(|&(si,pi)|
+                        frame.strokes.get(si)?.points.get(pi)).collect();
+                    if !pts.is_empty(){
+                        let center=egui::pos2(
+                            pts.iter().map(|p|p.x).sum::<f32>()/pts.len() as f32,
+                            pts.iter().map(|p|p.y).sum::<f32>()/pts.len() as f32);
+                        for (end,col,label) in [
+                            (center+egui::vec2(52./scale,0.),egui::Color32::from_rgb(244,78,86),"X"),
+                            (center+egui::vec2(0.,-52./scale),egui::Color32::from_rgb(60,192,244),"Y")
+                        ]{
+                            painter.line_segment([to_screen(center),to_screen(end)],
+                                egui::Stroke::new(2.7,col));
+                            painter.circle_filled(to_screen(end),9.,col);
+                            painter.text(to_screen(end),egui::Align2::CENTER_CENTER,label,
+                                egui::FontId::proportional(11.0),egui::Color32::BLACK);
+                        }
+                    }
+                }
             }
             if self.active_tool_ui == ActiveToolUI::VectorDirectSelect {
                 if let Some(layer) = self.project.layers.get(self.active_layer_idx) {
