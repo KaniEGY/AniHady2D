@@ -149,11 +149,22 @@ pub fn render_frame_pixmap(project: &AniProject, frame_idx: usize, transparent_b
         pixmap.fill(Color::from_rgba8(bg_rgba[0], bg_rgba[1], bg_rgba[2], 255));
     }
 
+    // Composite every layer only once with its opacity. This ensures that
+    // overlapping strokes in a layer are not individually dimmed again.
     for layer in project.layers.iter().rev() {
-        // تجاهل الطبقات المخفية أو طبقات السكتش الإرشادية (Guide Layers) عند التصدير
         if !layer.visible || layer.is_guide {
             continue;
         }
+        let layer_alpha = if layer.opacity.is_finite() {
+            layer.opacity.clamp(0.0, 1.0)
+        } else {
+            1.0
+        };
+        if layer_alpha <= 0.0 {
+            continue;
+        }
+
+        let mut layer_pixmap = Pixmap::new(w, h).expect("Canvas dimensions already checked");
         let fd = project.evaluate_layer_at_frame(layer, frame_idx);
 
         for m in &fd.media_items {
@@ -167,7 +178,7 @@ pub fn render_frame_pixmap(project: &AniProject, frame_idx: usize, transparent_b
                     .to_rgba8();
                 if let Some(mut sub_pix) = Pixmap::new(resized.width(), resized.height()) {
                     sub_pix.data_mut().copy_from_slice(resized.as_raw());
-                    pixmap.draw_pixmap(
+                    layer_pixmap.draw_pixmap(
                         m.x as i32,
                         m.y as i32,
                         sub_pix.as_ref(),
@@ -180,7 +191,7 @@ pub fn render_frame_pixmap(project: &AniProject, frame_idx: usize, transparent_b
         }
 
         for s in &fd.strokes {
-            draw_skia_stroke(&mut pixmap, s, Transform::identity(), 1.0);
+            draw_skia_stroke(&mut layer_pixmap, s, Transform::identity(), 1.0);
         }
 
         for inst in &fd.symbol_instances {
@@ -191,10 +202,22 @@ pub fn render_frame_pixmap(project: &AniProject, frame_idx: usize, transparent_b
                     .post_rotate(inst.rotation_deg)
                     .post_translate(inst.x + inst.anchor_offset_x, inst.y + inst.anchor_offset_y);
                 for s in sym_strokes {
-                    draw_skia_stroke(&mut pixmap, s, ts, inst.scale);
+                    draw_skia_stroke(&mut layer_pixmap, s, ts, inst.scale);
                 }
             }
         }
+
+        pixmap.draw_pixmap(
+            0,
+            0,
+            layer_pixmap.as_ref(),
+            &tiny_skia::PixmapPaint {
+                opacity: layer_alpha,
+                ..tiny_skia::PixmapPaint::default()
+            },
+            Transform::identity(),
+            None,
+        );
     }
     pixmap
 }
@@ -207,6 +230,18 @@ fn draw_skia_stroke(pixmap: &mut Pixmap, s: &crate::project::Stroke, ts: Transfo
     let mut paint = Paint::default();
     paint.set_color_rgba8(s.color[0], s.color[1], s.color[2], alpha);
     paint.anti_alias = true;
+
+    // Share the G-Pen pressure sampler with the live canvas preview.
+    if !s.is_vector && s.brush_preset == crate::project::KritaBrushPreset::GPenInk {
+        for dab in crate::brush_engine::sample_pressure_dabs(&s.points, s.base_width) {
+            let mut pb = PathBuilder::new();
+            pb.push_circle(dab.x, dab.y, dab.radius);
+            if let Some(path) = pb.finish() {
+                pixmap.fill_path(&path, &paint, tiny_skia::FillRule::Winding, ts, None);
+            }
+        }
+        return;
+    }
 
     if s.points.len() == 1 {
         let mut pb = PathBuilder::new();
@@ -553,4 +588,67 @@ pub fn extract_video_frames(video_path: &Path, fps: u32) -> Result<Vec<PathBuf>,
         .collect();
     files.sort();
     Ok(files)
+}
+
+#[cfg(test)]
+mod layer_opacity_tests {
+    use super::*;
+    use crate::project::{KritaBrushPreset, Stroke as ProjectStroke, StrokePoint};
+
+    fn project_with_solid_dab(opacity: f32) -> AniProject {
+        let mut project = AniProject::default();
+        project.width = 48;
+        project.height = 48;
+        project.layers[0].opacity = opacity;
+        project.layers[0]
+            .keyframes
+            .get_mut(&1)
+            .unwrap()
+            .strokes
+            .push(ProjectStroke {
+                points: vec![StrokePoint { x: 24.0, y: 24.0, pressure: 1.0 }],
+                color: [240, 30, 20, 255],
+                fill_color: None,
+                base_width: 16.0,
+                is_vector: false,
+                brush_preset: KritaBrushPreset::GPenInk,
+                opacity: 1.0,
+                brush_texture_id: None,
+            });
+        project
+    }
+
+    fn center_alpha(project: &AniProject) -> u8 {
+        render_frame_pixmap(project, 1, true, [0, 0, 0, 0])
+            .pixel(24, 24)
+            .expect("center pixel")
+            .alpha()
+    }
+
+    #[test]
+    fn layer_opacity_changes_export_alpha() {
+        assert_eq!(center_alpha(&project_with_solid_dab(0.0)), 0);
+        assert_eq!(center_alpha(&project_with_solid_dab(1.0)), 255);
+        let half = center_alpha(&project_with_solid_dab(0.5));
+        assert!((125..=130).contains(&half), "expected about 128, got {half}");
+    }
+
+    #[test]
+    fn overlapping_strokes_do_not_square_layer_opacity() {
+        let mut project = project_with_solid_dab(0.5);
+        let duplicate = project.layers[0].keyframes[&1].strokes[0].clone();
+        project.layers[0].keyframes.get_mut(&1).unwrap().strokes.push(duplicate);
+        let alpha = center_alpha(&project);
+        assert!((125..=130).contains(&alpha), "unexpected accumulated layer alpha: {alpha}");
+    }
+
+    #[test]
+    fn hidden_and_guide_layers_do_not_export() {
+        let mut project = project_with_solid_dab(1.0);
+        project.layers[0].visible = false;
+        assert_eq!(center_alpha(&project), 0);
+        project.layers[0].visible = true;
+        project.layers[0].is_guide = true;
+        assert_eq!(center_alpha(&project), 0);
+    }
 }

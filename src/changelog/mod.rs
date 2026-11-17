@@ -12,48 +12,40 @@ pub struct PatchReleaseNote {
 /// سجل التحديثات: عدّل هذه القائمة مع كل تحديث جديد لـ Stick وسيظهر تلقائياً مرة واحدة للمستخدم
 pub fn get_latest_patch_note() -> PatchReleaseNote {
     PatchReleaseNote {
-        version: "4.1.0",
-        title_en: "What's New in Stick v4.1.0",
-        title_ar: "ما الجديد في تحديث Stick v4.1.0",
+        version: env!("CARGO_PKG_VERSION"),
+        title_en: "What's New in Stick",
+        title_ar: "إيه الجديد في Stick",
         features: &[
-            (
-                "Icon-Based Brush Presets: Quick-select buttons with custom icons for G-Pen, Watercolor, Marker, Airbrush, and Pencil.",
-                "أزرار الفرش بالأيقونات: اختيار سريع بأيقونة مخصصة لكل فرشة (G-Pen، ألوان مائية، ماركر، بخاخ، قلم رصاص).",
-            ),
-            (
-                "Advanced Layers: Added Layer Lock, Opacity slider, Guide Layers, and Merge Down.",
-                "نظام طبقات متطور: إضافة قفل الطبقة، التحكم في الشفافية، الطبقات الإرشادية، والدمج لأسفل.",
-            ),
-            (
-                "AniCraft Timeline Mechanics: Continuous Playhead scrubbing, Loop Range, and Tween arrows.",
-                "ميكانيك التايم لاين الجديد: سحب مستمر للمؤشر الأحمر، تكرار المشهد (Loop)، وأسهم التحريك التلقائي.",
-            ),
+            ("Better drawing: pressure-aware G-Pen, visible bilingual tool names, and faster previews.",
+             "الرسم بقى أحسن: G-Pen بضغط القلم، وأسماء الأدوات بالعربي والإنجليزي، ومعاينة أخف."),
+            ("Onion Skin now shows earlier and later animation frames with a faded tint.",
+             "الـ Onion Skin بقى بيعرض الفريمات السابقة والتالية بشفافية."),
+            ("One-click update check with a clear no-update message.",
+             "زرار تحديثات أوضح، وبيقولك لما ميبقاش فيه تحديث جديد."),
+            ("Verified downloads and automatic restart after installation.",
+             "البرنامج بيتأكد إن التحديث سليم، وبعد التثبيت بيعيد التشغيل."),
+            ("What's New opens once per installed version in your language.",
+             "نافذة إيه الجديد بتظهر مرة واحدة لكل إصدار وباللغة اللي إنت مختارها."),
         ],
         bugfixes: &[
-            (
-                "Fixed 'Snake' stroke lag: Stabilizer now keeps long strokes locked to their true path.",
-                "إصلاح ظاهرة 'الثعبان' وانزياح الخطوط الطويلة أثناء الرسم السريع.",
-            ),
-            (
-                "Fixed Watercolor & Marker rendering: Rendered as continuous smooth paths instead of dotted circles.",
-                "إصلاح تقطع الدوائر في الألوان المائية والماركر لتصبح خطوطاً متصلة ناعمة.",
-            ),
-            (
-                "Removed tapered tails on G-Pen & Vector Ink Pen for clean, uniform line art.",
-                "إزالة الذيل المدبب من بداية ونهاية فرشة التحبير وقلم الفيكتور.",
-            ),
+            ("Fixed update version comparison to stop offering the same build repeatedly.",
+             "صلحنا مقارنة الإصدارات عشان نفس التحديث ميتعرضش كل شوية."),
+            ("Fixed update checks getting stuck when GitHub can't be reached.",
+             "صلحنا مشكلة التحديث اللي كان ممكن يفضل واقف على جاري البحث."),
+            ("Unsaved projects are protected before restarting to update.",
+             "البرنامج بيتأكد إن مشروعك متحفظ قبل ما يقفل ويحدّث نفسه."),
         ],
     }
 }
 
 /// نافذة عرض التحديثات مرة واحدة فقط بعد التحديث
-pub fn render_whats_new_modal(ctx: &egui::Context, lang: AppLang, show_modal: &mut bool, on_acknowledge: &mut bool) {
+pub fn render_whats_new_modal(ctx: &egui::Context, lang: AppLang, installed_version: &str, show_modal: &mut bool, on_acknowledge: &mut bool) {
     if !*show_modal {
         return;
     }
 
     let note = get_latest_patch_note();
-    egui::Window::new(tr(lang, note.title_en, note.title_ar))
+    egui::Window::new(format!("{} v{}", tr(lang, note.title_en, note.title_ar), installed_version))
         .collapsible(false)
         .resizable(false)
         .default_width(480.0)
@@ -69,7 +61,7 @@ pub fn render_whats_new_modal(ctx: &egui::Context, lang: AppLang, show_modal: &m
             ui.horizontal(|ui| {
                 ui.colored_label(
                     egui::Color32::from_rgb(255, 215, 25),
-                    egui::RichText::new(format!("✨ Stick v{}", note.version)).size(19.0).strong(),
+                    egui::RichText::new(format!("✨ Stick v{}", installed_version)).size(19.0).strong(),
                 );
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     ui.colored_label(
@@ -85,7 +77,7 @@ pub fn render_whats_new_modal(ctx: &egui::Context, lang: AppLang, show_modal: &m
             egui::ScrollArea::vertical().max_height(310.0).show(ui, |ui| {
                 // قسم المميزات الجديدة
                 ui.label(
-                    egui::RichText::new(tr(lang, "🚀 New Features:", "🚀 المزايا الجديدة التي تمت إضافتها:"))
+                    egui::RichText::new(tr(lang, "🚀 New Features:", "🚀 المزايا الجديدة:"))
                         .size(15.5)
                         .color(egui::Color32::from_rgb(34, 197, 94))
                         .strong(),
@@ -104,7 +96,7 @@ pub fn render_whats_new_modal(ctx: &egui::Context, lang: AppLang, show_modal: &m
 
                 // قسم الإصلاحات والقلتشات
                 ui.label(
-                    egui::RichText::new(tr(lang, "🛠 Bug Fixes & Glitches Resolved:", "🛠 القلتشات والمشاكل التي تم إصلاحها:"))
+                    egui::RichText::new(tr(lang, "🛠 Bug Fixes:", "🛠 المشاكل اللي اتصلحت:"))
                         .size(15.5)
                         .color(egui::Color32::from_rgb(249, 115, 22))
                         .strong(),
@@ -122,7 +114,7 @@ pub fn render_whats_new_modal(ctx: &egui::Context, lang: AppLang, show_modal: &m
             ui.separator();
             ui.vertical_centered(|ui| {
                 let btn = egui::Button::new(
-                    egui::RichText::new(tr(lang, "Awesome, Let's Create! 🚀", "ممتاز، لنبدأ العمل! 🚀"))
+                    egui::RichText::new(tr(lang, "Awesome, Let's Create! 🚀", "تمام، يلا نبدأ! 🚀"))
                         .size(15.0)
                         .color(egui::Color32::BLACK)
                         .strong(),

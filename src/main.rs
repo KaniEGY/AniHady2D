@@ -1,14 +1,19 @@
 #![windows_subsystem = "windows"]
 
 mod brushes;
+mod brush_engine;
+mod stylus;
+mod updater;
 mod changelog;
 mod exporter;
 mod persistence;
+mod onion_skin;
 mod profile;
 mod project;
 
 use arabic_reshaper::arabic_reshape;
 use brushes::{draw_brush_preset_icon, draw_stroke_pro};
+use stylus::TouchPressureTracker;
 use eframe::egui;
 use exporter::{ImageExportFormat, VideoExportFormat};
 use profile::UserProfile;
@@ -184,6 +189,75 @@ fn tr(lang: AppLang, en: &str, ar: &str) -> String {
     }
 }
 
+
+const TOOLBAR_ITEMS: [ActiveToolUI; 13] = [
+    ActiveToolUI::SelectNormal,
+    ActiveToolUI::SelectLasso,
+    ActiveToolUI::FreeTransform,
+    ActiveToolUI::VectorDirectSelect,
+    ActiveToolUI::VectorPen,
+    ActiveToolUI::Brush,
+    ActiveToolUI::EraserRed,
+    ActiveToolUI::EraserGreen,
+    ActiveToolUI::Bucket,
+    ActiveToolUI::Eyedropper,
+    ActiveToolUI::Text,
+    ActiveToolUI::ShapeLine,
+    ActiveToolUI::HandCanvas,
+];
+
+fn tool_display_name(tool: ActiveToolUI, lang: AppLang) -> String {
+    let (en, ar) = match tool {
+        ActiveToolUI::SelectNormal => ("Selection", "تحديد"),
+        ActiveToolUI::SelectLasso => ("Lasso", "تحديد حر"),
+        ActiveToolUI::FreeTransform => ("Transform", "تحويل"),
+        ActiveToolUI::VectorDirectSelect => ("Vector Nodes", "نقاط الفيكتور"),
+        ActiveToolUI::VectorPen => ("Ink Pen", "قلم حبر"),
+        ActiveToolUI::Brush => ("Brush", "فرشاة"),
+        ActiveToolUI::EraserRed => ("Eraser", "ممحاة"),
+        ActiveToolUI::EraserGreen => ("Partial Eraser", "ممحاة جزئية"),
+        ActiveToolUI::Bucket => ("Fill", "تعبئة"),
+        ActiveToolUI::Eyedropper => ("Eyedropper", "قطارة الألوان"),
+        ActiveToolUI::Text => ("Text", "نص"),
+        ActiveToolUI::ShapeLine => ("Shapes", "أشكال"),
+        ActiveToolUI::HandCanvas => ("Pan Canvas", "تحريك اللوحة"),
+    };
+    tr(lang, en, ar)
+}
+
+fn tool_shortcut<'a>(tool: ActiveToolUI, config: &'a AppConfig) -> &'a str {
+    match tool {
+        ActiveToolUI::SelectNormal => &config.tool_select,
+        ActiveToolUI::SelectLasso => &config.tool_lasso,
+        ActiveToolUI::FreeTransform => &config.tool_free_transform,
+        ActiveToolUI::VectorDirectSelect => &config.tool_vector_select,
+        ActiveToolUI::VectorPen => &config.tool_pen,
+        ActiveToolUI::Brush => &config.tool_brush,
+        ActiveToolUI::EraserRed => &config.tool_eraser,
+        ActiveToolUI::EraserGreen => &config.tool_eraser_partial,
+        ActiveToolUI::Bucket => &config.tool_bucket,
+        ActiveToolUI::Eyedropper => &config.tool_eyedropper,
+        ActiveToolUI::Text => &config.tool_text,
+        ActiveToolUI::ShapeLine => &config.tool_shape,
+        ActiveToolUI::HandCanvas => &config.tool_hand,
+    }
+}
+
+const BASIC_COLORS: [([u8; 3], &str); 12] = [
+    ([0, 0, 0], "Black"),
+    ([255, 255, 255], "White"),
+    ([239, 68, 68], "Red"),
+    ([249, 115, 22], "Orange"),
+    ([234, 179, 8], "Yellow"),
+    ([34, 197, 94], "Green"),
+    ([20, 184, 166], "Teal"),
+    ([56, 189, 248], "Sky"),
+    ([37, 99, 235], "Blue"),
+    ([139, 92, 246], "Violet"),
+    ([236, 72, 153], "Pink"),
+    ([120, 113, 108], "Gray"),
+];
+
 fn get_installed_version() -> String {
     if let Ok(exe) = std::env::current_exe() {
         if let Ok(v) = std::fs::read_to_string(exe.with_file_name("version.txt")) {
@@ -194,12 +268,6 @@ fn get_installed_version() -> String {
         }
     }
     FALLBACK_VERSION.to_string()
-}
-
-fn save_installed_version(ver: &str) {
-    if let Ok(exe) = std::env::current_exe() {
-        let _ = std::fs::write(exe.with_file_name("version.txt"), ver.trim().trim_start_matches('v'));
-    }
 }
 
 fn is_running_from_installed_dir() -> bool {
@@ -235,9 +303,9 @@ enum UpdateState {
     Idle,
     Checking,
     UpToDate,
-    UpdateAvailable { version: String, download_url: String },
+    UpdateAvailable(updater::ReleaseInfo),
     Downloading(String),
-    ReadyToRestart,
+    ReadyToRestart { version: String, staged_exe: PathBuf },
     Error(String),
 }
 
@@ -740,6 +808,7 @@ struct StickApp {
     show_update_dialog: bool,
     show_patch_notes_dialog: bool,
     show_settings_dialog: bool,
+    show_shortcuts_dialog: bool,
     show_credits_dialog: bool,
     settings_tab: usize,
     listening_shortcut_idx: Option<usize>,
@@ -750,6 +819,7 @@ struct StickApp {
     new_symbol_name: String,
     allow_close: bool,
     current_stroke: Option<Stroke>,
+    stylus_tracker: TouchPressureTracker,
     texture_cache: HashMap<String, egui::TextureHandle>,
     status_message: String,
     audio_sink: Option<(OutputStream, Sink)>,
@@ -831,8 +901,9 @@ impl StickApp {
             text_font_size: 36.0,
             pending_text_pos: egui::pos2(200.0, 200.0),
             show_update_dialog: false,
-            show_patch_notes_dialog: AppConfig::load().last_seen_patch_version != FALLBACK_VERSION,
+            show_patch_notes_dialog: AppConfig::load().last_seen_patch_version != get_installed_version(),
             show_settings_dialog: false,
+            show_shortcuts_dialog: false,
             show_credits_dialog: false,
             settings_tab: 0,
             listening_shortcut_idx: None,
@@ -843,6 +914,7 @@ impl StickApp {
             new_symbol_name: "Symbol_1".to_string(),
             allow_close: false,
             current_stroke: None,
+            stylus_tracker: TouchPressureTracker::default(),
             texture_cache: HashMap::new(),
             status_message: "Stick Studio Ready".to_string(),
             audio_sink: None,
@@ -1244,16 +1316,12 @@ impl StickApp {
                     self.play_sfx(SfxType::NewFrame);
 
                     if outcome.report.was_migrated {
-                        // لا نكتب فوق الملف القديم تلقائياً؛ ننشئ نسخة محدثة مستقلة أو نترك المستخدم يختار مكان الحفظ
-                        let migrated_path = p.with_file_name(format!(
-                            "{}_v{}.stick",
-                            p.file_stem().and_then(|s| s.to_str()).unwrap_or("project"),
-                            PROJECT_SCHEMA_VERSION
-                        ));
-                        self.current_project_path = Some(migrated_path);
+                        // لا نعيّن مسار حفظ آلياً: قد يوجد بالفعل مشروع مُحوّل بالاسم المتوقع.
+                        // Ctrl+S سيفتح Save As لحماية الملف الأصلي وأي نسخة مُحوّلة سابقة.
+                        self.current_project_path = None;
                         self.has_unsaved_changes = true;
                         let mut msg = format!(
-                            "تم إنشاء هذا المشروع بإصدار قديم من Stick ({}).\nتم فتح نسخة متوافقة مع الإصدار الحالي (Schema v{}) مع الاحتفاظ بالملف الأصلي سليماً دون تعديل.",
+                            "تم إنشاء هذا المشروع بإصدار قديم من Stick ({}).\nتم فتح نسخة متوافقة مع الإصدار الحالي (Schema v{}) مع الاحتفاظ بالملف الأصلي سليماً دون تعديل.\nعند الضغط على حفظ سيُطلب منك اختيار اسم ومسار للنسخة الجديدة (Save As) حتى لا نستبدل مشروعاً آخر.",
                             outcome.report.source_format_label, outcome.report.new_schema
                         );
                         if let Some(bak) = outcome.legacy_backup_path {
@@ -1370,66 +1438,67 @@ impl StickApp {
     fn check_for_updates(&mut self, ctx: egui::Context) {
         self.show_update_dialog = true;
         *self.update_state.lock().unwrap() = UpdateState::Checking;
-        let state_clone = Arc::clone(&self.update_state);
-        let current_ver = self.installed_version.clone();
+        let state = Arc::clone(&self.update_state);
+        let installed = self.installed_version.clone();
         std::thread::spawn(move || {
-            let api_url = format!("https://api.github.com/repos/{}/releases?per_page=1", GITHUB_REPO);
-            if let Ok(resp) = ureq::get(&api_url).set("User-Agent", "Stick-Updater").call() {
-                if let Ok(json) = resp.into_json::<serde_json::Value>() {
-                    if let Some(latest) = json.as_array().and_then(|arr| arr.first()) {
-                        let tag = latest["tag_name"].as_str().unwrap_or("").trim_start_matches('v').to_string();
-                        let mut exe_url = String::new();
-                        if let Some(assets) = latest["assets"].as_array() {
-                            for asset in assets {
-                                if asset["name"].as_str().unwrap_or("").ends_with(".exe") {
-                                    exe_url = asset["browser_download_url"].as_str().unwrap_or("").to_string();
-                                    break;
-                                }
-                            }
-                        }
-                        let mut st = state_clone.lock().unwrap();
-                        if !tag.is_empty() && tag != current_ver && !exe_url.is_empty() {
-                            *st = UpdateState::UpdateAvailable { version: tag, download_url: exe_url };
-                        } else {
-                            *st = UpdateState::UpToDate;
-                        }
-                    }
-                }
-            }
+            let next = match updater::check_online(&installed) {
+                Ok(Some(release)) => UpdateState::UpdateAvailable(release),
+                Ok(None) => UpdateState::UpToDate,
+                Err(error) => UpdateState::Error(error),
+            };
+            *state.lock().unwrap() = next;
             ctx.request_repaint();
         });
     }
 
-    fn download_and_apply_update(&mut self, version: String, download_url: String, ctx: egui::Context) {
-        *self.update_state.lock().unwrap() = UpdateState::Downloading(format!("Downloading v{}...", version));
-        let state_clone = Arc::clone(&self.update_state);
+    fn download_and_apply_update(&mut self, info: updater::ReleaseInfo, ctx: egui::Context) {
+        if self.has_unsaved_changes || self.current_stroke.is_some() {
+            self.project_notice_title = tr(self.config.lang, "Save your work first", "احفظ شغلك الأول");
+            self.project_notice_body = tr(
+                self.config.lang,
+                "Save your open project (Ctrl+S), then click Install again. We won't restart and lose unsaved work.",
+                "احفظ المشروع المفتوح (Ctrl+S)، وبعد كده اضغط تثبيت تاني. البرنامج مش هيقفل ويضيّع شغلك.",
+            );
+            self.show_project_notice = true;
+            return;
+        }
+        *self.update_state.lock().unwrap() = UpdateState::Downloading(
+            tr(self.config.lang, "Downloading and checking the update...", "بننزّل التحديث وبنتأكد إنه سليم..."),
+        );
+        let state = Arc::clone(&self.update_state);
         std::thread::spawn(move || {
-            if let Ok(resp) = ureq::get(&download_url).set("User-Agent", "Stick-Updater").call() {
-                let mut bytes = Vec::new();
-                if resp.into_reader().read_to_end(&mut bytes).is_ok() {
-                    if let Ok(curr) = std::env::current_exe() {
-                        if let Ok(mut file) = File::create(curr.with_file_name("Stick_new.exe")) {
-                            if file.write_all(&bytes).is_ok() {
-                                save_installed_version(&version);
-                                *state_clone.lock().unwrap() = UpdateState::ReadyToRestart;
-                                ctx.request_repaint();
-                                return;
-                            }
-                        }
-                    }
-                }
-            }
-            *state_clone.lock().unwrap() = UpdateState::Error("Download failed.".to_string());
+            let next = match std::env::current_exe() {
+                Ok(current) => match updater::download_verified(&info, &current) {
+                    Ok(staged_exe) => UpdateState::ReadyToRestart {
+                        version: info.version.clone(),
+                        staged_exe,
+                    },
+                    Err(error) => UpdateState::Error(error),
+                },
+                Err(error) => UpdateState::Error(format!("Couldn't find Stick.exe: {error}")),
+            };
+            *state.lock().unwrap() = next;
             ctx.request_repaint();
         });
     }
 
-    fn restart_with_new_exe(&mut self) {
-        if let Ok(curr) = std::env::current_exe() {
-            let new_exe = curr.with_file_name("Stick_new.exe");
-            let ps = format!("Start-Sleep -Seconds 2; Move-Item -LiteralPath '{}' -Destination '{}' -Force; Start-Process -FilePath '{}'", new_exe.display(), curr.display(), curr.display());
-            let _ = std::process::Command::new("powershell").args(["-NoProfile", "-WindowStyle", "Hidden", "-Command", &ps]).spawn();
-            std::process::exit(0);
+    fn restart_with_new_exe(&mut self, version: String, staged_exe: PathBuf) {
+        if self.has_unsaved_changes || self.current_stroke.is_some() {
+            self.project_notice_title = tr(self.config.lang, "Save before restarting", "احفظ قبل إعادة التشغيل");
+            self.project_notice_body = tr(
+                self.config.lang,
+                "You have unsaved changes. Save your project, then restart the update.",
+                "عندك تعديلات لسه متحفظتش. احفظ المشروع وبعدها كمّل التحديث.",
+            );
+            self.show_project_notice = true;
+            return;
+        }
+        let result = std::env::current_exe()
+            .map_err(|e| e.to_string())
+            .and_then(|current| updater::spawn_replacer(&current, &staged_exe, &version));
+        match result {
+            Ok(()) => std::process::exit(0),
+            Err(error) => *self.update_state.lock().unwrap() = UpdateState::Error(error),
         }
     }
 
@@ -1555,6 +1624,10 @@ impl eframe::App for StickApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         let lang = self.config.lang;
         let now_time = ctx.input(|i| i.time);
+        // The shortcut guide is discoverable even when the toolbar is hidden.
+        if ctx.input(|i| i.key_pressed(egui::Key::F1)) {
+            self.show_shortcuts_dialog = !self.show_shortcuts_dialog;
+        }
 
         // الحفظ التلقائي الدوري (Auto-Save Recovery) كل 5 دقائق عند وجود تعديلات
         let autosave_secs = (self.config.autosave_interval_minutes.max(1) * 60) as f64;
@@ -1645,6 +1718,17 @@ impl eframe::App for StickApp {
                     });
                 });
             });
+            // Show version notes on the first run after an update, even
+            // before the user chooses Drawing or Animation workspace.
+            let mut launcher_ack = false;
+            changelog::render_whats_new_modal(
+                ctx, lang, &self.installed_version,
+                &mut self.show_patch_notes_dialog, &mut launcher_ack,
+            );
+            if launcher_ack {
+                self.config.last_seen_patch_version = self.installed_version.clone();
+                self.config.save();
+            }
             return;
         }
 
@@ -1652,11 +1736,12 @@ impl eframe::App for StickApp {
         changelog::render_whats_new_modal(
             ctx,
             lang,
+            &self.installed_version,
             &mut self.show_patch_notes_dialog,
             &mut patch_acknowledged,
         );
         if patch_acknowledged {
-            self.config.last_seen_patch_version = FALLBACK_VERSION.to_string();
+            self.config.last_seen_patch_version = self.installed_version.clone();
             self.config.save();
             self.play_sfx(SfxType::NewFrame);
         }
@@ -1730,6 +1815,10 @@ impl eframe::App for StickApp {
                 captured_key,
             )
         });
+
+        // Best-effort tablet pressure delivered by egui Touch events.
+        // Regular mouse input and unsupported tablets safely use 1.0.
+        let drawing_pressure = ctx.input(|i| self.stylus_tracker.update(&i.events, pointer_pos, pointer_down));
 
         // اختصار F10: التبديل لوضع ملء الشاشة الحقيقي بدون ظهور Taskbar والرجوع للوضع الطبيعي عند الضغط عليه مرة ثانية
         if f10_pressed {
@@ -2027,6 +2116,53 @@ impl eframe::App for StickApp {
             });
         }
 
+        if self.show_shortcuts_dialog {
+            egui::Window::new(tr(lang, "Keyboard Shortcuts (F1)", "شرح الاختصارات (F1)"))
+                .default_width(390.0)
+                .resizable(true)
+                .collapsible(false)
+                .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+                .show(ctx, |ui| {
+                    ui.label(tr(lang, "The tool names and keys below match your current settings.", "الأسماء والاختصارات دي مطابقة لإعداداتك الحالية."));
+                    ui.separator();
+                    egui::ScrollArea::vertical().max_height(440.0).show(ui, |ui| {
+                        for tool in TOOLBAR_ITEMS {
+                            ui.horizontal(|ui| {
+                                ui.label(tool_display_name(tool, lang));
+                                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                    ui.monospace(tool_shortcut(tool, &self.config));
+                                });
+                            });
+                        }
+                        ui.separator();
+                        for (en, ar, key) in [
+                            ("Save", "حفظ", "Ctrl+S"),
+                            ("Save As", "حفظ باسم", "Ctrl+Shift+S"),
+                            ("Undo", "تراجع", "Ctrl+Z"),
+                            ("Redo", "إعادة", "Ctrl+Y"),
+                            ("Command Palette", "لوحة الأوامر", "Ctrl+K"),
+                            ("Fullscreen", "ملء الشاشة", "F10"),
+                            ("Insert Frame", "إضافة فريم", self.config.insert_frame.as_str()),
+                            ("Keyframe", "فريم مفتاحي", self.config.insert_keyframe.as_str()),
+                            ("Blank Keyframe", "فريم مفتاحي فارغ", self.config.insert_blank_kf.as_str()),
+                        ] {
+                            ui.horizontal(|ui| {
+                                ui.label(tr(lang, en, ar));
+                                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                    ui.monospace(key);
+                                });
+                            });
+                        }
+                        ui.separator();
+                        ui.label(tr(lang, "Brush colors: right panel, under Colors. Onion Skin: Animation workspace, above the Timeline.", "الألوان: في اللوحة اليمنى تحت عنوان الألوان. عرض الفريمات المجاورة: في وضع الأنيميشن فوق التايم لاين."));
+                    });
+                    ui.separator();
+                    if ui.button(tr(lang, "Close (F1)", "إغلاق (F1)")).clicked() {
+                        self.show_shortcuts_dialog = false;
+                    }
+                });
+        }
+
         if self.show_settings_dialog {
             egui::Window::new(tr(lang, "Settings & System", "الإعدادات والنظام")).collapsible(false).resizable(false).default_width(460.0).anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0]).show(ctx, |ui| {
                 ui.horizontal(|ui| {
@@ -2065,20 +2201,65 @@ impl eframe::App for StickApp {
         }
 
         if self.show_update_dialog {
-            let st = self.update_state.lock().unwrap().clone();
-            egui::Window::new("Updater").collapsible(false).resizable(false).anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0]).show(ctx, |ui| {
-                match st {
-                    UpdateState::Checking => { ui.spinner(); }
-                    UpdateState::UpToDate => { ui.label("Up to date!"); if ui.button("Close").clicked() { self.show_update_dialog = false; } }
-                    UpdateState::UpdateAvailable { version, download_url } => {
-                        if ui.button(format!("Install v{}", version)).clicked() { self.download_and_apply_update(version, download_url, ctx.clone()); }
+            let update_snapshot = self.update_state.lock().unwrap().clone();
+            egui::Window::new(tr(lang, "Stick Updates", "تحديثات Stick"))
+                .collapsible(false)
+                .resizable(false)
+                .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+                .show(ctx, |ui| {
+                    match update_snapshot {
+                        UpdateState::Checking => {
+                            ui.horizontal(|ui| {
+                                ui.spinner();
+                                ui.label(tr(lang, "Checking GitHub for updates...", "بندور على تحديثات جديدة..."));
+                            });
+                        }
+                        UpdateState::UpToDate => {
+                            ui.label(tr(lang, "No updates available right now. You're up to date!", "مفيش تحديث دلوقتي، إنت على آخر إصدار!"));
+                            if ui.button(tr(lang, "Close", "قفل")).clicked() {
+                                self.show_update_dialog = false;
+                            }
+                        }
+                        UpdateState::UpdateAvailable(info) => {
+                            ui.label(tr(lang, "A new Stick version is ready.", "في تحديث جديد لبرنامج Stick."));
+                            ui.label(format!("v{} → v{}", self.installed_version, info.version));
+                            if ui.button(tr(lang, "Download and install update", "نزّل وثبّت التحديث")).clicked() {
+                                self.download_and_apply_update(info, ctx.clone());
+                            }
+                            if ui.button(tr(lang, "Not now", "مش دلوقتي")).clicked() {
+                                self.show_update_dialog = false;
+                            }
+                        }
+                        UpdateState::Downloading(message) => {
+                            ui.spinner();
+                            ui.label(message);
+                        }
+                        UpdateState::ReadyToRestart { version, staged_exe } => {
+                            if self.has_unsaved_changes || self.current_stroke.is_some() {
+                                ui.label(tr(lang, "Update downloaded. Save your project before restarting.", "التحديث اتنزّل. احفظ مشروعك قبل ما البرنامج يعيد التشغيل."));
+                                if ui.button(tr(lang, "Save and restart", "احفظ واعمل إعادة تشغيل")).clicked() {
+                                    if self.trigger_save() {
+                                        self.restart_with_new_exe(version, staged_exe);
+                                    }
+                                }
+                            } else {
+                                ui.label(tr(lang, "Update checked. Restarting Stick to finish installation...", "اتأكدنا إن التحديث سليم. Stick هيعيد التشغيل عشان يكمّل التثبيت..."));
+                                self.restart_with_new_exe(version, staged_exe);
+                            }
+                        }
+                        UpdateState::Error(error) => {
+                            ui.colored_label(egui::Color32::LIGHT_RED, tr(lang, "Update failed. Your current Stick version is safe.", "التحديث فشل، بس نسختك الحالية سليمة."));
+                            ui.label(error);
+                            if ui.button(tr(lang, "Try again", "جرّب تاني")).clicked() {
+                                self.check_for_updates(ctx.clone());
+                            }
+                            if ui.button(tr(lang, "Close", "قفل")).clicked() {
+                                self.show_update_dialog = false;
+                            }
+                        }
+                        UpdateState::Idle => {}
                     }
-                    UpdateState::Downloading(m) => { ui.label(m); }
-                    UpdateState::ReadyToRestart => { if ui.button("Restart").clicked() { self.restart_with_new_exe(); } }
-                    UpdateState::Error(e) => { ui.label(e); if ui.button("Close").clicked() { self.show_update_dialog = false; } }
-                    UpdateState::Idle => {}
-                }
-            });
+                });
         }
 
         if self.show_symbol_dialog {
@@ -2156,6 +2337,10 @@ impl eframe::App for StickApp {
                 if rresp.clicked() && can_r { self.redo(); }
 
                 ui.separator();
+                if ui.button(tr(lang, "? Shortcuts (F1)", "؟ الاختصارات (F1)")).clicked() {
+                    self.show_shortcuts_dialog = true;
+                }
+                ui.separator();
                 if ui.button(tr(lang, "+ Image", "+ صورة")).clicked() { self.import_image_dialog(); }
                 if ui.button("+ SVG").clicked() { self.import_svg_dialog(); }
                 if self.workspace_mode == WorkspaceMode::AnimationStudio {
@@ -2183,32 +2368,53 @@ impl eframe::App for StickApp {
             });
         });
 
-        // شريط الأدوات الأيسر
-        egui::SidePanel::left("tools_panel").resizable(true).default_width(60.0).show(ctx, |ui| {
+        // شريط أدوات ثنائي اللغة: اسم دائم بجوار كل أيقونة واختصار فعلي من الإعدادات.
+        egui::SidePanel::left("tools_panel").resizable(true).default_width(210.0).min_width(180.0).show(ctx, |ui| {
             ui.vertical_centered(|ui| {
-                ui.add_space(6.0);
-                let tools = [
-                    (ActiveToolUI::SelectNormal, "Select (V)"),
-                    (ActiveToolUI::FreeTransform, "Transform (Q)"),
-                    (ActiveToolUI::VectorPen, "Ink Pen (P)"),
-                    (ActiveToolUI::Brush, "Brushes (B)"),
-                    (ActiveToolUI::EraserRed, "Eraser (E)"),
-                    (ActiveToolUI::EraserGreen, "Part Eraser (T)"),
-                    (ActiveToolUI::Bucket, "Bucket Fill (K)"),
-                    (ActiveToolUI::Eyedropper, "Picker (I)"),
-                    (ActiveToolUI::Text, "Text (N)"),
-                    (ActiveToolUI::ShapeLine, "Shapes (U)"),
-                    (ActiveToolUI::HandCanvas, "Hand (H)"),
-                ];
-                for (tool, tip) in tools {
-                    let sel = self.active_tool_ui == tool;
-                    let (rect, resp) = ui.allocate_exact_size(egui::vec2(40.0, 30.0), egui::Sense::click());
-                    let bg = if sel { get_tool_ui_color(tool) } else if resp.hovered() { egui::Color32::from_rgb(62, 62, 68) } else { egui::Color32::from_rgb(44, 44, 48) };
-                    ui.painter().rect_filled(rect, 6.0, bg);
-                    draw_tool_ui_icon(ui.painter(), rect, tool, sel);
-                    if resp.on_hover_text(tip).clicked() { self.active_tool_ui = tool; }
-                }
+                ui.add_space(5.0);
+                ui.strong(tr(lang, "Drawing Tools", "أدوات الرسم"));
+                ui.add_space(5.0);
+                egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+                    for tool in TOOLBAR_ITEMS {
+                        let selected = self.active_tool_ui == tool;
+                        let name = tool_display_name(tool, lang);
+                        let key = tool_shortcut(tool, &self.config);
+                        let width = ui.available_width().max(170.0);
+                        let (rect, response) = ui.allocate_exact_size(
+                            egui::vec2(width, 34.0), egui::Sense::click()
+                        );
+                        let bg = if selected {
+                            get_tool_ui_color(tool)
+                        } else if response.hovered() {
+                            egui::Color32::from_rgb(62, 62, 68)
+                        } else {
+                            egui::Color32::from_rgb(44, 44, 48)
+                        };
+                        ui.painter().rect_filled(rect, 6.0, bg);
+                        let icon_rect = egui::Rect::from_min_size(
+                            rect.left_top() + egui::vec2(5.0, 2.0), egui::vec2(30.0, 30.0)
+                        );
+                        draw_tool_ui_icon(ui.painter(), icon_rect, tool, selected);
+                        ui.painter().text(
+                            rect.left_center() + egui::vec2(43.0, 0.0),
+                            egui::Align2::LEFT_CENTER,
+                            name.clone(),
+                            egui::FontId::proportional(14.0),
+                            egui::Color32::WHITE,
+                        );
+                        let shortcut_hint = format!("{}: {}", tr(lang, "Shortcut", "الاختصار"), key);
+                        if response.on_hover_text(format!("{} — {}", name, shortcut_hint)).clicked() {
+                            self.active_tool_ui = tool;
+                            self.play_sfx(SfxType::UiClick);
+                        }
+                        ui.add_space(3.0);
+                    }
+                });
                 ui.separator();
+                if ui.small_button(tr(lang, "? Keyboard Shortcuts (F1)", "؟ شرح الاختصارات (F1)")).clicked() {
+                    self.show_shortcuts_dialog = true;
+                }
+                ui.label(tr(lang, "Current color", "اللون الحالي"));
                 ui.color_edit_button_srgba_unmultiplied(&mut self.brush_color);
             });
         });
@@ -2216,6 +2422,31 @@ impl eframe::App for StickApp {
         // اللوحة اليمنى
         egui::SidePanel::right("right_panel").resizable(true).default_width(270.0).show(ctx, |ui| {
             self.render_tool_properties_ui(ui, lang);
+            ui.add_space(8.0);
+            ui.separator();
+            ui.strong(tr(lang, "Colors", "الألوان"));
+            ui.label(tr(lang, "Click a swatch or use the custom color picker:", "اختار لون جاهز أو افتح منتقي الألوان:"));
+            ui.horizontal_wrapped(|ui| {
+                for (rgb, en_name) in BASIC_COLORS {
+                    let color = egui::Color32::from_rgb(rgb[0], rgb[1], rgb[2]);
+                    let selected = self.brush_color[0..3] == rgb;
+                    let button = egui::Button::new(" ")
+                        .fill(color)
+                        .stroke(if selected {
+                            egui::Stroke::new(2.0, egui::Color32::YELLOW)
+                        } else {
+                            egui::Stroke::new(1.0, egui::Color32::GRAY)
+                        })
+                        .min_size(egui::vec2(27.0, 27.0));
+                    if ui.add(button).on_hover_text(en_name).clicked() {
+                        self.brush_color = [rgb[0], rgb[1], rgb[2], 255];
+                    }
+                }
+            });
+            ui.horizontal(|ui| {
+                ui.label(tr(lang, "Custom color:", "لون مخصص:"));
+                ui.color_edit_button_srgba_unmultiplied(&mut self.brush_color);
+            });
             ui.add_space(8.0);
             ui.separator();
             ui.strong(tr(lang, "Symmetry Mirroring", "الرسم المتماثل"));
@@ -2277,7 +2508,23 @@ impl eframe::App for StickApp {
                     if ui.button("Frame (F5)").clicked() { self.action_insert_frame_f5(); }
                     if ui.button("Keyframe (F6)").clicked() { self.action_insert_keyframe_f6(now_time); }
                     if ui.button("Blank (F7)").clicked() { self.action_insert_blank_keyframe_f7(now_time); }
-                    ui.checkbox(&mut self.project.onion_skin.enabled, "Onion Skin");
+                    if ui.checkbox(&mut self.project.onion_skin.enabled, tr(lang, "Onion Skin", "عرض الفريمات المجاورة"))
+                        .on_hover_text(tr(lang, "Show faded previous and next frames to help animate.", "إظهار الفريمات السابقة والتالية بشفافية لتسهيل التحريك."))
+                        .changed()
+                    {
+                        self.has_unsaved_changes = true;
+                    }
+                });
+                ui.collapsing(tr(lang, "Onion Skin Options", "إعدادات الفريمات المجاورة"), |ui| {
+                    ui.label(tr(lang, "Preview nearby frames with faded colors.", "عرض الفريمات القريبة بألوان شفافة للمساعدة في رسم الحركة."));
+                    if ui.add(egui::Slider::new(&mut self.project.onion_skin.frames_before, 0..=6)
+                        .text(tr(lang, "Previous frames", "الفريمات السابقة"))).changed() {
+                        self.has_unsaved_changes = true;
+                    }
+                    if ui.add(egui::Slider::new(&mut self.project.onion_skin.frames_after, 0..=6)
+                        .text(tr(lang, "Next frames", "الفريمات التالية"))).changed() {
+                        self.has_unsaved_changes = true;
+                    }
                 });
                 ui.separator();
                 let cell_w = self.timeline_cell_width;
@@ -2439,12 +2686,12 @@ impl eframe::App for StickApp {
                             if let Some(stroke) = &mut self.current_stroke {
                                 if let Some(last) = stroke.points.last() {
                                     if ((last.x - virt.x).powi(2) + (last.y - virt.y).powi(2)).sqrt() >= 1.5 {
-                                        stroke.points.push(StrokePoint { x: virt.x, y: virt.y, pressure: 1.0 });
+                                        stroke.points.push(StrokePoint { x: virt.x, y: virt.y, pressure: drawing_pressure });
                                     }
                                 }
                             } else {
                                 self.save_undo_state();
-                                self.current_stroke = Some(Stroke { points: vec![StrokePoint { x: virt.x, y: virt.y, pressure: 1.0 }], color: self.brush_color, fill_color: None, base_width: self.brush_size, is_vector: false, brush_preset: self.active_krita_brush, opacity: self.brush_opacity, brush_texture_id: None });
+                                self.current_stroke = Some(Stroke { points: vec![StrokePoint { x: virt.x, y: virt.y, pressure: drawing_pressure }], color: self.brush_color, fill_color: None, base_width: self.brush_size, is_vector: false, brush_preset: self.active_krita_brush, opacity: self.brush_opacity, brush_texture_id: None });
                             }
                         }
                         ActiveToolUI::SelectNormal | ActiveToolUI::FreeTransform => {
@@ -2499,6 +2746,52 @@ impl eframe::App for StickApp {
 
             self.last_pointer_pos = if pointer_down { pointer_pos } else { None };
 
+            // Real Onion Skin preview: faint past/future drawings behind
+            // the current frame. Only active in Animation workspace. No
+            // changes to saved data and never exported as actual artwork.
+            if self.workspace_mode == WorkspaceMode::AnimationStudio
+                && self.project.onion_skin.enabled
+            {
+                let settings = &self.project.onion_skin;
+                for ghost in onion_skin::ghost_frames(
+                    self.current_frame,
+                    self.timeline_length,
+                    settings.frames_before,
+                    settings.frames_after,
+                ) {
+                    let base_tint = match ghost.side {
+                        onion_skin::GhostSide::Previous => settings.color_before,
+                        onion_skin::GhostSide::Next => settings.color_after,
+                    };
+                    let tint = onion_skin::ghost_color(base_tint, ghost.distance);
+                    for layer in self.project.layers.iter().rev() {
+                        if !layer.visible || layer.is_guide { continue; }
+                        let layer_opacity = layer.opacity.clamp(0.0, 1.0);
+                        if layer_opacity <= 0.0 { continue; }
+                        let ghost_data = self.project.evaluate_layer_at_frame(layer, ghost.frame);
+                        for stroke in &ghost_data.strokes {
+                            draw_stroke_pro(
+                                &painter, stroke, Some(tint), layer_opacity,
+                                scale, 0.0, 0.0, &to_screen,
+                            );
+                        }
+                        for instance in &ghost_data.symbol_instances {
+                            if let Some(symbol) = self.project.library_symbols.get(&instance.symbol_name) {
+                                for stroke in self.project.evaluate_symbol_strokes(symbol, ghost.frame) {
+                                    // Symbols are previewed at their existing position.
+                                    // More complex transforms will be unified with the
+                                    // shared compositor in a later milestone.
+                                    draw_stroke_pro(
+                                        &painter, stroke, Some(tint), layer_opacity,
+                                        scale, instance.x, instance.y, &to_screen,
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
             for layer in self.project.layers.iter().rev() {
                 if layer.visible {
                     let l_op = layer.opacity.clamp(0.05, 1.0);
@@ -2536,4 +2829,37 @@ fn main() -> eframe::Result<()> {
         ..Default::default()
     };
     eframe::run_native("Stick", options, Box::new(|cc| Ok(Box::new(StickApp::new(cc)))))
+}
+
+#[cfg(test)]
+mod tool_discovery_tests {
+    use super::*;
+
+    #[test]
+    fn every_toolbar_tool_has_a_localized_name_and_shortcut() {
+        let config = AppConfig::default();
+        for tool in TOOLBAR_ITEMS {
+            let name_en = tool_display_name(tool, AppLang::English);
+            let name_ar = tool_display_name(tool, AppLang::Arabic);
+            assert!(!name_en.trim().is_empty());
+            assert!(!name_ar.trim().is_empty());
+            assert!(!tool_shortcut(tool, &config).trim().is_empty());
+        }
+    }
+
+    #[test]
+    fn shortcuts_follow_user_configuration() {
+        let mut config = AppConfig::default();
+        config.tool_brush = "J".to_string();
+        assert_eq!(tool_shortcut(ActiveToolUI::Brush, &config), "J");
+    }
+
+    #[test]
+    fn palette_contains_unique_opaque_colors() {
+        let mut seen = std::collections::HashSet::new();
+        for (rgb, _) in BASIC_COLORS {
+            assert!(seen.insert(rgb));
+        }
+        assert_eq!(seen.len(), 12);
+    }
 }

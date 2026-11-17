@@ -74,6 +74,40 @@ pub fn draw_brush_preset_icon(painter: &egui::Painter, rect: egui::Rect, preset:
     }
 }
 
+/// Fast preview-only visibility check. Export is untouched. We must keep
+/// a conservative margin for wide brush circles and anti-aliased edges.
+/// Any invalid coordinate fails open to avoid hiding user artwork.
+fn may_touch_clip<F: Fn(egui::Pos2) -> egui::Pos2>(
+    stroke: &Stroke,
+    ox: f32,
+    oy: f32,
+    scale: f32,
+    clip: egui::Rect,
+    to_screen: &F,
+) -> bool {
+    if stroke.points.is_empty() { return false; }
+    if !scale.is_finite() || !clip.is_finite() { return true; }
+
+    let mut min = egui::pos2(f32::INFINITY, f32::INFINITY);
+    let mut max = egui::pos2(f32::NEG_INFINITY, f32::NEG_INFINITY);
+    for p in &stroke.points {
+        if !p.x.is_finite() || !p.y.is_finite() { return true; }
+        let q = to_screen(egui::pos2(p.x + ox, p.y + oy));
+        if !q.x.is_finite() || !q.y.is_finite() { return true; }
+        min.x = min.x.min(q.x);
+        min.y = min.y.min(q.y);
+        max.x = max.x.max(q.x);
+        max.y = max.y.max(q.y);
+    }
+    let margin = (stroke.base_width.abs() * scale.abs() * 2.5 + 4.0).max(4.0);
+    if !margin.is_finite() { return true; }
+    let bounds = egui::Rect::from_min_max(
+        min - egui::vec2(margin, margin),
+        max + egui::vec2(margin, margin),
+    );
+    clip.intersects(bounds)
+}
+
 /// مصيّر الفرش الاحترافي:
 /// - يرسم الألوان المائية والماركر والبخاخ كمسار واحد متصل (PathShape) بدون دوائر متداخلة أو نقاط متقطعة
 /// - يزيل الذيل المدبب من G-Pen وقلم الفيكتور
@@ -91,10 +125,26 @@ pub fn draw_stroke_pro<F: Fn(egui::Pos2) -> egui::Pos2>(
         return;
     }
 
+    // Large offscreen strokes used to allocate and paint thousands of dabs
+    // on every UI frame. Cull conservatively before sampling/painting.
+    if !may_touch_clip(stroke, ox, oy, scale, painter.clip_rect(), to_screen) {
+        return;
+    }
+
     let c = override_color.unwrap_or(stroke.color);
     let combined_opacity = stroke.opacity.clamp(0.05, 1.0) * layer_opacity.clamp(0.05, 1.0);
     let eff_alpha = ((c[3] as f32) * combined_opacity) as u8;
     let color = egui::Color32::from_rgba_unmultiplied(c[0], c[1], c[2], eff_alpha);
+
+    // Drawing engine step 1: identical pressure-aware G-Pen geometry on
+    // screen and in exports. Existing project files and other brushes remain unchanged.
+    if !stroke.is_vector && stroke.brush_preset == KritaBrushPreset::GPenInk {
+        for dab in crate::brush_engine::sample_pressure_dabs(&stroke.points, stroke.base_width) {
+            let p = to_screen(egui::pos2(dab.x + ox, dab.y + oy));
+            painter.circle_filled(p, (dab.radius * scale.abs()).max(0.25), color);
+        }
+        return;
+    }
 
     if stroke.points.len() == 1 {
         let p = to_screen(egui::pos2(stroke.points[0].x + ox, stroke.points[0].y + oy));
@@ -166,5 +216,45 @@ pub fn draw_stroke_pro<F: Fn(egui::Pos2) -> egui::Pos2>(
     }
     if let Some(last) = stroke.points.last() {
         painter.circle_filled(to_screen(egui::pos2(last.x + ox, last.y + oy)), w * 0.5, color);
+    }
+}
+
+#[cfg(test)]
+mod viewport_tests {
+    use super::*;
+    use crate::project::StrokePoint;
+
+    fn stroke(points: &[(f32, f32)]) -> Stroke {
+        Stroke {
+            points: points.iter().map(|&(x,y)| StrokePoint { x, y, pressure: 1.0 }).collect(),
+            color: [0,0,0,255],
+            fill_color: None,
+            base_width: 8.0,
+            is_vector: false,
+            brush_preset: KritaBrushPreset::GPenInk,
+            opacity: 1.0,
+            brush_texture_id: None,
+        }
+    }
+
+    #[test]
+    fn skips_completely_offscreen_strokes() {
+        let clip = egui::Rect::from_min_max(egui::pos2(0.0,0.0), egui::pos2(100.0,100.0));
+        let far = stroke(&[(1000.0,1000.0),(1200.0,1200.0)]);
+        assert!(!may_touch_clip(&far,0.0,0.0,1.0,clip,&|p|p));
+    }
+
+    #[test]
+    fn keeps_line_crossing_viewport_even_with_endpoints_outside() {
+        let clip = egui::Rect::from_min_max(egui::pos2(0.0,0.0), egui::pos2(100.0,100.0));
+        let crossing = stroke(&[(-200.0,50.0),(300.0,50.0)]);
+        assert!(may_touch_clip(&crossing,0.0,0.0,1.0,clip,&|p|p));
+    }
+
+    #[test]
+    fn wide_stroke_near_edge_is_not_lost() {
+        let clip = egui::Rect::from_min_max(egui::pos2(0.0,0.0), egui::pos2(100.0,100.0));
+        let near = stroke(&[(104.0,50.0)]);
+        assert!(may_touch_clip(&near,0.0,0.0,1.0,clip,&|p|p));
     }
 }

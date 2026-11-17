@@ -26,7 +26,9 @@ pub fn open_project_safe(path: &Path) -> Result<LoadedProjectOutcome, String> {
     let (project, report) = decode_and_migrate(sniffed)?;
 
     let legacy_backup_path = if report.was_migrated {
-        create_legacy_backup_copy(path).ok()
+        Some(create_legacy_backup_copy(path).map_err(|e| {
+            format!("تعذر فتح المشروع القديم بأمان لأن إنشاء النسخة الاحتياطية فشل: {}", e)
+        })?)
     } else {
         None
     };
@@ -122,6 +124,37 @@ mod tests {
         let sniffed = sniff_project_bytes(future).expect("Sniff detects newer schema");
         let res = decode_and_migrate(sniffed);
         assert!(res.is_err(), "Future schema must not be silently downgraded");
+    }
+
+
+    #[test]
+    fn cmp_009_legacy_open_preserves_original_and_backup() {
+        let suffix = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("Clock should be after epoch")
+            .as_nanos();
+        let test_dir = std::env::temp_dir().join(format!(
+            "stick_legacy_open_{}_{}", std::process::id(), suffix
+        ));
+        fs::create_dir_all(&test_dir).expect("Create test directory");
+        let original_path = test_dir.join("old_project.stick");
+        let original_bytes = br#"{
+            "width": 640, "height": 480, "fps": 24,
+            "layers": [{"name": "Legacy", "frames": [
+                {"strokes": [{"points": [{"x": 1.0, "y": 2.0}], "base_width": 2.0}]}
+            ]}]
+        }"#;
+        fs::write(&original_path, original_bytes).expect("Write legacy fixture");
+
+        let outcome = open_project_safe(&original_path).expect("Legacy project should open");
+        assert!(outcome.report.was_migrated);
+        assert_eq!(outcome.project.layers.len(), 1);
+        assert_eq!(outcome.project.layers[0].keyframes[&1].strokes.len(), 1);
+        assert_eq!(fs::read(&original_path).unwrap(), original_bytes);
+
+        let backup_path = outcome.legacy_backup_path.expect("Backup must be created");
+        assert_eq!(fs::read(&backup_path).unwrap(), original_bytes);
+        fs::remove_dir_all(test_dir).expect("Clean up test directory");
     }
 
     #[test]
