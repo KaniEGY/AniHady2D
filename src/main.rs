@@ -3715,26 +3715,28 @@ impl eframe::App for StickApp {
                             else if pointer_down { self.shape_drag_current = Some(stage_pos); }
                         }
                         ActiveToolUI::Bucket if pointer_pressed => {
-                            // Bucket works on closed vector shapes. Full
-                            // paint-region flood fill needs a raster backend.
+                            // Fill a single closed stroke or a contour formed
+                            // by multiple connected strokes on the active layer.
+                            // Raster-pixel flood fill is still a separate feature.
                             let can_fill = self.project.layers.get(self.active_layer_idx).is_some_and(|l| {
                                 let evaluated = self.project.evaluate_layer_at_frame(l, self.current_frame);
-                                fill_tools::find_topmost_shape(&evaluated.strokes, stage_pos.x, stage_pos.y).is_some()
+                                fill_tools::can_fill_contour(&evaluated.strokes, stage_pos.x, stage_pos.y)
                             });
                             if can_fill {
                                 self.save_undo_state();
                                 self.ensure_editable_keyframe();
                                 if let Some(l) = self.project.layers.get_mut(self.active_layer_idx) {
                                     if let Some(f) = l.keyframes.get_mut(&self.current_frame) {
-                                        if fill_tools::apply_shape_fill(&mut f.strokes, stage_pos.x, stage_pos.y, self.brush_color) {
+                                        if fill_tools::apply_contour_fill(&mut f.strokes,
+                                            stage_pos.x, stage_pos.y, self.brush_color) {
                                             self.has_unsaved_changes = true;
                                         }
                                     }
                                 }
                             } else {
                                 self.status_message = tr(lang,
-                                    "Bucket: click inside a closed vector shape.",
-                                    "البوكت: دوس جوّه شكل مقفول الأول.");
+                                    "Fill: click inside a closed contour. Multiple joined strokes are supported.",
+                                    "التعبئة: اضغط جوّه شكل مقفول؛ ينفع يكون معمول من أكتر من خط متوصل.");
                             }
                         }
                         ActiveToolUI::EraserRed | ActiveToolUI::EraserGreen if pointer_down => {
