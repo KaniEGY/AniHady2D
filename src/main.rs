@@ -352,6 +352,14 @@ enum UpdateState {
     Error(String),
 }
 
+#[derive(Clone)]
+enum RollbackState {
+    Idle,
+    Checking,
+    Available(Vec<updater::ArchivedRelease>),
+    Error(String),
+}
+
 #[derive(Serialize, Deserialize, Clone)]
 struct AppConfig {
     lang: AppLang,
@@ -975,6 +983,8 @@ struct StickApp {
     artist_avatar: Option<egui::TextureHandle>,
     installed_version: String,
     update_state: Arc<Mutex<UpdateState>>,
+    rollback_state: Arc<Mutex<RollbackState>>,
+    rollback_choice: Option<updater::ReleaseInfo>,
     new_symbol_name: String,
     allow_close: bool,
     current_stroke: Option<Stroke>,
@@ -1101,6 +1111,8 @@ impl StickApp {
             artist_avatar,
             installed_version: get_installed_version(),
             update_state: Arc::new(Mutex::new(UpdateState::Idle)),
+            rollback_state: Arc::new(Mutex::new(RollbackState::Idle)),
+            rollback_choice: None,
             new_symbol_name: "Symbol_1".to_string(),
             allow_close: false,
             current_stroke: None,
@@ -2021,6 +2033,21 @@ impl StickApp {
         });
     }
 
+    fn refresh_release_history(&mut self, ctx: egui::Context) {
+        *self.rollback_state.lock().unwrap() = RollbackState::Checking;
+        self.rollback_choice = None;
+        let state = Arc::clone(&self.rollback_state);
+        let installed = self.installed_version.clone();
+        std::thread::spawn(move || {
+            let result = match updater::fetch_rollback_history(&installed) {
+                Ok(releases) => RollbackState::Available(releases),
+                Err(error) => RollbackState::Error(error),
+            };
+            *state.lock().unwrap() = result;
+            ctx.request_repaint();
+        });
+    }
+
     fn download_and_apply_update(&mut self, info: updater::ReleaseInfo, ctx: egui::Context) {
         if self.has_unsaved_changes || self.current_stroke.is_some() {
             self.project_notice_title = tr_notice(self.config.lang, "Save your work first", "احفظ شغلك الأول");
@@ -2921,6 +2948,7 @@ impl eframe::App for StickApp {
                     ui.selectable_value(&mut self.settings_tab, 2, tr(lang, "Shortcuts", "اختصارات"));
                     ui.selectable_value(&mut self.settings_tab, 3, tr(lang, "Colors & Timeline", "ألوان وتايم لاين"));
                     ui.selectable_value(&mut self.settings_tab, 4, tr(lang, "Personalization", "التخصيص"));
+                    ui.selectable_value(&mut self.settings_tab, 5, tr(lang, "Previous Versions", "النسخة الاحتياطية"));
                 });
                 ui.separator();
                 match self.settings_tab {
@@ -3106,6 +3134,85 @@ impl eframe::App for StickApp {
                         if changed { self.config.save(); }
                         ui.small(tr(lang, "When the top bar is hidden, use the floating gear to reopen settings.",
                             "لو خفيت الشريط العلوي، تقدر تفتح الإعدادات من الترس العائم."));
+                    }
+                    5 => {
+                        ui.heading(tr(lang, "Restore a previous Stick version", "الرجوع لإصدار سابق من Stick"));
+                        ui.label(tr(lang,
+                            "Official GitHub releases only. The old version is downloaded, hash-checked, and installed when Stick restarts.",
+                            "الإصدارات الرسمية فقط من GitHub. هننزّل النسخة القديمة ونتحقق منها قبل استبدال البرنامج."));
+                        ui.separator();
+                        let snapshot = self.rollback_state.lock().unwrap().clone();
+                        if matches!(snapshot, RollbackState::Idle) {
+                            self.refresh_release_history(ctx.clone());
+                        } else {
+                            if ui.button(tr(lang, "Refresh release list", "تحديث قائمة الإصدارات")).clicked() {
+                                self.refresh_release_history(ctx.clone());
+                            }
+                            match snapshot {
+                                RollbackState::Checking => {
+                                    ui.horizontal(|ui| {
+                                        ui.spinner();
+                                        ui.label(tr(lang, "Loading the release history...", "بنحمّل سجل الإصدارات من GitHub..."));
+                                    });
+                                }
+                                RollbackState::Available(releases) => {
+                                    if releases.is_empty() {
+                                        ui.label(tr(lang, "No verified older releases available.",
+                                            "مفيش إصدارات أقدم متاحة ومتحقق منها."));
+                                    } else {
+                                        ui.add_space(8.0);
+                                        ui.label(egui::RichText::new(tr(lang, "Back to previous version", "الرجوع للنسخة السابقة")).strong());
+                                        let previous = &releases[0];
+                                        ui.horizontal(|ui| {
+                                            ui.label(format!("Stick v{}   •   {}", previous.info.version,
+                                                previous.published_at.get(0..10).unwrap_or("?")));
+                                            if ui.button(tr(lang, "Restore previous", "ارجع للنسخة السابقة")).clicked() {
+                                                self.rollback_choice = Some(previous.info.clone());
+                                            }
+                                        });
+                                        ui.add_space(10.0);
+                                        ui.label(egui::RichText::new(tr(lang,
+                                            "Last 5 eligible older releases", "آخر 5 إصدارات أقدم متاحة")).strong());
+                                        egui::ScrollArea::vertical().max_height(205.0).show(ui, |ui| {
+                                            for (index, release) in releases.iter().enumerate() {
+                                                ui.horizontal(|ui| {
+                                                    ui.label(format!("{}. v{}", index + 1, release.info.version));
+                                                    ui.label(release.published_at.get(0..10).unwrap_or("?"));
+                                                    if ui.small_button(tr(lang, "Select", "اختيار")).clicked() {
+                                                        self.rollback_choice = Some(release.info.clone());
+                                                    }
+                                                });
+                                            }
+                                        });
+                                    }
+                                }
+                                RollbackState::Error(error) => {
+                                    ui.colored_label(egui::Color32::LIGHT_RED, error);
+                                    ui.hyperlink_to(tr(lang, "Open GitHub release history", "افتح إصدارات GitHub"),
+                                        "https://github.com/KaniEGY/Stick/releases");
+                                }
+                                RollbackState::Idle => {}
+                            }
+                        }
+                        if let Some(release) = self.rollback_choice.clone() {
+                            ui.add_space(10.0);
+                            ui.separator();
+                            ui.colored_label(egui::Color32::from_rgb(246, 190, 100),
+                                tr(lang, "Older Stick builds may not support projects saved by newer versions. Back up your projects first.",
+                                    "تحذير: النسخ القديمة ممكن متفتحش المشاريع المحفوظة بإصدارات أحدث. احفظ نسخة احتياطية من مشاريعك الأول."));
+                            ui.label(format!("v{}  →  v{}", self.installed_version, release.version));
+                            ui.horizontal(|ui| {
+                                if ui.button(tr(lang, "Confirm download and restore", "تأكيد تنزيل واسترجاع الإصدار")).clicked() {
+                                    self.rollback_choice = None;
+                                    self.show_settings_dialog = false;
+                                    self.show_update_dialog = true;
+                                    self.download_and_apply_update(release, ctx.clone());
+                                }
+                                if ui.button(tr(lang, "Cancel", "إلغاء")).clicked() {
+                                    self.rollback_choice = None;
+                                }
+                            });
+                        }
                     }
                     _ => {}
                 }
