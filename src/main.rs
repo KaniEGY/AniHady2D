@@ -437,6 +437,12 @@ struct AppConfig {
     ui_accent_color: [u8; 4],
     #[serde(default = "default_autosave_mins")]
     autosave_interval_minutes: u64,
+    #[serde(default = "default_cursor_scale")]
+    brush_cursor_scale: f32,
+    #[serde(default = "default_cursor_scale")]
+    tool_icon_scale: f32,
+    #[serde(default)]
+    icon_cursor_ring: bool,
     tool_select: String,
     #[serde(default = "default_lasso_key")]
     tool_lasso: String,
@@ -484,6 +490,7 @@ fn default_timeline_height() -> f32 { 310.0 }
 fn default_right_split() -> f32 { 0.45 }
 fn default_grid_size() -> f32 { 40.0 }
 fn default_autosave_mins() -> u64 { 5 }
+fn default_cursor_scale() -> f32 { 1.0 }
 fn default_tl_bg() -> [u8; 4] { [28, 29, 34, 255] }
 fn default_tl_cell() -> [u8; 4] { [40, 42, 48, 255] }
 fn default_tl_head() -> [u8; 4] { [225, 55, 55, 255] }
@@ -527,6 +534,9 @@ impl Default for AppConfig {
             ui_panel_color: default_ui_panel_color(),
             ui_accent_color: default_ui_accent_color(),
             autosave_interval_minutes: 5,
+            brush_cursor_scale: 1.0,
+            tool_icon_scale: 1.0,
+            icon_cursor_ring: false,
             tool_select: "V".to_string(),
             tool_lasso: "L".to_string(),
             tool_free_transform: "Q".to_string(),
@@ -3395,6 +3405,15 @@ impl eframe::App for StickApp {
                         ui.small(tr(lang, "Hide panels to maximize canvas space. Your choices are saved.",
                             "اخفي اللي مش محتاجه عشان تكبر مساحة الرسم. الاختيارات بتتحفظ."));
                         let mut changed = false;
+                        ui.separator();
+                        ui.strong(tr(lang,"Tool cursor personalization","تخصيص مؤشر أدوات الرسم"));
+                        changed |= ui.add(egui::Slider::new(&mut self.config.brush_cursor_scale,0.4..=2.5)
+                            .text(tr(lang,"Brush cursor size","حجم مؤشر الفرشة"))).changed();
+                        changed |= ui.add(egui::Slider::new(&mut self.config.tool_icon_scale,0.6..=2.0)
+                            .text(tr(lang,"Tool icon under cursor","حجم أيقونة الأداة جنب الماوس"))).changed();
+                        changed |= ui.checkbox(&mut self.config.icon_cursor_ring,
+                            tr(lang,"Show circle around tool cursor icon","إظهار الدائرة حول أيقونة الأداة")).changed();
+                        ui.separator();
                         changed |= ui.checkbox(&mut self.config.show_left_dock,
                             tr(lang, "Left tools panel", "قائمة الأدوات على الشمال")).changed();
                         changed |= ui.checkbox(&mut self.config.show_right_dock,
@@ -4599,7 +4618,8 @@ impl eframe::App for StickApp {
 
             let is_inside_stage = pointer_pos.map_or(false, |p| stage_rect.contains(p) && canvas_rect.contains(p));
             let custom_brush_cursor = matches!(self.active_tool_ui,
-                ActiveToolUI::Brush | ActiveToolUI::VectorPen | ActiveToolUI::EraserRed | ActiveToolUI::EraserGreen);
+                ActiveToolUI::Brush | ActiveToolUI::VectorPen | ActiveToolUI::Sculpt
+                    | ActiveToolUI::EraserRed | ActiveToolUI::EraserGreen);
             let show_dot = is_inside_stage && !any_modal_open && !space_down && !alt_down && custom_brush_cursor;
             let show_tool_icon = is_inside_stage && !any_modal_open && !space_down
                 && !alt_down && !custom_brush_cursor && self.active_tool_ui != ActiveToolUI::HandCanvas;
@@ -5288,8 +5308,15 @@ impl eframe::App for StickApp {
             }
             if show_dot {
                 if let Some(p) = pointer_pos {
-                    let radius = (self.brush_size * self.zoom_level * 0.5).clamp(2.5, 125.0);
-                    if self.active_tool_ui == ActiveToolUI::EraserRed
+                    let radius = ((if self.active_tool_ui == ActiveToolUI::Sculpt {
+                        self.sculpt_radius * scale
+                    } else { self.brush_size * self.zoom_level * 0.5 })
+                        * self.config.brush_cursor_scale.clamp(0.4,2.5)).clamp(2.0,500.0);
+                    if self.active_tool_ui == ActiveToolUI::Sculpt {
+                        painter.circle_stroke(p,radius,egui::Stroke::new(1.8,
+                            egui::Color32::from_rgb(247,141,197)));
+                        painter.circle_filled(p,2.5,egui::Color32::from_rgb(247,141,197));
+                    } else if self.active_tool_ui == ActiveToolUI::EraserRed
                         || self.active_tool_ui == ActiveToolUI::EraserGreen {
                         let color = if self.active_tool_ui == ActiveToolUI::EraserRed {
                             egui::Color32::from_rgb(255, 96, 113)
@@ -5335,17 +5362,20 @@ impl eframe::App for StickApp {
                 }
             } else if show_tool_icon {
                 if let Some(p) = pointer_pos {
+                    let icon_size=(26.0*self.config.tool_icon_scale.clamp(0.6,2.0)).max(16.0);
                     let rect = egui::Rect::from_min_size(p + egui::vec2(8.0, 7.0),
-                        egui::vec2(26.0, 26.0));
+                        egui::vec2(icon_size, icon_size));
                     let tool_color = self.online_participants.iter()
                         .find(|participant| self.online_session.is_some()
                             && participant.name == self.user_profile.username)
                         .map(|p| egui::Color32::from_rgb(p.color[0],p.color[1],p.color[2]))
                         .unwrap_or_else(|| get_tool_ui_color(self.active_tool_ui));
-                    painter.circle_filled(rect.center(), 14.0,
-                        egui::Color32::from_rgba_unmultiplied(24, 27, 36, 180));
-                    painter.circle_stroke(rect.center(), 14.0,
-                        egui::Stroke::new(1.2, tool_color));
+                    if self.config.icon_cursor_ring {
+                        painter.circle_filled(rect.center(), icon_size*0.54,
+                            egui::Color32::from_rgba_unmultiplied(24, 27, 36, 180));
+                        painter.circle_stroke(rect.center(), icon_size*0.54,
+                            egui::Stroke::new(1.2, tool_color));
+                    }
                     draw_tool_ui_icon(&painter, rect, self.active_tool_ui, false);
                 }
             }
