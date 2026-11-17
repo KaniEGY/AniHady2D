@@ -2380,31 +2380,134 @@ impl eframe::App for StickApp {
         }
 
         if self.show_settings_dialog {
-            egui::Window::new(tr(lang, "Settings & System", "الإعدادات والنظام")).collapsible(false).resizable(false).default_width(460.0).anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0]).show(ctx, |ui| {
-                ui.horizontal(|ui| {
-                    ui.selectable_value(&mut self.settings_tab, 0, tr(lang, "General & Auto-Save", "عام والحفظ التلقائي"));
-                    ui.selectable_value(&mut self.settings_tab, 1, "[ SYSTEM ] Status");
+            egui::Window::new(tr(lang, "Stick Preferences", "إعدادات Stick"))
+                .collapsible(false).resizable(true).default_width(570.0)
+                .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0]).show(ctx, |ui| {
+                ui.horizontal_wrapped(|ui| {
+                    ui.selectable_value(&mut self.settings_tab, 0, tr(lang, "General", "عام"));
+                    ui.selectable_value(&mut self.settings_tab, 1, tr(lang, "SYSTEM", "السيستم"));
+                    ui.selectable_value(&mut self.settings_tab, 2, tr(lang, "Shortcuts", "اختصارات"));
+                    ui.selectable_value(&mut self.settings_tab, 3, tr(lang, "Colors & Timeline", "ألوان وتايم لاين"));
                 });
                 ui.separator();
-                if self.settings_tab == 0 {
-                    ui.horizontal(|ui| {
-                        if ui.selectable_label(self.config.lang == AppLang::English, "English").clicked() { self.config.lang = AppLang::English; self.config.save(); }
-                        if ui.selectable_label(self.config.lang == AppLang::Arabic, fix_ar("العربية")).clicked() { self.config.lang = AppLang::Arabic; self.config.save(); }
-                    });
-                    if ui.checkbox(&mut self.config.sound_effects_enabled, tr(lang, "Sound Effects", "المؤثرات الصوتية")).changed() { self.config.save(); }
-                    if ui.checkbox(&mut self.config.show_grid, tr(lang, "Show Grid", "إظهار المربعات")).changed() { self.config.save(); }
-                    ui.horizontal(|ui| {
-                        ui.label(tr(lang, "Auto-Save Interval (mins):", "فترة الحفظ التلقائي (دقائق):"));
-                        if ui.add(egui::DragValue::new(&mut self.config.autosave_interval_minutes).range(1..=60)).changed() {
+                match self.settings_tab {
+                    0 => {
+                        ui.horizontal(|ui| {
+                            if ui.selectable_label(self.config.lang == AppLang::English, "English").clicked() {
+                                self.config.lang = AppLang::English; self.config.save();
+                            }
+                            if ui.selectable_label(self.config.lang == AppLang::Arabic, fix_ar("العربي المصري")).clicked() {
+                                self.config.lang = AppLang::Arabic; self.config.save();
+                            }
+                        });
+                        if ui.checkbox(&mut self.config.sound_effects_enabled,
+                            tr(lang, "Enable Tool & Level-Up Sound Effects", "شغّل أو اقفل أصوات الأدوات والمستويات")).changed() {
                             self.config.save();
                         }
-                    });
-                } else {
-                    let (lvl, cxp, rxp) = self.user_profile.get_level_progress();
-                    ui.heading(format!("LEVEL {} / 100  ({})", lvl, self.user_profile.get_hunter_rank()));
-                    ui.add(egui::ProgressBar::new((cxp as f32 / rxp.max(1) as f32).clamp(0.0, 1.0)));
+                        if ui.checkbox(&mut self.config.show_grid,
+                            tr(lang, "Show Grid", "إظهار شبكة الرسم")).changed() {
+                            self.config.save();
+                        }
+                        ui.horizontal(|ui| {
+                            ui.label(tr(lang, "Auto-Save Every (minutes)", "الحفظ التلقائي كل كام دقيقة"));
+                            if ui.add(egui::DragValue::new(&mut self.config.autosave_interval_minutes)
+                                .range(1..=60)).changed() { self.config.save(); }
+                        });
+                    }
+                    1 => {
+                        let (lvl, cxp, rxp) = self.user_profile.get_level_progress();
+                        let rank = self.user_profile.get_hunter_rank();
+                        ui.heading(format!("✦ LEVEL {} | {}-Rank", lvl, rank));
+                        ui.add(egui::ProgressBar::new(
+                            (cxp as f32 / rxp.max(1) as f32).clamp(0.0, 1.0)
+                        ).text(format!("{} / {} XP", cxp, rxp)));
+                        ui.label(tr(lang, "5 XP per minute", "5 نقاط XP لكل دقيقة"));
+                        ui.label(tr(lang, "50 XP for each 20 unique drawn frames", "50 نقطة لكل 20 فريم مختلف اترسم عليهم"));
+                        ui.label(tr(lang, "20 XP for each 5 painted layers", "20 نقطة لكل 5 ليرز اترسم عليهم"));
+                        ui.label(format!("{} XP  •  {} frames  •  {} layers",
+                            self.user_profile.xp,
+                            self.user_profile.total_frames_drawn,
+                            self.user_profile.total_painted_layers));
+                        ui.small(tr(lang, "Ranks: F (0–5), E (6–10), D (11–15), C (16–20), B (21–25), A (26–30), A+ (31–35), S (36+).",
+                            "الرتب: F من 0 لـ5، E من 6 لـ10، D من 11 لـ15، C من 16 لـ20، B من 21 لـ25، A من 26 لـ30، A+ من 31 لـ35، S من 36 لفوق."));
+                    }
+                    2 => {
+                        ui.label(tr(lang,
+                            "Select Rebind, then press your new key. The change saves automatically.",
+                            "اضغط تغيير جنب الأداة، وبعدها دوس الزرار الجديد. الاختصار بيتحفظ تلقائي."));
+                        egui::ScrollArea::vertical().max_height(340.0).show(ui, |ui| {
+                            for (index, tool) in TOOLBAR_ITEMS.iter().copied().enumerate() {
+                                ui.horizontal(|ui| {
+                                    ui.label(tool_display_name(tool, lang));
+                                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                        let is_listening = self.listening_shortcut_idx == Some(index);
+                                        let caption = if is_listening {
+                                            tr(lang, "Press a key...", "دوس أي زرار...")
+                                        } else {
+                                            format!("{}  ✎", tool_shortcut(tool, &self.config))
+                                        };
+                                        if ui.button(caption).clicked() {
+                                            self.listening_shortcut_idx = Some(index);
+                                        }
+                                    });
+                                });
+                            }
+                        });
+                        if ui.button(tr(lang, "Reset Keyboard Shortcuts", "رجّع اختصارات الكيبورد الأصلية")).clicked() {
+                            let d = AppConfig::default();
+                            self.config.tool_select = d.tool_select;
+                            self.config.tool_lasso = d.tool_lasso;
+                            self.config.tool_free_transform = d.tool_free_transform;
+                            self.config.tool_vector_select = d.tool_vector_select;
+                            self.config.tool_pen = d.tool_pen;
+                            self.config.tool_brush = d.tool_brush;
+                            self.config.tool_eraser = d.tool_eraser;
+                            self.config.tool_eraser_partial = d.tool_eraser_partial;
+                            self.config.tool_bucket = d.tool_bucket;
+                            self.config.tool_eyedropper = d.tool_eyedropper;
+                            self.config.tool_text = d.tool_text;
+                            self.config.tool_shape = d.tool_shape;
+                            self.config.tool_hand = d.tool_hand;
+                            self.listening_shortcut_idx = None;
+                            self.config.save();
+                        }
+                    }
+                    3 => {
+                        ui.label(tr(lang, "Customize the interface", "خصّص شكل البرنامج"));
+                        for (en, ar, color) in [
+                            ("Panel background", "لون اللوحات", &mut self.config.ui_panel_color),
+                            ("Selected accent", "لون التحديد", &mut self.config.ui_accent_color),
+                            ("Timeline background", "لون خلفية التايم لاين", &mut self.config.timeline_bg_color),
+                            ("Timeline cells", "لون خلايا الفريمات", &mut self.config.timeline_cell_color),
+                            ("Playhead", "لون مؤشر الفريم الحالي", &mut self.config.timeline_playhead_color),
+                        ] {
+                            ui.horizontal(|ui| {
+                                ui.label(tr(lang, en, ar));
+                                if ui.color_edit_button_srgba_unmultiplied(color).changed() {
+                                    self.config.save();
+                                }
+                            });
+                        }
+                        ui.separator();
+                        if ui.button(tr(lang, "Restore Default Colors", "رجّع كل الألوان للأصل")).clicked() {
+                            self.config.ui_panel_color = default_ui_panel_color();
+                            self.config.ui_accent_color = default_ui_accent_color();
+                            self.config.timeline_bg_color = default_tl_bg();
+                            self.config.timeline_cell_color = default_tl_cell();
+                            self.config.timeline_playhead_color = default_tl_head();
+                            self.config.save();
+                        }
+                        ui.small(tr(lang, "You can also resize the Timeline by dragging its top edge.",
+                            "تقدر تكبّر أو تصغّر التايم لاين بسحب حافته من فوق."));
+                    }
+                    _ => {}
                 }
-                if ui.button(tr(lang, "Done", "تم")).clicked() { self.show_settings_dialog = false; }
+                ui.add_space(8.0);
+                ui.separator();
+                if ui.button(tr(lang, "Done", "تمام")).clicked() {
+                    self.listening_shortcut_idx = None;
+                    self.show_settings_dialog = false;
+                }
             });
         }
 
