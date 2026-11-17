@@ -559,7 +559,7 @@ fn discover_rooms_from_peers(peer_ips: &[Ipv4Addr]) -> Vec<RoomListing> {
     let mut rooms = Vec::new();
     let Ok(socket) = UdpSocket::bind("0.0.0.0:0") else { return rooms };
     let _ = socket.set_broadcast(true);
-    let _ = socket.set_read_timeout(Some(Duration::from_millis(450)));
+    let _ = socket.set_read_timeout(Some(Duration::from_millis(1200)));
     let _ = socket.send_to(DISCOVER_REQUEST, ("255.255.255.255", DISCOVERY_PORT));
     // Windows routers may drop global broadcast but accept the subnet broadcast.
     if let Ok(addr) = local_address().parse::<SocketAddr>() {
