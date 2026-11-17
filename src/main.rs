@@ -22,7 +22,7 @@ use stylus::TouchPressureTracker;
 use eframe::egui;
 use exporter::{ImageExportFormat, VideoExportFormat};
 use profile::UserProfile;
-use collab::{OnlineMode, OnlineEvent, OnlineSession, RoomListing};
+use collab::{OnlineMode, OnlineEvent, OnlineSession, RoomListing, Participant};
 use project::{
     AniProject, AudioSyncMode, AudioTrack, EasingCurve, FrameData, KritaBrushPreset, Layer, MediaItem, MediaType,
     BrushTipShape, Stroke, StrokePoint, Symbol, SymbolInstance, TextItem, TweenMode, PROJECT_SCHEMA_VERSION,
@@ -918,6 +918,8 @@ struct StickApp {
     online_password: String,
     online_capacity: usize,
     online_address: String,
+    online_code_input: String,
+    online_participants: Vec<Participant>,
     online_rooms: Vec<RoomListing>,
     online_discovery: Option<std::sync::mpsc::Receiver<Vec<RoomListing>>>,
     online_session: Option<OnlineSession>,
@@ -1047,6 +1049,8 @@ impl StickApp {
             online_password: String::new(),
             online_capacity: 4,
             online_address: String::new(),
+            online_code_input: String::new(),
+            online_participants: Vec::new(),
             online_rooms: Vec::new(),
             online_discovery: None,
             online_session: None,
@@ -1220,6 +1224,10 @@ impl StickApp {
                     self.has_unsaved_changes = true;
                 }
                 OnlineEvent::Members(n) => self.online_members = n,
+                OnlineEvent::Roster(roster) => {
+                    self.online_members = roster.len();
+                    self.online_participants = roster;
+                }
                 OnlineEvent::Notice(message) => self.online_message = message,
                 OnlineEvent::Disconnected(message) => {
                     self.online_message = message;
@@ -1293,18 +1301,22 @@ impl StickApp {
                         ui.add_space(18.0);
                         if ui.add_sized([220.0, 44.0], egui::Button::new(tr(lang, "Create and Start", "إنشاء وبدء الغرفة"))
                             .fill(egui::Color32::from_rgb(18, 160, 113))).clicked() {
-                            let mut project = AniProject::default();
-                            project.total_frames = 1;
+                            // Hosting the current project keeps its artwork, layers and timeline.
+                            // Never replace a user's existing document with a blank room.
+                            let mut project = self.project.clone();
+                            project.total_frames = self.timeline_length.max(1);
+                            let nickname = if self.user_profile.username.trim().is_empty() {
+                                "Artist".to_owned()
+                            } else { self.user_profile.username.trim().to_owned() };
+                            let level = self.user_profile.get_level_progress().0;
                             match OnlineSession::host_room(self.online_room_name.trim().to_owned(),
-                                    self.online_password.clone(), self.online_capacity, self.online_mode, project.clone()) {
+                                    self.online_password.clone(), self.online_capacity, self.online_mode,
+                                    project, nickname.clone(), level) {
                                 Ok(session) => {
-                                    self.save_undo_state();
-                                    self.project = project;
-                                    self.timeline_length = 1;
-                                    self.current_frame = 1;
-                                    self.active_layer_idx = 0;
-                                    self.current_project_path = None;
-                                    self.has_unsaved_changes = true;
+                                    self.online_participants = vec![Participant {
+                                        id: 0, name: nickname, level, color: [64,185,250],
+                                    }];
+                                    self.online_code_input = session.room_code.clone();
                                     self.online_session = Some(session);
                                     self.online_members = 1;
                                     self.online_message.clear();
@@ -1328,15 +1340,38 @@ impl StickApp {
                         }
                         for room in self.online_rooms.clone() {
                             let mode = if room.mode == OnlineMode::Drawing { "Drawing" } else { "Animation" };
-                            let label = format!("{}  |  {}  |  {}/{}  {}",
-                                room.title, mode, room.members, room.limit, if room.locked { "Locked" } else { "Open" });
+                            let label = format!("{}  |  {}  |  {}/{}  •  #{}  {}",
+                                room.title, mode, room.members, room.limit, room.room_code,
+                                if room.locked { "🔒" } else { "Open" });
                             if ui.button(label).clicked() {
                                 self.online_address = room.address;
+                                self.online_code_input = room.room_code;
                                 self.online_room_name = room.title;
                                 self.online_mode = room.mode;
                             }
                         }
                         ui.add_space(12.0);
+                        ui.label(tr(lang, "8-digit room code (LAN only)", "كود الغرفة 8 أرقام (نفس الشبكة)"));
+                        ui.horizontal(|ui| {
+                            ui.add(egui::TextEdit::singleline(&mut self.online_code_input)
+                                .char_limit(8).desired_width(180.0).hint_text("12345678"));
+                            if ui.button(tr(lang, "Find room", "دور على الغرفة")).clicked() {
+                                match collab::find_room_by_code(&self.online_rooms, &self.online_code_input) {
+                                    Some(room) => {
+                                        self.online_address = room.address.clone();
+                                        self.online_room_name = room.title.clone();
+                                        self.online_mode = room.mode;
+                                        self.online_message.clear();
+                                    }
+                                    None => {
+                                        self.online_message = tr(lang,
+                                            "Room code not found on this LAN. Refresh first, or enter the host IP for remote networks.",
+                                            "الكود مش موجود على الشبكة دي. حدّث القائمة أو اكتب IP الهوست لو في شبكة تانية.");
+                                        self.refresh_online_rooms();
+                                    }
+                                }
+                            }
+                        });
                         ui.label(tr(lang, "Host IPv4 address (IP:port)", "عنوان الهوست (IP:port)"));
                         ui.add(egui::TextEdit::singleline(&mut self.online_address)
                             .hint_text("192.168.1.5:47554").desired_width(300.0));
@@ -1346,11 +1381,17 @@ impl StickApp {
                         let connecting = self.online_session.is_some();
                         if ui.add_enabled(!connecting, egui::Button::new(tr(lang, "Join this room", "دخول الغرفة"))).clicked() {
                             let nickname = self.user_profile.username.trim().to_owned();
-                            match OnlineSession::join_room(self.online_address.trim().to_owned(),
+                            let level = self.user_profile.get_level_progress().0;
+                            let address = if self.online_address.trim().is_empty() {
+                                collab::find_room_by_code(&self.online_rooms, &self.online_code_input)
+                                    .map(|room| room.address.clone()).unwrap_or_default()
+                            } else { self.online_address.trim().to_owned() };
+                            match OnlineSession::join_room(address,
                                     self.online_password.clone(), if nickname.is_empty() { "Artist".into() } else { nickname },
-                                    self.online_mode) {
+                                    level, self.online_mode) {
                                 Ok(mut session) => {
                                     session.title = self.online_room_name.clone();
+                                    session.room_code = self.online_code_input.clone();
                                     self.online_session = Some(session);
                                     self.online_message = tr(lang, "Connecting to host...", "جاري الاتصال بالهوست...");
                                 }
@@ -3370,6 +3411,7 @@ impl eframe::App for StickApp {
         if let Some(session) = self.online_session.as_ref() {
             let title = session.title.clone();
             let address = session.address.clone();
+            let code = session.room_code.clone();
             let host = session.is_host;
             let mut leave = false;
             let mut resync = false;
@@ -3379,6 +3421,10 @@ impl eframe::App for StickApp {
                     ui.label(format!("{}  •  {} online", title, self.online_members));
                     if host {
                         ui.label(format!("LAN {}", address));
+                        if ui.button(format!("Room #{}  ⧉", code)).on_hover_text(
+                            tr(lang, "Copy room code", "نسخ كود الغرفة")).clicked() {
+                            ui.output_mut(|out| out.copied_text = code.clone());
+                        }
                         if ui.small_button(tr(lang, "Sync full project", "مزامنة المشروع بالكامل")).clicked() { resync = true; }
                     }
                     if ui.small_button(tr(lang, "Leave Room", "مغادرة الغرفة")).clicked() { leave = true; }
@@ -3391,6 +3437,7 @@ impl eframe::App for StickApp {
             }
             if leave {
                 if let Some(session) = self.online_session.take() { session.close(); }
+                self.online_participants.clear();
                 self.workspace_mode = WorkspaceMode::Launcher;
             }
         }
@@ -3812,6 +3859,27 @@ impl eframe::App for StickApp {
                 });
                 ui.add_space(2.0);
             }
+                // Current room roster lives under Layers in the right dock.
+                if self.online_session.is_some() {
+                    ui.add_space(12.0);
+                    ui.separator();
+                    ui.label(egui::RichText::new(tr(lang, "ROOM MEMBERS", "الناس اللي في الغرفة"))
+                        .strong().color(egui::Color32::from_rgb(103, 208, 239)));
+                    ui.small(tr(lang, "Colors are unique per participant. Levels are self-reported by each PC.",
+                        "كل مشارك له لون مميز؛ المستويات بيبلغ بيها الجهاز ومش موثّقة بسيرفر."));
+                    for participant in &self.online_participants {
+                        ui.horizontal(|ui| {
+                            let c = participant.color;
+                            let color = egui::Color32::from_rgb(c[0],c[1],c[2]);
+                            let (rect, _) = ui.allocate_exact_size(
+                                egui::vec2(13.0,13.0), egui::Sense::hover());
+                            ui.painter().circle_filled(rect.center(),6.0,color);
+                            ui.colored_label(color, &participant.name);
+                            ui.label(format!("LVL {}",participant.level));
+                        });
+                    }
+                    ui.add_space(6.0);
+                }
                 }); // scrollable layer dock
         });
         }
