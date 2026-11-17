@@ -1379,9 +1379,21 @@ impl StickApp {
                         }
                         ui.add_space(25.0);
                         ui.label(egui::RichText::new(tr(lang,
-                            "Hosting uses YOUR PC as the room server; keep Stick running and allow private-network access in Windows Firewall. Joining uses another participant's computer.",
-                            "مهم: لو عملت إنشاء غرفة، جهازك نفسه هيبقى سيرفر الغرفة. لازم Stick يفضل شغال وتسمح له في جدار حماية الشبكة الخاصة. لو اخترت انضمام، هتتصل بجهاز صاحب الغرفة."))
+                            "Your PC hosts the room. For friends on other Internet connections, use Tailscale on both computers (no router port-forwarding).",
+                            "جهازك هو سيرفر الغرفة. عشان تلعب مع أصحابك على نت مختلف، شغّل Tailscale على الجهازين من غير فتح بورت في الراوتر."))
                             .color(egui::Color32::from_rgb(238, 192, 110)));
+                        if let Some(info) = &self.online_remote_info {
+                            if info.connected {
+                                if let Some(ip) = info.address {
+                                    ui.colored_label(egui::Color32::LIGHT_GREEN,
+                                        format!("Tailscale: {}:{}", ip, collab::TCP_PORT));
+                                }
+                            } else {
+                                ui.label(tr(lang, "Tailscale is not connected.", "Tailscale مش متصل حاليًا."));
+                            }
+                        }
+                        ui.hyperlink_to(tr(lang, "Get Tailscale for playing with friends", "تنزيل Tailscale للعب مع أصحابك"),
+                            "https://tailscale.com/download");
                     }
                     OnlinePage::CreateRoom => {
                         ui.heading(tr(lang, "Host a room", "إنشاء غرفة جديدة"));
@@ -1389,6 +1401,13 @@ impl StickApp {
                         ui.label(tr(lang,
                             "Your computer becomes the HOST/SERVER for this room. Keep Stick open; guests connect directly to this PC over LAN.",
                             "جهازك هيكون الهوست وسيرفر الغرفة. لازم البرنامج يفضل مفتوح، وباقي اللاعبين هيتصلوا بجهازك مباشرة عبر الشبكة المحلية."));
+                        ui.add_space(8.0);
+                        if let Some(info) = &self.online_remote_info {
+                            if let Some(ip) = info.address {
+                                ui.colored_label(egui::Color32::LIGHT_GREEN,
+                                    format!("Friends address: {}:{}", ip, collab::TCP_PORT));
+                            }
+                        }
                         ui.add_space(16.0);
                         egui::Grid::new("host_room_fields").min_col_width(140.0).spacing([12.0, 12.0]).show(ui, |ui| {
                             ui.label(tr(lang, "Room name", "اسم الغرفة"));
@@ -1433,13 +1452,24 @@ impl StickApp {
                         }
                     }
                     OnlinePage::JoinRoom => {
-                        ui.heading(tr(lang, "Available LAN rooms", "الغرف الموجودة على الشبكة المحلية"));
+                        ui.heading(tr(lang, "LAN and Tailscale friend rooms", "غرف الشبكة المحلية والأصحاب على Tailscale"));
+                        if let Some(info) = &self.online_remote_info {
+                            if info.connected {
+                                ui.colored_label(egui::Color32::LIGHT_GREEN,
+                                    format!("Tailscale connected • {} visible friend devices", info.peers.len()));
+                            } else {
+                                ui.label(tr(lang,
+                                    "Internet friends: install Tailscale, sign in and share the host device or join the same tailnet.",
+                                    "للعب مع صحابك عبر الإنترنت: ثبّتوا Tailscale، وسجّلوا دخول، وشارك جهاز الهوست أو ادخلوا نفس شبكة Tailscale."));
+                                ui.hyperlink_to("Tailscale", "https://tailscale.com/download");
+                            }
+                        }
                         if ui.button(tr(lang, "Refresh rooms", "تحديث الغرف")).clicked() { self.refresh_online_rooms(); }
                         if self.online_discovery.is_some() {
                             ui.spinner();
                         } else if self.online_rooms.is_empty() {
-                            ui.label(tr(lang, "No local rooms found. Use direct IP to join over the Internet.",
-                                "مفيش غرف محلية ظهرت. تقدر تدخل عنوان الهوست يدويًا."));
+                            ui.label(tr(lang, "No rooms found. If your friend's room is missing, enter their Tailscale 100.x address below.",
+                                "مفيش غرف ظهرت. لو غرفة صاحبك مش موجودة، اكتب عنوان Tailscale بتاعه اللي بيبدأ بـ100 تحت."));
                         }
                         for room in self.online_rooms.clone() {
                             let mode = if room.mode == OnlineMode::Drawing { "Drawing" } else { "Animation" };
@@ -1473,7 +1503,7 @@ impl StickApp {
                             }
                         }
                         ui.add_space(12.0);
-                        ui.label(tr(lang, "8-digit room code (LAN only)", "كود الغرفة 8 أرقام (نفس الشبكة)"));
+                        ui.label(tr(lang, "8-digit room code (discovered LAN/Tailscale rooms)", "كود الغرفة 8 أرقام (الغرف المكتشفة على LAN أو Tailscale)"));
                         ui.horizontal(|ui| {
                             ui.add(egui::TextEdit::singleline(&mut self.online_code_input)
                                 .char_limit(8).desired_width(180.0).hint_text("12345678"));
@@ -1487,8 +1517,8 @@ impl StickApp {
                                     }
                                     None => {
                                         self.online_message = tr(lang,
-                                            "Room code not found on this LAN. Refresh first, or enter the host IP for remote networks.",
-                                            "الكود مش موجود على الشبكة دي. حدّث القائمة أو اكتب IP الهوست لو في شبكة تانية.");
+                                            "Room code not found. Refresh LAN/Tailscale rooms or enter the host's Tailscale 100.x IP.",
+                                            "الكود مش ظاهر. حدّث قائمة الغرف أو اكتب عنوان Tailscale بتاع الهوست اللي بيبدأ بـ100.");
                                         self.refresh_online_rooms();
                                     }
                                 }
@@ -1496,7 +1526,7 @@ impl StickApp {
                         });
                         ui.label(tr(lang, "Host IPv4 address (IP:port)", "عنوان الهوست (IP:port)"));
                         ui.add(egui::TextEdit::singleline(&mut self.online_address)
-                            .hint_text("192.168.1.5:47554").desired_width(300.0));
+                            .hint_text("100.75.20.10:47554").desired_width(300.0));
                         ui.label(tr(lang, "Room password (leave empty for public rooms)", "كلمة سر الغرفة (فاضية للغرف المفتوحة)"));
                         ui.add(egui::TextEdit::singleline(&mut self.online_password).password(true).desired_width(300.0));
                         ui.add_space(12.0);
@@ -1529,8 +1559,8 @@ impl StickApp {
                 }
                 ui.add_space(20.0);
                 ui.label(egui::RichText::new(tr(lang,
-                    "LAN rooms appear automatically. Internet joining needs the host's public IP and TCP port forwarding (47554). This preview syncs newly drawn strokes, not every layer, transform, media or timeline edit. Network traffic is not end-to-end encrypted.",
-                    "الغرف بتظهر تلقائيًا على نفس الشبكة. الاتصال من الإنترنت محتاج IP عام وتحويل المنفذ TCP 47554. النسخة الأولية بتزامن الخطوط الجديدة، مش كل تعديلات الطبقات والتحويل والتايم لاين. الاتصال غير مشفر بالكامل."))
+                    "LAN and Tailscale friend rooms can appear automatically. Remote friends can join via the host's Tailscale 100.x IP without port forwarding; all peers must have access to that device. Stick's LAN mode is not encrypted by itself.",
+                    "غرف الشبكة المحلية وأصحابك على Tailscale ممكن تظهر تلقائيًا. لو غرفة صاحبك مش ظاهرة، استخدم عنوان Tailscale 100.x الخاص بالهوست من غير فتح بورت في الراوتر. لازم الأجهزة يكون مسموح لها بالوصول لبعض؛ اتصال LAN نفسه غير مشفر."))
                     .small().color(egui::Color32::GRAY));
                 ui.add_space(20.0);
                 if ui.button(tr(lang, "Back", "رجوع")).clicked() {
@@ -3543,6 +3573,13 @@ impl eframe::App for StickApp {
                         ui.colored_label(egui::Color32::from_rgb(245, 193, 82),
                             tr(lang, "HOST: Your PC is the room server", "هوست: جهازك هو سيرفر الغرفة"));
                         ui.label(format!("LAN {}", address));
+                        if let Some(ip) = self.online_remote_info.as_ref().and_then(|info| info.address) {
+                            let friends_address = format!("{}:{}", ip, collab::TCP_PORT);
+                            if ui.button(format!("Friends {} ⧉", friends_address))
+                                .on_hover_text(tr(lang, "Copy Tailscale address for friends", "انسخ عنوان Tailscale لأصحابك")).clicked() {
+                                ui.output_mut(|out| out.copied_text = friends_address);
+                            }
+                        }
                         if ui.button(format!("Room #{}  ⧉", code)).on_hover_text(
                             tr(lang, "Copy room code", "نسخ كود الغرفة")).clicked() {
                             ui.output_mut(|out| out.copied_text = code.clone());
