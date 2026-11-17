@@ -3,6 +3,7 @@
 //! Internet peers can use host-IP:port with appropriate router/firewall rules.
 //! This is not an encrypted Internet service or a global room directory.
 use crate::project::{AniProject, Stroke};
+use crate::project_sync::{self, ProjectEdit};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
@@ -18,7 +19,7 @@ pub const TCP_PORT: u16 = 47554;
 const DISCOVERY_PORT: u16 = 47553;
 const DISCOVER_REQUEST: &[u8] = b"STICK_STUDIO_LAN_DISCOVER_V1";
 // Protocol v2 includes peer roster and LAN room codes; old v1 peers are rejected.
-const PROTOCOL: u16 = 2;
+const PROTOCOL: u16 = 3;
 const MAX_PACKET: usize = 8 * 1024 * 1024;
 const MAX_MEMBERS: usize = 12;
 const MAX_FRAME: usize = 10_000;
@@ -75,6 +76,7 @@ enum Packet {
     Welcome { project: Box<AniProject> },
     Rejected { reason: String },
     Strokes { layer: usize, frame: usize, strokes: Vec<Stroke> },
+    Edits { edits: Vec<ProjectEdit> },
     Snapshot { project: Box<AniProject> },
     Members { count: usize },
     Roster { participants: Vec<Participant> },
@@ -86,6 +88,7 @@ pub enum OnlineEvent {
     Connected(AniProject),
     Disconnected(String),
     Strokes { layer: usize, frame: usize, strokes: Vec<Stroke> },
+    Edits(Vec<ProjectEdit>),
     Snapshot(AniProject),
     Members(usize),
     Roster(Vec<Participant>),
@@ -213,6 +216,7 @@ impl HostShared {
 fn clone_packet(packet: &Packet) -> Packet {
     match packet {
         Packet::Strokes { layer, frame, strokes } => Packet::Strokes { layer: *layer, frame: *frame, strokes: strokes.clone() },
+        Packet::Edits { edits } => Packet::Edits { edits: edits.clone() },
         Packet::Snapshot { project } => Packet::Snapshot { project: project.clone() },
         Packet::Members { count } => Packet::Members { count: *count },
         Packet::Roster { participants } => Packet::Roster { participants: participants.clone() },
@@ -282,6 +286,25 @@ fn host_peer(mut stream: TcpStream, host: Arc<HostShared>) -> io::Result<()> {
                     host.broadcast(&Packet::Strokes { layer, frame, strokes }, Some(id));
                 }
             }
+            Ok(Packet::Edits { edits }) => {
+                let accepted = host.project.lock().map(|mut p|
+                    project_sync::apply_edits(&mut p, &edits).is_ok()).unwrap_or(false);
+                if accepted {
+                    let _ = host.events.send(OnlineEvent::Edits(edits.clone()));
+                    host.broadcast(&Packet::Edits { edits }, Some(id));
+                } else {
+                    // Invalid/stale edits cannot silently diverge: restore this peer
+                    // to the host's authoritative document.
+                    let state = host.project.lock().ok().map(|p| public_project(p.clone()));
+                    if let Some(state) = state {
+                        if let Ok(peers) = host.peers.lock() {
+                            if let Some((tx, _)) = peers.get(&id) {
+                                let _ = tx.send(Packet::Snapshot { project: Box::new(state) });
+                            }
+                        }
+                    }
+                }
+            }
             Ok(Packet::Goodbye) => break,
             Err(_) => break,
             _ => {}
@@ -302,6 +325,8 @@ pub struct OnlineSession {
     event_rx: mpsc::Receiver<OnlineEvent>,
     outgoing: Option<mpsc::Sender<Packet>>,
     host: Option<Arc<HostShared>>,
+    /// Local optimistic baseline; new edits are relative to this document.
+    baseline: Mutex<Option<AniProject>>,
     running: Arc<AtomicBool>,
 }
 
@@ -320,7 +345,7 @@ impl OnlineSession {
             running: running.clone(), peers: Mutex::new(HashMap::new()),
             local: Participant { id: 0, name: nickname, level, color: member_color(0) },
             room_code: room_code.clone(),
-            project: Mutex::new(project), password: password.clone(),
+            project: Mutex::new(project.clone()), password: password.clone(),
             title: title.clone(), mode, limit, events: event_tx,
             peer_ids: AtomicU64::new(1),
         });
@@ -364,7 +389,7 @@ impl OnlineSession {
             }
         });
         Ok(Self { title, mode, address: local_address(), is_host: true, members: 1,
-            room_code, event_rx, outgoing: None, host: Some(host), running })
+            room_code, event_rx, outgoing: None, host: Some(host), baseline: Mutex::new(Some(project)), running })
     }
 
     pub fn join_room(address: String, password: String, nickname: String, level: u32, mode: OnlineMode) -> Result<Self, String> {
@@ -400,6 +425,7 @@ impl OnlineSession {
                             let _ = event_tx.send(OnlineEvent::Strokes { layer, frame, strokes });
                         }
                         Ok(Packet::Snapshot { project }) => { let _ = event_tx.send(OnlineEvent::Snapshot(*project)); }
+                        Ok(Packet::Edits { edits }) => { let _ = event_tx.send(OnlineEvent::Edits(edits)); }
                         Ok(Packet::Members { count }) => { let _ = event_tx.send(OnlineEvent::Members(count)); }
                         Ok(Packet::Roster { participants }) => { let _ = event_tx.send(OnlineEvent::Roster(participants)); }
                         Ok(Packet::Goodbye) => break,
@@ -414,10 +440,51 @@ impl OnlineSession {
             }
         });
         Ok(Self { title: String::new(), mode, address, is_host: false, members: 1,
-            room_code: String::new(), event_rx, outgoing: Some(out_tx), host: None, running })
+            room_code: String::new(), event_rx, outgoing: Some(out_tx), host: None, baseline: Mutex::new(None), running })
     }
 
     pub fn events(&self) -> Vec<OnlineEvent> { self.event_rx.try_iter().collect() }
+
+    pub fn set_baseline(&self, project: &AniProject) {
+        if let Ok(mut baseline) = self.baseline.lock() { *baseline = Some(project.clone()); }
+    }
+
+    /// Merge an incoming host-ordered edit with the visible document and the
+    /// optimistic baseline; never echo remote edits as local changes.
+    pub fn ingest_remote_edits(
+        &self, project: &mut AniProject, edits: &[ProjectEdit]
+    ) -> Result<(), String> {
+        let mut baseline = self.baseline.lock().map_err(|_| "Project sync lock poisoned")?;
+        let mut preview = project.clone();
+        project_sync::apply_edits(&mut preview, edits)?;
+        if let Some(ref mut known) = *baseline {
+            project_sync::apply_edits(known, edits)?;
+        }
+        *project = preview;
+        Ok(())
+    }
+
+    /// Send every document mutation, not merely newly drawn strokes.
+    /// The host applies batches serially and relays them to all other peers.
+    pub fn sync_local_changes(&self, project: &AniProject) -> Result<(), String> {
+        let mut baseline = self.baseline.lock().map_err(|_| "Project sync lock poisoned")?;
+        let Some(known) = baseline.as_ref() else { return Ok(()); };
+        let edits = project_sync::diff_projects(known, project)?;
+        if edits.is_empty() { return Ok(()); }
+        let packet = Packet::Edits { edits: edits.clone() };
+        let encoded = serde_json::to_vec(&packet).map_err(|e| e.to_string())?;
+        if encoded.len() > MAX_PACKET { return Err("Project edit is too large for online sync".into()); }
+        if let Some(host) = &self.host {
+            let mut canonical = host.project.lock().map_err(|_| "Room project lock poisoned")?;
+            project_sync::apply_edits(&mut canonical, &edits)?;
+            drop(canonical);
+            host.broadcast(&packet, None);
+        } else if let Some(tx) = &self.outgoing {
+            tx.send(packet).map_err(|_| "Room connection is no longer active")?;
+        } else { return Err("Online room is not connected".into()); }
+        *baseline = Some(project.clone());
+        Ok(())
+    }
 
     pub fn send_strokes(&self, layer: usize, frame: usize, strokes: Vec<Stroke>) {
         if let Some(host) = &self.host {
@@ -433,6 +500,7 @@ impl OnlineSession {
     pub fn resync_from_host(&self, project: AniProject) {
         if let Some(host) = &self.host {
             if let Ok(mut state) = host.project.lock() { *state = project.clone(); }
+            self.set_baseline(&project);
             host.broadcast(&Packet::Snapshot { project: Box::new(public_project(project)) }, None);
         }
     }
