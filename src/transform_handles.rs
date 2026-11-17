@@ -66,3 +66,29 @@ mod tests {
         assert_eq!(rotation_pivot(b, rot + egui::vec2(25.0,0.0),1.0), None);
     }
 }
+
+/// Blender-style 2-axis translate arrows, tested in stage coordinates so
+/// visual size and click targets remain stable as the canvas zooms.
+pub fn translation_axis(bounds: egui::Rect, cursor: egui::Pos2, zoom:f32)->Option<char> {
+    let z=zoom.max(0.1);
+    let center=bounds.center();
+    let horizontal=center+egui::vec2(52.0/z,0.0);
+    let vertical=center+egui::vec2(0.0,-52.0/z);
+    if cursor.distance(horizontal)<14.0/z {Some('x')}
+    else if cursor.distance(vertical)<14.0/z {Some('y')}
+    else {None}
+}
+
+#[cfg(test)]
+mod gizmo_tests {
+    use super::*;
+    #[test]
+    fn translation_arrows_select_independent_axes_at_all_zooms(){
+        let b=egui::Rect::from_center_size(egui::pos2(100.,100.),egui::vec2(60.,60.));
+        for z in [0.25,1.,3.] {
+            assert_eq!(translation_axis(b,b.center()+egui::vec2(52./z,0.),z),Some('x'));
+            assert_eq!(translation_axis(b,b.center()+egui::vec2(0.,-52./z),z),Some('y'));
+            assert_eq!(translation_axis(b,b.center(),z),None);
+        }
+    }
+}
