@@ -137,7 +137,9 @@ fn verify_pe_file(bytes: &[u8]) -> bool {
     bytes.get(offset..offset.saturating_add(4)) == Some(&b"PE\0\0"[..])
 }
 
-pub fn download_verified(info: &ReleaseInfo, current_exe: &Path) -> Result<PathBuf, String> {
+pub fn download_verified_with_progress<F: FnMut(u64, u64)>(
+    info: &ReleaseInfo, current_exe: &Path, mut on_progress: F,
+) -> Result<PathBuf, String> {
     use std::io::Write;
 
     if !info.url.starts_with(RELEASE_URL_PREFIX) || !info.url.ends_with("/Stick.exe") {
@@ -154,6 +156,7 @@ pub fn download_verified(info: &ReleaseInfo, current_exe: &Path) -> Result<PathB
 
     // Stream to disk in 64 KiB chunks, keeping RAM low on older PCs.
     // Never replace the running Stick.exe until all checks have passed.
+    on_progress(0, info.size);
     let result = (|| -> Result<(), String> {
         let response = ureq::AgentBuilder::new()
             .timeout_connect(Duration::from_secs(25))
@@ -186,6 +189,7 @@ pub fn download_verified(info: &ReleaseInfo, current_exe: &Path) -> Result<PathB
             hasher.update(&chunk[..n]);
             file.write_all(&chunk[..n])
                 .map_err(|e| format!("Couldn't write the downloaded update: {e}"))?;
+            on_progress(total, info.size);
         }
         file.sync_all().map_err(|e| format!("Couldn't finish writing the update: {e}"))?;
         if total != info.size || !verify_pe_file(&first_bytes) {
