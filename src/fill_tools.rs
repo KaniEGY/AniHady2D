@@ -442,6 +442,23 @@ mod tests {
         assert!(flood_fill_polygon(&lines,(34.,34.),(120.,120.),1.0).is_none());
     }
     #[test]
+    fn divided_circle_fills_only_the_clicked_half() {
+        // The outer closed contour is one stroke. A separate diameter
+        // must become a wall; filling the outer contour would be wrong.
+        let circle: Vec<(f32,f32)> = (0..=96).map(|i| {
+            let t = (i as f32) * std::f32::consts::TAU / 96.0;
+            (110.0 + 80.0 * t.cos(), 110.0 + 80.0 * t.sin())
+        }).collect();
+        let strokes = vec![shape(&circle), shape(&[(110.,30.),(110.,190.)])];
+        let ring = flood_fill_polygon(&strokes,(72.,110.),(220.,220.),1.4)
+            .expect("left region should be enclosed by circle and diameter");
+        let left = polygon_fill_stroke(ring, [220,30,80,255]);
+        assert!(contour_contains(&left,72.,110.));
+        assert!(!contour_contains(&left,147.,110.),
+            "diameter must separate the other half");
+    }
+
+    #[test]
     fn bucket_chooses_topmost_overlapping_closed_shape() {
         let first = shape(&[(0.0,0.0),(50.0,0.0),(50.0,50.0),(0.0,50.0),(0.0,0.0)]);
         let top = shape(&[(10.0,10.0),(40.0,10.0),(40.0,40.0),(10.0,40.0),(10.0,10.0)]);
