@@ -4105,10 +4105,10 @@ impl eframe::App for StickApp {
                                             ui.allocate_ui_with_layout(
                                                 egui::vec2(475.0, 22.0),
                                                 egui::Layout::right_to_left(egui::Align::Min),
-                                                |ui| { ui.add(egui::Label::new(rich).wrap(false)); },
+                                                |ui| { ui.add(egui::Label::new(rich)); },
                                             );
                                         } else {
-                                            ui.add(egui::Label::new(rich).wrap(false));
+                                            ui.add(egui::Label::new(rich));
                                         }
                                         if index == 3 { ui.add_space(5.0); }
                                     }
