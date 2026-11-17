@@ -433,6 +433,17 @@ impl OnlineSession {
     }
 
     pub fn join_room(address: String, password: String, nickname: String, level: u32, mode: OnlineMode) -> Result<Self, String> {
+        Self::join_room_internal(address, password, nickname, level, mode, false)
+    }
+
+    /// A peer may receive the redirect before the newly elected host binds.
+    pub fn rejoin_after_handoff(address: String, password: String, nickname: String,
+        level: u32, mode: OnlineMode) -> Result<Self, String> {
+        Self::join_room_internal(address, password, nickname, level, mode, true)
+    }
+
+    fn join_room_internal(address: String, password: String, nickname: String,
+        level: u32, mode: OnlineMode, is_handoff: bool) -> Result<Self, String> {
         let address = if address.contains(':') { address } else { format!("{}:{}", address, TCP_PORT) };
         let addr: SocketAddr = address.parse().map_err(|_| "Enter a valid IPv4 address and port, such as 192.168.1.5:47554".to_string())?;
         let guest_password = password.clone();
@@ -442,7 +453,22 @@ impl OnlineSession {
         let running_worker = running.clone();
         thread::spawn(move || {
             let result = (|| -> Result<(), String> {
-                let mut stream = TcpStream::connect_timeout(&addr, Duration::from_secs(5)).map_err(|e| {
+                let mut retry_count = 0;
+                let mut stream = loop {
+                    match TcpStream::connect_timeout(&addr,
+                        if is_handoff { Duration::from_millis(500) } else { Duration::from_secs(5) }) {
+                        Ok(stream) => break stream,
+                        Err(_) if is_handoff && retry_count < 25 => {
+                            retry_count += 1;
+                            thread::sleep(Duration::from_millis(220));
+                        }
+                        Err(e) => return Err(format!("Connection failed: {}. Verify that the new host can accept TCP 47554 (LAN/Tailscale/firewall).", e)),
+                    }
+                };
+                // All connection attempts use the intended address, never
+                // a public proxy or an untrusted third-party room directory.
+                /*old_error_handler*/ let _ = (|| -> Result<(), String> {
+                    let mut message = String::new();
                     let mut message = format!("Connection failed: {}", e);
                     if matches!(addr.ip(), std::net::IpAddr::V4(ip) if ip.is_private()) {
                         message.push_str(
@@ -453,8 +479,9 @@ impl OnlineSession {
                             ". The host must keep the room open. Check access to TCP 47554, firewall rules, and that both devices can reach one another."
                         );
                     }
-                    message
-                })?;
+                    let _ = message;
+                    Ok(())
+                })();
                 stream.set_read_timeout(Some(Duration::from_millis(300))).map_err(|e| e.to_string())?;
                 stream.set_write_timeout(Some(Duration::from_secs(3))).map_err(|e| e.to_string())?;
                 packet_write(&mut stream, &Packet::Hello { name: nickname, level: level.min(1000), protocol: PROTOCOL, mode }).map_err(|e| e.to_string())?;
@@ -486,6 +513,7 @@ impl OnlineSession {
                             let _ = event_tx.send(OnlineEvent::HostHandoff {
                                 address, promote, title, room_code, limit, project: project.map(|p| *p),
                             });
+                            running_worker.store(false, Ordering::Relaxed);
                             return Ok(());
                         }
                         Ok(Packet::Goodbye) => break,
@@ -819,6 +847,23 @@ mod tests {
         host.close();
     }
 
+    #[test]
+    fn host_transfer_packets_serialize_with_room_identity() {
+        let packet = Packet::HostHandoff { address: "100.77.8.9:47554".into(),
+            promote: true, title: "Artist room".into(), room_code: "12345678".into(),
+            limit: 8, project: Some(Box::new(AniProject::default())) };
+        let wire = serde_json::to_vec(&packet).unwrap();
+        let decoded: Packet = serde_json::from_slice(&wire).unwrap();
+        match decoded {
+            Packet::HostHandoff { address, promote, room_code, project, .. } => {
+                assert_eq!(address, "100.77.8.9:47554");
+                assert!(promote);
+                assert_eq!(room_code, "12345678");
+                assert!(project.is_some());
+            }
+            _ => panic!("Handoff should deserialize"),
+        }
+    }
     #[test]
     fn packet_roundtrip() {
         let packet = Packet::Members { count: 7 };
