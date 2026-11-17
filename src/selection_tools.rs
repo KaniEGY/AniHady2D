@@ -43,6 +43,37 @@ pub fn stroke_inside_lasso(stroke: &Stroke, polygon: &[egui::Pos2]) -> bool {
     stroke.points.iter().any(|p| point_in_polygon(egui::pos2(p.x, p.y), polygon))
 }
 
+/// Return the nearest editable vertex on any vector stroke within a
+/// stage-space radius; brush raster paths are intentionally not node-edited.
+pub fn nearest_vector_node(
+    strokes: &[Stroke],
+    cursor: egui::Pos2,
+    radius: f32,
+) -> Option<(usize, usize)> {
+    let mut nearest = None;
+    let mut best = radius.max(0.0).powi(2);
+    for (si, stroke) in strokes.iter().enumerate() {
+        if !stroke.is_vector { continue; }
+        for (pi, point) in stroke.points.iter().enumerate() {
+            let distance = (point.x - cursor.x).powi(2) + (point.y - cursor.y).powi(2);
+            if distance.is_finite() && distance <= best {
+                nearest = Some((si, pi));
+                best = distance;
+            }
+        }
+    }
+    nearest
+}
+
+/// Geometry-only scaling to keep interactive transform independent of Zoom.
+pub fn scale_points_around(stroke: &mut Stroke, anchor: egui::Pos2, factor: f32) {
+    if !factor.is_finite() || factor <= 0.0 { return; }
+    for point in &mut stroke.points {
+        point.x = anchor.x + (point.x - anchor.x) * factor;
+        point.y = anchor.y + (point.y - anchor.y) * factor;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -72,6 +103,24 @@ mod tests {
         assert!(!point_in_polygon(egui::pos2(40.0,40.0), &poly));
         assert!(stroke_inside_lasso(&stroke(15.0,10.0,40.0,40.0), &poly));
     }
+    #[test]
+    fn vector_node_hit_test_selects_nearest_actual_vertex() {
+        let vector = stroke(10.0, 10.0, 80.0, 80.0);
+        let mut raster = stroke(11.0, 11.0, 70.0, 70.0);
+        raster.is_vector = false;
+        assert_eq!(nearest_vector_node(&[vector, raster],
+            egui::pos2(12.0, 12.0), 7.0), Some((0, 0)));
+        assert_eq!(nearest_vector_node(&[stroke(10.0, 10.0, 80.0, 80.0)],
+            egui::pos2(40.0, 40.0), 7.0), None);
+    }
+    #[test]
+    fn transform_scale_applies_to_all_vertices_without_pixel_drifts() {
+        let mut shape = stroke(10.0, 20.0, 20.0, 40.0);
+        scale_points_around(&mut shape, egui::pos2(10.0, 20.0), 2.0);
+        assert_eq!((shape.points[0].x, shape.points[0].y), (10.0, 20.0));
+        assert_eq!((shape.points[1].x, shape.points[1].y), (30.0, 60.0));
+    }
+
     #[test]
     fn text_hit_bounds_track_content_size() {
         let text = TextItem {

@@ -33,6 +33,7 @@ pub fn apply_layer_action(
             let mut copied = project.layers[index].clone();
             copied.name.push_str(" Copy");
             copied.locked = false;
+            copied.xp_first_paint_rewarded = false;
             project.layers.insert(index, copied);
             Ok(index)
         }

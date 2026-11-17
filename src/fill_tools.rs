@@ -18,8 +18,8 @@ fn distance_sq_to_segment(x: f32, y: f32, a: &StrokePoint, b: &StrokePoint) -> f
 }
 
 pub fn contour_contains(stroke: &Stroke, x: f32, y: f32) -> bool {
-    // The current canvas renderer can only fill vector contours.
-    if !stroke.is_vector { return false; }
+    // Support both closed vector contours and clearly closed freehand
+    // brush paths. Open brush lines must never fill.
     let points = &stroke.points;
     if points.len() < 4 || !x.is_finite() || !y.is_finite() {
         return false;
@@ -31,7 +31,8 @@ pub fn contour_contains(stroke: &Stroke, x: f32, y: f32) -> bool {
     let last = &points[points.len() - 1];
     let close_dx = first.x - last.x;
     let close_dy = first.y - last.y;
-    if close_dx * close_dx + close_dy * close_dy > 64.0 {
+    let close_tolerance = (stroke.base_width.abs() * 1.25).clamp(8.0, 22.0);
+    if close_dx * close_dx + close_dy * close_dy > close_tolerance * close_tolerance {
         return false;
     }
     // A user clicking directly on the border should still fill the shape.
@@ -105,6 +106,23 @@ mod tests {
         let mut shapes = vec![shape(&[(10.0,10.0),(50.0,10.0),(50.0,50.0),(10.0,50.0)])];
         assert!(!apply_shape_fill(&mut shapes, 30.0, 30.0, [255,0,0,255]));
         assert!(shapes[0].fill_color.is_none());
+    }
+
+    #[test]
+    fn bucket_handles_closed_freehand_brush_contours() {
+        let mut ring = shape(&[(10.0, 10.0), (50.0, 10.0), (50.0, 50.0),
+            (10.0, 50.0), (13.0, 12.0)]);
+        ring.is_vector = false;
+        let mut strokes = vec![ring];
+        assert!(apply_shape_fill(&mut strokes, 30.0, 30.0, [20, 80, 130, 255]));
+        assert_eq!(strokes[0].fill_color, Some([20, 80, 130, 255]));
+    }
+    #[test]
+    fn bucket_rejects_open_freehand_paths() {
+        let mut ring = shape(&[(10.0, 10.0), (50.0, 10.0), (50.0, 50.0),
+            (10.0, 50.0)]);
+        ring.is_vector = false;
+        assert!(!contour_contains(&ring, 30.0, 30.0));
     }
 
     #[test]

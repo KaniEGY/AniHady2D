@@ -233,6 +233,22 @@ fn draw_skia_stroke(pixmap: &mut Pixmap, s: &crate::project::Stroke, ts: Transfo
 
     // Share the G-Pen pressure sampler with the live canvas preview.
     if !s.is_vector && s.brush_preset == crate::project::KritaBrushPreset::GPenInk {
+        // Bucket fill must be exported beneath the brush outline, too.
+        if let Some(fc) = s.fill_color {
+            if s.points.len() >= 3 {
+                let mut region = PathBuilder::new();
+                region.move_to(s.points[0].x, s.points[0].y);
+                for p in &s.points[1..] { region.line_to(p.x, p.y); }
+                region.close();
+                if let Some(path) = region.finish() {
+                    let mut fill_paint = Paint::default();
+                    fill_paint.set_color_rgba8(fc[0], fc[1], fc[2],
+                        ((fc[3] as f32) * s.opacity.clamp(0.0, 1.0)) as u8);
+                    fill_paint.anti_alias = true;
+                    pixmap.fill_path(&path, &fill_paint, tiny_skia::FillRule::Winding, ts, None);
+                }
+            }
+        }
         for dab in crate::brush_engine::sample_pressure_dabs(&s.points, s.base_width) {
             let mut pb = PathBuilder::new();
             pb.push_circle(dab.x, dab.y, dab.radius);
