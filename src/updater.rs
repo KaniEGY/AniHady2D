@@ -11,6 +11,15 @@ const MAX_EXE_SIZE: u64 = 350 * 1024 * 1024;
 const RELEASE_EXE_NAME: &str = "Stick.exe";
 const RELEASE_URL_PREFIX: &str = "https://github.com/KaniEGY/Stick/releases/download/";
 
+/** The version compiled INTO Stick.exe (not a potentially stale sidecar file).
+ * Official Windows Actions builds set STICK_BUILD_VERSION to the full release
+ * tag version, including github.run_number. Local cargo builds use Cargo.toml.
+ */
+pub fn embedded_build_version() -> &'static str {
+    option_env!("STICK_BUILD_VERSION").unwrap_or(env!("CARGO_PKG_VERSION"))
+}
+
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ReleaseInfo {
     pub version: String,
@@ -87,39 +96,78 @@ fn verify_pe_file(bytes: &[u8]) -> bool {
 }
 
 pub fn download_verified(info: &ReleaseInfo, current_exe: &Path) -> Result<PathBuf, String> {
-    let response = ureq::AgentBuilder::new()
-        .timeout(Duration::from_secs(180)).build()
-        .get(&info.url)
-        .set("User-Agent", "Stick-Studio-Updater")
-        .call().map_err(|e| format!("Couldn't download the update: {e}"))?;
-    let mut bytes = Vec::new();
-    response.into_reader().take(MAX_EXE_SIZE + 1).read_to_end(&mut bytes)
-        .map_err(|e| format!("Download interrupted: {e}"))?;
-    if bytes.len() as u64 != info.size || !verify_pe_file(&bytes) {
-        return Err("The downloaded executable is incomplete or invalid.".into());
+    use std::io::Write;
+
+    if !info.url.starts_with(RELEASE_URL_PREFIX) || !info.url.ends_with("/Stick.exe") {
+        return Err("Only official Stick GitHub release downloads are allowed.".into());
     }
-    let actual = format!("{:x}", Sha256::digest(&bytes));
-    if actual != info.sha256 {
-        return Err("SHA-256 did not match. The update was discarded.".into());
+    if !(1024..=MAX_EXE_SIZE).contains(&info.size) {
+        return Err("The update file size is invalid.".into());
     }
+
     let parent = current_exe.parent().ok_or("Couldn't locate the program folder.")?;
     let staged = parent.join("Stick_new.exe");
     let tmp = parent.join("Stick_new.download");
     let _ = std::fs::remove_file(&tmp);
-    {
-        use std::io::Write;
+
+    // Stream to disk in 64 KiB chunks, keeping RAM low on older PCs.
+    // Never replace the running Stick.exe until all checks have passed.
+    let result = (|| -> Result<(), String> {
+        let response = ureq::AgentBuilder::new()
+            .timeout_connect(Duration::from_secs(25))
+            .timeout_read(Duration::from_secs(90))
+            .build()
+            .get(&info.url)
+            .set("User-Agent", "Stick-Studio-Updater")
+            .call().map_err(|e| format!("Couldn't download the update: {e}"))?;
+
+        let mut reader = response.into_reader();
         let mut file = std::fs::File::create(&tmp)
             .map_err(|e| format!("Can't write to the Stick install folder: {e}"))?;
-        file.write_all(&bytes).map_err(|e| format!("Can't write the update: {e}"))?;
-        file.sync_all().map_err(|e| format!("Can't finish the update download: {e}"))?;
+        let mut hasher = Sha256::new();
+        let mut first_bytes = Vec::with_capacity(4096);
+        let mut total = 0u64;
+        let mut chunk = [0u8; 64 * 1024];
+
+        loop {
+            let n = reader.read(&mut chunk)
+                .map_err(|e| format!("Update download interrupted: {e}"))?;
+            if n == 0 { break; }
+            total += n as u64;
+            if total > info.size || total > MAX_EXE_SIZE {
+                return Err("Update file is larger than the published release.".into());
+            }
+            if first_bytes.len() < 4096 {
+                let count = (4096 - first_bytes.len()).min(n);
+                first_bytes.extend_from_slice(&chunk[..count]);
+            }
+            hasher.update(&chunk[..n]);
+            file.write_all(&chunk[..n])
+                .map_err(|e| format!("Couldn't write the downloaded update: {e}"))?;
+        }
+        file.sync_all().map_err(|e| format!("Couldn't finish writing the update: {e}"))?;
+        if total != info.size || !verify_pe_file(&first_bytes) {
+            return Err("The downloaded Windows executable is incomplete or invalid.".into());
+        }
+        let digest = format!("{:x}", hasher.finalize());
+        if digest != info.sha256 {
+            return Err("SHA-256 mismatch. The update was canceled for safety.".into());
+        }
+        Ok(())
+    })();
+
+    if let Err(error) = result {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(error);
     }
-    // Windows will reject replacing a locked staging file; never touch the active exe.
+
+    // Remove an older staged download only after the new one passes verification.
+    if staged.exists() {
+        std::fs::remove_file(&staged)
+            .map_err(|e| format!("Can't remove a previous update package: {e}"))?;
+    }
     std::fs::rename(&tmp, &staged)
-        .or_else(|_| {
-            std::fs::remove_file(&staged).ok();
-            std::fs::rename(&tmp, &staged)
-        })
-        .map_err(|e| format!("Can't stage the downloaded update: {e}"))?;
+        .map_err(|e| format!("Couldn't prepare the update for restart: {e}"))?;
     Ok(staged)
 }
 
@@ -197,6 +245,13 @@ mod tests {
                 "digest":format!("sha256:{digest}")
             }]
         })
+    }
+    #[test] fn bundled_build_version_is_always_comparable() {
+        let compiled = embedded_build_version();
+        assert!(version_parts(compiled).is_ok(), "Invalid compiled Stick version: {compiled}");
+        if let Some(from_ci) = option_env!("STICK_BUILD_VERSION") {
+            assert_eq!(compiled, from_ci);
+        }
     }
     #[test] fn version_comparison_is_numeric_not_lexicographic() {
         assert!(is_newer("4.1.0.100","4.1.0.99").unwrap());
