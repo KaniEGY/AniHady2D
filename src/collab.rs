@@ -304,6 +304,10 @@ fn host_peer(mut stream: TcpStream, host: Arc<HostShared>) -> io::Result<()> {
         if !host.peers.lock().map(|peers| peers.contains_key(&id)).unwrap_or(false) { break; }
         match packet_read(&mut stream, &host.running) {
             Ok(Packet::Strokes { layer, frame, strokes }) => {
+                // Strokes and structural edits must use the same host gate;
+                // otherwise a stroke and a layer delete may be broadcast in
+                // the opposite order from their canonical application.
+                let _order = host.edit_order.lock().map_err(|_| io::Error::other("Edit gate poisoned"))?;
                 // A kicked guest must never sneak in one final queued edit.
                 if !host.peers.lock().map(|p| p.contains_key(&id)).unwrap_or(false) { break; }
                 let accepted = host.project.lock().map(|mut p|
@@ -568,8 +572,10 @@ impl OnlineSession {
 
     pub fn send_strokes(&self, layer: usize, frame: usize, strokes: Vec<Stroke>) {
         if let Some(host) = &self.host {
-            if host.project.lock().map(|mut p| apply_strokes(&mut p, layer, frame, strokes.clone())).unwrap_or(false) {
-                host.broadcast(&Packet::Strokes { layer, frame, strokes }, None);
+            if let Ok(_order) = host.edit_order.lock() {
+                if host.project.lock().map(|mut p| apply_strokes(&mut p, layer, frame, strokes.clone())).unwrap_or(false) {
+                    host.broadcast(&Packet::Strokes { layer, frame, strokes }, None);
+                }
             }
         } else if let Some(tx) = &self.outgoing {
             let _ = tx.send(Packet::Strokes { layer, frame, strokes });
@@ -761,6 +767,29 @@ mod tests {
             thread::sleep(Duration::from_millis(25));
         }
         assert!(connected, "guest must receive an authenticated project snapshot");
+        // Verify the password challenge rejects a stranger before admitting them.
+        let wrong_password = OnlineSession::join_room(
+            format!("127.0.0.1:{}", TCP_PORT),
+            "incorrect-password".into(), "Stranger".into(), 1, OnlineMode::Drawing,
+        ).expect("start an unauthorized local guest");
+        let unauthorized_deadline = std::time::Instant::now() + Duration::from_secs(4);
+        let mut rejected = false;
+        while std::time::Instant::now() < unauthorized_deadline {
+            for event in wrong_password.events() {
+                match event {
+                    OnlineEvent::Disconnected(reason) => {
+                        assert!(reason.contains("Incorrect room password"));
+                        rejected = true;
+                    }
+                    OnlineEvent::Connected(_) => panic!("invalid password joined the room"),
+                    _ => {}
+                }
+            }
+            if rejected { break; }
+            thread::sleep(Duration::from_millis(25));
+        }
+        assert!(rejected, "incorrect room password must be rejected");
+        wrong_password.close();
         let guest_two = OnlineSession::join_room(
             format!("127.0.0.1:{}", TCP_PORT),
             "unique-test-password".into(), "Guest Two".into(), 6, OnlineMode::Drawing,
