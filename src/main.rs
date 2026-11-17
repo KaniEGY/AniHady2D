@@ -8,6 +8,7 @@ mod changelog;
 mod exporter;
 mod persistence;
 mod onion_skin;
+mod timeline_ops;
 mod profile;
 mod project;
 
@@ -2523,6 +2524,7 @@ impl eframe::App for StickApp {
             }
         });
 
+        let mut frame_menu_action: Option<(usize, usize, timeline_ops::FrameAction)> = None;
         // شريط التايم لاين السفلي في وضع الأنيميشن
         if self.workspace_mode == WorkspaceMode::AnimationStudio {
             egui::TopBottomPanel::bottom("timeline_panel").resizable(true).default_height(200.0).show(ctx, |ui| {
@@ -2534,7 +2536,7 @@ impl eframe::App for StickApp {
                         if self.is_playing { self.start_audio_playback(); } else { self.stop_audio_playback(); }
                     }
                     if ui.button(">").clicked() && self.current_frame < self.timeline_length { self.current_frame += 1; }
-                    ui.toggle_value(&mut self.loop_enabled, "🔁 Loop");
+                    ui.toggle_value(&mut self.loop_enabled, tr(lang, "🔁 Loop Range", "🔁 تكرار جزء"));
                     ui.label(format!("{}f / {}f", self.current_frame, self.timeline_length));
                     if ui.button("Frame (F5)").clicked() { self.action_insert_frame_f5(); }
                     if ui.button("Keyframe (F6)").clicked() { self.action_insert_keyframe_f6(now_time); }
@@ -2546,6 +2548,23 @@ impl eframe::App for StickApp {
                         self.has_unsaved_changes = true;
                     }
                 });
+                if self.loop_enabled {
+                    ui.horizontal(|ui| {
+                        ui.label(tr(lang, "Repeat from", "كرر من فريم"));
+                        ui.add(egui::DragValue::new(&mut self.loop_start_frame).range(1..=self.timeline_length.max(1)));
+                        ui.label(tr(lang, "to", "لحد"));
+                        ui.add(egui::DragValue::new(&mut self.loop_end_frame).range(1..=self.timeline_length.max(1)));
+                        if ui.small_button(tr(lang, "Start = current", "البداية = الحالي")).clicked() {
+                            self.loop_start_frame = self.current_frame;
+                        }
+                        if ui.small_button(tr(lang, "End = current", "النهاية = الحالي")).clicked() {
+                            self.loop_end_frame = self.current_frame;
+                        }
+                    });
+                    if self.loop_start_frame > self.loop_end_frame {
+                        self.loop_end_frame = self.loop_start_frame;
+                    }
+                }
                 ui.collapsing(tr(lang, "Onion Skin Options", "إعدادات الفريمات المجاورة"), |ui| {
                     ui.label(tr(lang, "Preview nearby frames with faded colors.", "عرض الفريمات القريبة بألوان شفافة للمساعدة في رسم الحركة."));
                     if ui.add(egui::Slider::new(&mut self.project.onion_skin.frames_before, 0..=6)
@@ -2556,16 +2575,43 @@ impl eframe::App for StickApp {
                         .text(tr(lang, "Next frames", "الفريمات التالية"))).changed() {
                         self.has_unsaved_changes = true;
                     }
+                    ui.separator();
+                    let mut prev_opacity = self.project.onion_skin.color_before[3] as f32 / 255.0;
+                    if ui.add(egui::Slider::new(&mut prev_opacity, 0.0..=1.0)
+                        .text(tr(lang, "Previous opacity", "شفافية الفريمات السابقة"))).changed() {
+                        self.project.onion_skin.color_before[3] = (prev_opacity * 255.0).round() as u8;
+                        self.has_unsaved_changes = true;
+                    }
+                    let mut next_opacity = self.project.onion_skin.color_after[3] as f32 / 255.0;
+                    if ui.add(egui::Slider::new(&mut next_opacity, 0.0..=1.0)
+                        .text(tr(lang, "Next opacity", "شفافية الفريمات التالية"))).changed() {
+                        self.project.onion_skin.color_after[3] = (next_opacity * 255.0).round() as u8;
+                        self.has_unsaved_changes = true;
+                    }
                 });
                 ui.separator();
+                ui.horizontal(|ui| {
+                    ui.label(tr(lang, "Timeline zoom", "تكبير التايم لاين"));
+                    ui.add(egui::Slider::new(&mut self.timeline_cell_width, 16.0..=84.0)
+                        .show_value(false));
+                    if ui.small_button(tr(lang, "+24 frames", "زوّد 24 فريم")).clicked() {
+                        self.save_undo_state();
+                        self.timeline_length = self.timeline_length.saturating_add(24).min(20_000);
+                        self.project.total_frames = self.timeline_length;
+                        self.has_unsaved_changes = true;
+                    }
+                });
                 let cell_w = self.timeline_cell_width;
                 let cols = self.timeline_length.max(30);
-                egui::ScrollArea::both().show(ui, |ui| {
+                egui::ScrollArea::both().id_salt("timeline_frame_scroller").show(ui, |ui| {
                     ui.horizontal(|ui| {
                         ui.allocate_ui(egui::vec2(140.0, 20.0), |ui| { ui.strong("Timeline"); });
                         for f in 1..=cols {
                             let is_c = self.current_frame == f;
                             let (r, resp) = ui.allocate_exact_size(egui::vec2(cell_w, 20.0), egui::Sense::click_and_drag());
+                            if self.loop_enabled && f >= self.loop_start_frame && f <= self.loop_end_frame {
+                                ui.painter().rect_filled(r.shrink(1.0), 2.0, egui::Color32::from_rgb(57, 103, 83));
+                            }
                             if is_c { ui.painter().rect_filled(r, 2.0, egui::Color32::from_rgb(225, 55, 55)); }
                             if is_c || f == 1 || f % 5 == 0 {
                                 ui.painter().text(r.center(), egui::Align2::CENTER_CENTER, format!("{}", f), egui::FontId::proportional(11.0), egui::Color32::WHITE);
@@ -2594,11 +2640,86 @@ impl eframe::App for StickApp {
                                     self.active_layer_idx = l_idx;
                                     self.current_frame = f;
                                 }
+                                let is_locked = layer.locked;
+                                let can_delete_global = self.timeline_length > 1
+                                    && self.project.layers.iter().all(|l| !l.locked);
+                                cresp.context_menu(|ui| {
+                                    ui.strong(format!("{} — {}", layer.name, f));
+                                    ui.separator();
+                                    if ui.button(tr(lang, "Copy Frame", "انسخ الفريم")).clicked() {
+                                        frame_menu_action = Some((l_idx, f, timeline_ops::FrameAction::Copy));
+                                        ui.close_menu();
+                                    }
+                                    if ui.add_enabled(!is_locked && self.clipboard_frame.is_some(),
+                                        egui::Button::new(tr(lang, "Paste Frame", "الصق الفريم"))).clicked() {
+                                        frame_menu_action = Some((l_idx, f, timeline_ops::FrameAction::Paste));
+                                        ui.close_menu();
+                                    }
+                                    ui.separator();
+                                    if ui.add_enabled(!is_locked, egui::Button::new(
+                                        tr(lang, "Create Keyframe", "اعمل كي فريم"))).clicked() {
+                                        frame_menu_action = Some((l_idx, f, timeline_ops::FrameAction::Keyframe));
+                                        ui.close_menu();
+                                    }
+                                    if ui.add_enabled(!is_locked, egui::Button::new(
+                                        tr(lang, "Blank Keyframe", "كي فريم فاضي"))).clicked() {
+                                        frame_menu_action = Some((l_idx, f, timeline_ops::FrameAction::BlankKeyframe));
+                                        ui.close_menu();
+                                    }
+                                    if ui.add_enabled(!is_locked, egui::Button::new(
+                                        tr(lang, "Clear Frame", "امسح محتوى الفريم"))).clicked() {
+                                        frame_menu_action = Some((l_idx, f, timeline_ops::FrameAction::Clear));
+                                        ui.close_menu();
+                                    }
+                                    if ui.add_enabled(!is_locked && layer.keyframes.contains_key(&f),
+                                        egui::Button::new(tr(lang, "Delete Keyframe", "احذف الكي فريم"))).clicked() {
+                                        frame_menu_action = Some((l_idx, f, timeline_ops::FrameAction::DeleteKeyframe));
+                                        ui.close_menu();
+                                    }
+                                    if ui.add_enabled(can_delete_global, egui::Button::new(
+                                        tr(lang, "Delete Time (all layers)", "احذف زمن الفريم من كل الليرز"))).clicked() {
+                                        frame_menu_action = Some((l_idx, f, timeline_ops::FrameAction::DeleteFrame));
+                                        ui.close_menu();
+                                    }
+                                    if !can_delete_global {
+                                        ui.small(tr(lang, "Unlock layers before deleting time.", "افتح قفل الليرز عشان تحذف الزمن."));
+                                    }
+                                });
                             }
                         });
                     }
                 });
             });
+        }
+
+        if let Some((layer_index, frame_index, action)) = frame_menu_action {
+            match action {
+                timeline_ops::FrameAction::Copy => self.copy_frame(layer_index, frame_index),
+                timeline_ops::FrameAction::Paste => {
+                    if self.project.layers.get(layer_index).is_some_and(|layer| !layer.locked) {
+                        self.paste_frame(layer_index, frame_index);
+                    }
+                }
+                edit => {
+                    // Save a single undo snapshot; only one frame command
+                    // executes per context-menu selection.
+                    self.save_undo_state();
+                    match timeline_ops::apply_frame_edit(&mut self.project, layer_index, frame_index, edit) {
+                        Ok(()) => {
+                            self.timeline_length = self.project.total_frames;
+                            self.current_frame = frame_index.min(self.timeline_length);
+                            self.active_layer_idx = layer_index.min(self.project.layers.len().saturating_sub(1));
+                            self.loop_end_frame = self.loop_end_frame.min(self.timeline_length).max(1);
+                            self.loop_start_frame = self.loop_start_frame.min(self.loop_end_frame).max(1);
+                            self.has_unsaved_changes = true;
+                        }
+                        Err(reason) => {
+                            self.undo_stack.pop();
+                            self.status_message = reason.to_string();
+                        }
+                    }
+                }
+            }
         }
 
         self.preload_frame_textures(ctx);
