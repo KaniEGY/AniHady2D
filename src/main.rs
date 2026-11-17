@@ -4,6 +4,7 @@ mod brushes;
 mod changelog;
 mod exporter;
 mod persistence;
+mod onion_skin;
 mod profile;
 mod project;
 
@@ -2686,6 +2687,52 @@ impl eframe::App for StickApp {
             }
 
             self.last_pointer_pos = if pointer_down { pointer_pos } else { None };
+
+            // Real Onion Skin preview: faint past/future drawings behind
+            // the current frame. Only active in Animation workspace. No
+            // changes to saved data and never exported as actual artwork.
+            if self.workspace_mode == WorkspaceMode::AnimationStudio
+                && self.project.onion_skin.enabled
+            {
+                let settings = &self.project.onion_skin;
+                for ghost in onion_skin::ghost_frames(
+                    self.current_frame,
+                    self.timeline_length,
+                    settings.frames_before,
+                    settings.frames_after,
+                ) {
+                    let base_tint = match ghost.side {
+                        onion_skin::GhostSide::Previous => settings.color_before,
+                        onion_skin::GhostSide::Next => settings.color_after,
+                    };
+                    let tint = onion_skin::ghost_color(base_tint, ghost.distance);
+                    for layer in self.project.layers.iter().rev() {
+                        if !layer.visible || layer.is_guide { continue; }
+                        let layer_opacity = layer.opacity.clamp(0.0, 1.0);
+                        if layer_opacity <= 0.0 { continue; }
+                        let ghost_data = self.project.evaluate_layer_at_frame(layer, ghost.frame);
+                        for stroke in &ghost_data.strokes {
+                            draw_stroke_pro(
+                                &painter, stroke, Some(tint), layer_opacity,
+                                scale, 0.0, 0.0, &to_screen,
+                            );
+                        }
+                        for instance in &ghost_data.symbol_instances {
+                            if let Some(symbol) = self.project.library_symbols.get(&instance.symbol_name) {
+                                for stroke in self.project.evaluate_symbol_strokes(symbol, ghost.frame) {
+                                    // Symbols are previewed at their existing position.
+                                    // More complex transforms will be unified with the
+                                    // shared compositor in a later milestone.
+                                    draw_stroke_pro(
+                                        &painter, stroke, Some(tint), layer_opacity,
+                                        scale, instance.x, instance.y, &to_screen,
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+            }
 
             for layer in self.project.layers.iter().rev() {
                 if layer.visible {
