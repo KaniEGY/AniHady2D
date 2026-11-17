@@ -184,6 +184,75 @@ fn tr(lang: AppLang, en: &str, ar: &str) -> String {
     }
 }
 
+
+const TOOLBAR_ITEMS: [ActiveToolUI; 13] = [
+    ActiveToolUI::SelectNormal,
+    ActiveToolUI::SelectLasso,
+    ActiveToolUI::FreeTransform,
+    ActiveToolUI::VectorDirectSelect,
+    ActiveToolUI::VectorPen,
+    ActiveToolUI::Brush,
+    ActiveToolUI::EraserRed,
+    ActiveToolUI::EraserGreen,
+    ActiveToolUI::Bucket,
+    ActiveToolUI::Eyedropper,
+    ActiveToolUI::Text,
+    ActiveToolUI::ShapeLine,
+    ActiveToolUI::HandCanvas,
+];
+
+fn tool_display_name(tool: ActiveToolUI, lang: AppLang) -> String {
+    let (en, ar) = match tool {
+        ActiveToolUI::SelectNormal => ("Selection", "تحديد"),
+        ActiveToolUI::SelectLasso => ("Lasso", "تحديد حر"),
+        ActiveToolUI::FreeTransform => ("Transform", "تحويل"),
+        ActiveToolUI::VectorDirectSelect => ("Vector Nodes", "نقاط الفيكتور"),
+        ActiveToolUI::VectorPen => ("Ink Pen", "قلم حبر"),
+        ActiveToolUI::Brush => ("Brush", "فرشاة"),
+        ActiveToolUI::EraserRed => ("Eraser", "ممحاة"),
+        ActiveToolUI::EraserGreen => ("Partial Eraser", "ممحاة جزئية"),
+        ActiveToolUI::Bucket => ("Fill", "تعبئة"),
+        ActiveToolUI::Eyedropper => ("Eyedropper", "قطارة الألوان"),
+        ActiveToolUI::Text => ("Text", "نص"),
+        ActiveToolUI::ShapeLine => ("Shapes", "أشكال"),
+        ActiveToolUI::HandCanvas => ("Pan Canvas", "تحريك اللوحة"),
+    };
+    tr(lang, en, ar)
+}
+
+fn tool_shortcut<'a>(tool: ActiveToolUI, config: &'a AppConfig) -> &'a str {
+    match tool {
+        ActiveToolUI::SelectNormal => &config.tool_select,
+        ActiveToolUI::SelectLasso => &config.tool_lasso,
+        ActiveToolUI::FreeTransform => &config.tool_free_transform,
+        ActiveToolUI::VectorDirectSelect => &config.tool_vector_select,
+        ActiveToolUI::VectorPen => &config.tool_pen,
+        ActiveToolUI::Brush => &config.tool_brush,
+        ActiveToolUI::EraserRed => &config.tool_eraser,
+        ActiveToolUI::EraserGreen => &config.tool_eraser_partial,
+        ActiveToolUI::Bucket => &config.tool_bucket,
+        ActiveToolUI::Eyedropper => &config.tool_eyedropper,
+        ActiveToolUI::Text => &config.tool_text,
+        ActiveToolUI::ShapeLine => &config.tool_shape,
+        ActiveToolUI::HandCanvas => &config.tool_hand,
+    }
+}
+
+const BASIC_COLORS: [([u8; 3], &str); 12] = [
+    ([0, 0, 0], "Black"),
+    ([255, 255, 255], "White"),
+    ([239, 68, 68], "Red"),
+    ([249, 115, 22], "Orange"),
+    ([234, 179, 8], "Yellow"),
+    ([34, 197, 94], "Green"),
+    ([20, 184, 166], "Teal"),
+    ([56, 189, 248], "Sky"),
+    ([37, 99, 235], "Blue"),
+    ([139, 92, 246], "Violet"),
+    ([236, 72, 153], "Pink"),
+    ([120, 113, 108], "Gray"),
+];
+
 fn get_installed_version() -> String {
     if let Ok(exe) = std::env::current_exe() {
         if let Ok(v) = std::fs::read_to_string(exe.with_file_name("version.txt")) {
@@ -740,6 +809,7 @@ struct StickApp {
     show_update_dialog: bool,
     show_patch_notes_dialog: bool,
     show_settings_dialog: bool,
+    show_shortcuts_dialog: bool,
     show_credits_dialog: bool,
     settings_tab: usize,
     listening_shortcut_idx: Option<usize>,
@@ -833,6 +903,7 @@ impl StickApp {
             show_update_dialog: false,
             show_patch_notes_dialog: AppConfig::load().last_seen_patch_version != FALLBACK_VERSION,
             show_settings_dialog: false,
+            show_shortcuts_dialog: false,
             show_credits_dialog: false,
             settings_tab: 0,
             listening_shortcut_idx: None,
@@ -1555,6 +1626,10 @@ impl eframe::App for StickApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         let lang = self.config.lang;
         let now_time = ctx.input(|i| i.time);
+        // The shortcut guide is discoverable even when the toolbar is hidden.
+        if ctx.input(|i| i.key_pressed(egui::Key::F1)) {
+            self.show_shortcuts_dialog = !self.show_shortcuts_dialog;
+        }
 
         // الحفظ التلقائي الدوري (Auto-Save Recovery) كل 5 دقائق عند وجود تعديلات
         let autosave_secs = (self.config.autosave_interval_minutes.max(1) * 60) as f64;
@@ -2027,6 +2102,53 @@ impl eframe::App for StickApp {
             });
         }
 
+        if self.show_shortcuts_dialog {
+            egui::Window::new(tr(lang, "Keyboard Shortcuts (F1)", "شرح الاختصارات (F1)"))
+                .default_width(390.0)
+                .resizable(true)
+                .collapsible(false)
+                .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+                .show(ctx, |ui| {
+                    ui.label(tr(lang, "The tool names and keys below match your current settings.", "الأسماء والاختصارات دي مطابقة لإعداداتك الحالية."));
+                    ui.separator();
+                    egui::ScrollArea::vertical().max_height(440.0).show(ui, |ui| {
+                        for tool in TOOLBAR_ITEMS {
+                            ui.horizontal(|ui| {
+                                ui.label(tool_display_name(tool, lang));
+                                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                    ui.monospace(tool_shortcut(tool, &self.config));
+                                });
+                            });
+                        }
+                        ui.separator();
+                        for (en, ar, key) in [
+                            ("Save", "حفظ", "Ctrl+S"),
+                            ("Save As", "حفظ باسم", "Ctrl+Shift+S"),
+                            ("Undo", "تراجع", "Ctrl+Z"),
+                            ("Redo", "إعادة", "Ctrl+Y"),
+                            ("Command Palette", "لوحة الأوامر", "Ctrl+K"),
+                            ("Fullscreen", "ملء الشاشة", "F10"),
+                            ("Insert Frame", "إضافة فريم", self.config.insert_frame.as_str()),
+                            ("Keyframe", "فريم مفتاحي", self.config.insert_keyframe.as_str()),
+                            ("Blank Keyframe", "فريم مفتاحي فارغ", self.config.insert_blank_kf.as_str()),
+                        ] {
+                            ui.horizontal(|ui| {
+                                ui.label(tr(lang, en, ar));
+                                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                    ui.monospace(key);
+                                });
+                            });
+                        }
+                        ui.separator();
+                        ui.label(tr(lang, "Brush colors: right panel, under Colors. Onion Skin: Animation workspace, above the Timeline.", "الألوان: في اللوحة اليمنى تحت عنوان الألوان. عرض الفريمات المجاورة: في وضع الأنيميشن فوق التايم لاين."));
+                    });
+                    ui.separator();
+                    if ui.button(tr(lang, "Close (F1)", "إغلاق (F1)")).clicked() {
+                        self.show_shortcuts_dialog = false;
+                    }
+                });
+        }
+
         if self.show_settings_dialog {
             egui::Window::new(tr(lang, "Settings & System", "الإعدادات والنظام")).collapsible(false).resizable(false).default_width(460.0).anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0]).show(ctx, |ui| {
                 ui.horizontal(|ui| {
@@ -2156,6 +2278,10 @@ impl eframe::App for StickApp {
                 if rresp.clicked() && can_r { self.redo(); }
 
                 ui.separator();
+                if ui.button(tr(lang, "? Shortcuts (F1)", "؟ الاختصارات (F1)")).clicked() {
+                    self.show_shortcuts_dialog = true;
+                }
+                ui.separator();
                 if ui.button(tr(lang, "+ Image", "+ صورة")).clicked() { self.import_image_dialog(); }
                 if ui.button("+ SVG").clicked() { self.import_svg_dialog(); }
                 if self.workspace_mode == WorkspaceMode::AnimationStudio {
@@ -2183,32 +2309,53 @@ impl eframe::App for StickApp {
             });
         });
 
-        // شريط الأدوات الأيسر
-        egui::SidePanel::left("tools_panel").resizable(true).default_width(60.0).show(ctx, |ui| {
+        // شريط أدوات ثنائي اللغة: اسم دائم بجوار كل أيقونة واختصار فعلي من الإعدادات.
+        egui::SidePanel::left("tools_panel").resizable(true).default_width(210.0).min_width(180.0).show(ctx, |ui| {
             ui.vertical_centered(|ui| {
-                ui.add_space(6.0);
-                let tools = [
-                    (ActiveToolUI::SelectNormal, "Select (V)"),
-                    (ActiveToolUI::FreeTransform, "Transform (Q)"),
-                    (ActiveToolUI::VectorPen, "Ink Pen (P)"),
-                    (ActiveToolUI::Brush, "Brushes (B)"),
-                    (ActiveToolUI::EraserRed, "Eraser (E)"),
-                    (ActiveToolUI::EraserGreen, "Part Eraser (T)"),
-                    (ActiveToolUI::Bucket, "Bucket Fill (K)"),
-                    (ActiveToolUI::Eyedropper, "Picker (I)"),
-                    (ActiveToolUI::Text, "Text (N)"),
-                    (ActiveToolUI::ShapeLine, "Shapes (U)"),
-                    (ActiveToolUI::HandCanvas, "Hand (H)"),
-                ];
-                for (tool, tip) in tools {
-                    let sel = self.active_tool_ui == tool;
-                    let (rect, resp) = ui.allocate_exact_size(egui::vec2(40.0, 30.0), egui::Sense::click());
-                    let bg = if sel { get_tool_ui_color(tool) } else if resp.hovered() { egui::Color32::from_rgb(62, 62, 68) } else { egui::Color32::from_rgb(44, 44, 48) };
-                    ui.painter().rect_filled(rect, 6.0, bg);
-                    draw_tool_ui_icon(ui.painter(), rect, tool, sel);
-                    if resp.on_hover_text(tip).clicked() { self.active_tool_ui = tool; }
-                }
+                ui.add_space(5.0);
+                ui.strong(tr(lang, "Drawing Tools", "أدوات الرسم"));
+                ui.add_space(5.0);
+                egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+                    for tool in TOOLBAR_ITEMS {
+                        let selected = self.active_tool_ui == tool;
+                        let name = tool_display_name(tool, lang);
+                        let key = tool_shortcut(tool, &self.config);
+                        let width = ui.available_width().max(170.0);
+                        let (rect, response) = ui.allocate_exact_size(
+                            egui::vec2(width, 34.0), egui::Sense::click()
+                        );
+                        let bg = if selected {
+                            get_tool_ui_color(tool)
+                        } else if response.hovered() {
+                            egui::Color32::from_rgb(62, 62, 68)
+                        } else {
+                            egui::Color32::from_rgb(44, 44, 48)
+                        };
+                        ui.painter().rect_filled(rect, 6.0, bg);
+                        let icon_rect = egui::Rect::from_min_size(
+                            rect.left_top() + egui::vec2(5.0, 2.0), egui::vec2(30.0, 30.0)
+                        );
+                        draw_tool_ui_icon(ui.painter(), icon_rect, tool, selected);
+                        ui.painter().text(
+                            rect.left_center() + egui::vec2(43.0, 0.0),
+                            egui::Align2::LEFT_CENTER,
+                            name.clone(),
+                            egui::FontId::proportional(14.0),
+                            egui::Color32::WHITE,
+                        );
+                        let shortcut_hint = format!("{}: {}", tr(lang, "Shortcut", "الاختصار"), key);
+                        if response.on_hover_text(format!("{} — {}", name, shortcut_hint)).clicked() {
+                            self.active_tool_ui = tool;
+                            self.play_sfx(SfxType::UiClick);
+                        }
+                        ui.add_space(3.0);
+                    }
+                });
                 ui.separator();
+                if ui.small_button(tr(lang, "? Keyboard Shortcuts (F1)", "؟ شرح الاختصارات (F1)")).clicked() {
+                    self.show_shortcuts_dialog = true;
+                }
+                ui.label(tr(lang, "Current color", "اللون الحالي"));
                 ui.color_edit_button_srgba_unmultiplied(&mut self.brush_color);
             });
         });
@@ -2216,6 +2363,31 @@ impl eframe::App for StickApp {
         // اللوحة اليمنى
         egui::SidePanel::right("right_panel").resizable(true).default_width(270.0).show(ctx, |ui| {
             self.render_tool_properties_ui(ui, lang);
+            ui.add_space(8.0);
+            ui.separator();
+            ui.strong(tr(lang, "Colors", "الألوان"));
+            ui.label(tr(lang, "Click a swatch or use the custom color picker:", "اختار لون جاهز أو افتح منتقي الألوان:"));
+            ui.horizontal_wrapped(|ui| {
+                for (rgb, en_name) in BASIC_COLORS {
+                    let color = egui::Color32::from_rgb(rgb[0], rgb[1], rgb[2]);
+                    let selected = self.brush_color[0..3] == rgb;
+                    let button = egui::Button::new(" ")
+                        .fill(color)
+                        .stroke(if selected {
+                            egui::Stroke::new(2.0, egui::Color32::YELLOW)
+                        } else {
+                            egui::Stroke::new(1.0, egui::Color32::GRAY)
+                        })
+                        .min_size(egui::vec2(27.0, 27.0));
+                    if ui.add(button).on_hover_text(en_name).clicked() {
+                        self.brush_color = [rgb[0], rgb[1], rgb[2], 255];
+                    }
+                }
+            });
+            ui.horizontal(|ui| {
+                ui.label(tr(lang, "Custom color:", "لون مخصص:"));
+                ui.color_edit_button_srgba_unmultiplied(&mut self.brush_color);
+            });
             ui.add_space(8.0);
             ui.separator();
             ui.strong(tr(lang, "Symmetry Mirroring", "الرسم المتماثل"));
@@ -2277,7 +2449,23 @@ impl eframe::App for StickApp {
                     if ui.button("Frame (F5)").clicked() { self.action_insert_frame_f5(); }
                     if ui.button("Keyframe (F6)").clicked() { self.action_insert_keyframe_f6(now_time); }
                     if ui.button("Blank (F7)").clicked() { self.action_insert_blank_keyframe_f7(now_time); }
-                    ui.checkbox(&mut self.project.onion_skin.enabled, "Onion Skin");
+                    if ui.checkbox(&mut self.project.onion_skin.enabled, tr(lang, "Onion Skin", "عرض الفريمات المجاورة"))
+                        .on_hover_text(tr(lang, "Show faded previous and next frames to help animate.", "إظهار الفريمات السابقة والتالية بشفافية لتسهيل التحريك."))
+                        .changed()
+                    {
+                        self.has_unsaved_changes = true;
+                    }
+                });
+                ui.collapsing(tr(lang, "Onion Skin Options", "إعدادات الفريمات المجاورة"), |ui| {
+                    ui.label(tr(lang, "Preview nearby frames with faded colors.", "عرض الفريمات القريبة بألوان شفافة للمساعدة في رسم الحركة."));
+                    if ui.add(egui::Slider::new(&mut self.project.onion_skin.frames_before, 0..=6)
+                        .text(tr(lang, "Previous frames", "الفريمات السابقة"))).changed() {
+                        self.has_unsaved_changes = true;
+                    }
+                    if ui.add(egui::Slider::new(&mut self.project.onion_skin.frames_after, 0..=6)
+                        .text(tr(lang, "Next frames", "الفريمات التالية"))).changed() {
+                        self.has_unsaved_changes = true;
+                    }
                 });
                 ui.separator();
                 let cell_w = self.timeline_cell_width;
@@ -2536,4 +2724,37 @@ fn main() -> eframe::Result<()> {
         ..Default::default()
     };
     eframe::run_native("Stick", options, Box::new(|cc| Ok(Box::new(StickApp::new(cc)))))
+}
+
+#[cfg(test)]
+mod tool_discovery_tests {
+    use super::*;
+
+    #[test]
+    fn every_toolbar_tool_has_a_localized_name_and_shortcut() {
+        let config = AppConfig::default();
+        for tool in TOOLBAR_ITEMS {
+            let name_en = tool_display_name(tool, AppLang::English);
+            let name_ar = tool_display_name(tool, AppLang::Arabic);
+            assert!(!name_en.trim().is_empty());
+            assert!(!name_ar.trim().is_empty());
+            assert!(!tool_shortcut(tool, &config).trim().is_empty());
+        }
+    }
+
+    #[test]
+    fn shortcuts_follow_user_configuration() {
+        let mut config = AppConfig::default();
+        config.tool_brush = "J".to_string();
+        assert_eq!(tool_shortcut(ActiveToolUI::Brush, &config), "J");
+    }
+
+    #[test]
+    fn palette_contains_unique_opaque_colors() {
+        let mut seen = std::collections::HashSet::new();
+        for (rgb, _) in BASIC_COLORS {
+            assert!(seen.insert(rgb));
+        }
+        assert_eq!(seen.len(), 12);
+    }
 }
