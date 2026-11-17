@@ -14,6 +14,10 @@
 - **Known boundaries:** bucket fill operates on recognized closed stroke contours (now with improved near-closure tolerance), not arbitrary raster flood fill. Imported artwork/text still needs further parity tests for every transform. No Krita GPL code is copied into Stick.
 
 ### What's new
+- **Google Sign in / cloud backups (requires developer OAuth setup):** added a new Sign in settings tab using browser-based Desktop OAuth with PKCE, Windows credential storage and private Google Drive appDataFolder for artist XP/level data and saved Stick project files. Supports manual backup, cloud listing, safe restore and opt-in automatic backup after local save. **The production release needs the app owner's Google OAuth Client ID configured first; see GOOGLE_DRIVE_SETUP.md.** External media files are not bundled yet.
+- **Perspective guides:** start disabled on every application launch, independent of the prior stored guide setting. New 2-point perspective controls the left/right vanishing points plus horizon; guides remain non-destructive and excluded from exports.
+- **Eyedropper accuracy:** visible eyedropper tip now aligns precisely with actual cursor hit point across icon scale levels and samples from the top visible layer first.
+- **Simplified Online joining:** cleaner room cards, direct IP/password, and collapsible 8-digit code/help. A localhost TCP host↔guest handshake regression test covers the actual networking protocol; independent-network Tailscale access still depends on device sharing and firewall rules.
 - **OLD / NEW Animation Timeline:** the Timeline gear now lets artists switch between the familiar **OLD Timeline** (unchanged original Stick grid) and **NEW Timeline**, a clearer exposure-sheet layout with colored keyframe diamonds, continuous held drawing strips, a time ruler, taller customizable layer rows and independent horizontal zoom.
 - **Preserved data & workflows:** switching style only changes local UI preferences; frame/keyframe copy, paste, blank keys, deletion, playback, loop range and project file format keep working through the same underlying commands. Existing preferences load with OLD selected by default.
 - **Feedback dialog:** clicking "Report a bug or suggest a feature" on the start screen now opens a closable window with the maintainer's Instagram @ablikash and the project's GitHub Issues page.
@@ -99,6 +103,10 @@
 - **القيود الحالية:** الدلو بيلون المسارات المقفولة اللي بيتعرف عليها، ولسه مش Flood Fill كامل على أي سطح Raster. لم يتم نسخ أكواد Krita الخاضعة لترخيص GPL.
 
 ### إيه الجديد؟
+- **تسجيل الدخول وجوجل درايف:** تبويب تسجيل دخول جديد، باستخدام متصفح جوجل الرسمي وWindows Credential Manager. تقدر تحفظ مستوى الرسام ومشاريعه المحفوظة يدويًا أو تفعل النسخ التلقائي بعد حفظ المشروع، وتسترجع نسخة بدون الكتابة فوق المشروع المحلي. **تشغيل جوجل لكل المستخدمين محتاج إعداد Google OAuth Client ID للتطبيق في Google Cloud أولًا؛ التفاصيل في GOOGLE_DRIVE_SETUP.md.** الملفات الخارجية للصوت/الصور لسه مش جزء من النسخ السحابية.
+- **المنظور:** يبدأ دائمًا مقفول عند تشغيل Stick، ومعاه منظور جديد بنقطتي تلاشي تقدر تتحكم في الأولى والثانية وفي ارتفاع الأفق، من غير ما خطوط الإرشاد تظهر في التصدير.
+- **القطارة:** رأس أيقونة القطارة بقى على مكان النقر الفعلي بدل الإزاحة القديمة، واللون بيتاخد من أعلى طبقة ظاهرة.
+- **الانضمام أونلاين:** غرف بشكل أوضح، دخول مباشر بعنوان IP/كلمة السر، وكود الغرفة وتعليمات الشبكة داخل قسم اختياري. اتضاف اختبار حقيقي للهوست والضيف عبر TCP المحلي؛ الاتصال عبر الإنترنت الحقيقي لسه يحتاج ضبط Tailscale وصلاحيات الشبكة.
 - **OLD / NEW Timeline:** من ترس التايم لاين تقدر تختار الشكل القديم OLD زي ما هو، أو NEW بتصميم صفوف أوضح، شريط استمرار الرسم بين الفريمات، علامات كي فريم، ومسطرة توقيت. لكل شكل تكبيره الخاص، وطول صف اللير قابل للتعديل.
 - **أمان المشاريع:** تغيير الشكل بيغيّر إعدادات العرض فقط، مش البيانات ولا ملفات المشروع. عمليات النسخ والحذف والكي فريم والتشغيل والتكرار شغالة بنفس المحرك.
 - **التواصل:** زر «بلّغ عن مشكلة أو اقترح ميزة» في الواجهة الرئيسية بيفتح نافذة قابلة للإغلاق فيها إنستجرام @ablikash و GitHub Issues.
