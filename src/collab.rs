@@ -584,14 +584,18 @@ impl OnlineSession {
     }
     /// First admitted guest inherits this room on a graceful host exit.
     /// A crashed/offline old host cannot send this transfer without a relay.
-    pub fn handoff_before_leave(&self, latest_project: &AniProject) -> Result<bool, String> {
+    pub fn handoff_before_leave(&self) -> Result<bool, String> {
         let Some(host) = &self.host else { return Ok(false); };
         let _gate = host.edit_order.lock().map_err(|_| "Room edit gate poisoned")?;
         let peers = host.peers.lock().map_err(|_| "Room participants unavailable")?;
         let Some((&successor_id, (_, _, successor_ip))) =
             peers.iter().min_by_key(|(id, _)| *id) else { return Ok(false); };
         let address = format!("{}:{}", successor_ip, TCP_PORT);
-        let snapshot = public_project(latest_project.clone());
+        // A host must transfer its authoritative document, including remote
+        // edits already accepted by the network worker.
+        let snapshot = host.project.lock().map_err(|_| "Room project unavailable")?
+            .clone();
+        let snapshot = public_project(snapshot);
         let mut transfers = Vec::new();
         for (&id, (tx, _, _)) in peers.iter() {
             let promote = id == successor_id;
