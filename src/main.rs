@@ -6,6 +6,7 @@ mod exporter;
 mod persistence;
 mod profile;
 mod project;
+mod updater;
 
 use arabic_reshaper::arabic_reshape;
 use brushes::{draw_brush_preset_icon, draw_stroke_pro};
@@ -196,12 +197,6 @@ fn get_installed_version() -> String {
     FALLBACK_VERSION.to_string()
 }
 
-fn save_installed_version(ver: &str) {
-    if let Ok(exe) = std::env::current_exe() {
-        let _ = std::fs::write(exe.with_file_name("version.txt"), ver.trim().trim_start_matches('v'));
-    }
-}
-
 fn is_running_from_installed_dir() -> bool {
     std::env::current_exe()
         .ok()
@@ -235,9 +230,9 @@ enum UpdateState {
     Idle,
     Checking,
     UpToDate,
-    UpdateAvailable { version: String, download_url: String },
+    UpdateAvailable(updater::ReleaseInfo),
     Downloading(String),
-    ReadyToRestart,
+    ReadyToRestart { version: String, staged_exe: PathBuf },
     Error(String),
 }
 
@@ -831,7 +826,7 @@ impl StickApp {
             text_font_size: 36.0,
             pending_text_pos: egui::pos2(200.0, 200.0),
             show_update_dialog: false,
-            show_patch_notes_dialog: AppConfig::load().last_seen_patch_version != FALLBACK_VERSION,
+            show_patch_notes_dialog: AppConfig::load().last_seen_patch_version != get_installed_version(),
             show_settings_dialog: false,
             show_credits_dialog: false,
             settings_tab: 0,
@@ -1370,66 +1365,67 @@ impl StickApp {
     fn check_for_updates(&mut self, ctx: egui::Context) {
         self.show_update_dialog = true;
         *self.update_state.lock().unwrap() = UpdateState::Checking;
-        let state_clone = Arc::clone(&self.update_state);
-        let current_ver = self.installed_version.clone();
+        let state = Arc::clone(&self.update_state);
+        let installed = self.installed_version.clone();
         std::thread::spawn(move || {
-            let api_url = format!("https://api.github.com/repos/{}/releases?per_page=1", GITHUB_REPO);
-            if let Ok(resp) = ureq::get(&api_url).set("User-Agent", "Stick-Updater").call() {
-                if let Ok(json) = resp.into_json::<serde_json::Value>() {
-                    if let Some(latest) = json.as_array().and_then(|arr| arr.first()) {
-                        let tag = latest["tag_name"].as_str().unwrap_or("").trim_start_matches('v').to_string();
-                        let mut exe_url = String::new();
-                        if let Some(assets) = latest["assets"].as_array() {
-                            for asset in assets {
-                                if asset["name"].as_str().unwrap_or("").ends_with(".exe") {
-                                    exe_url = asset["browser_download_url"].as_str().unwrap_or("").to_string();
-                                    break;
-                                }
-                            }
-                        }
-                        let mut st = state_clone.lock().unwrap();
-                        if !tag.is_empty() && tag != current_ver && !exe_url.is_empty() {
-                            *st = UpdateState::UpdateAvailable { version: tag, download_url: exe_url };
-                        } else {
-                            *st = UpdateState::UpToDate;
-                        }
-                    }
-                }
-            }
+            let next = match updater::check_online(&installed) {
+                Ok(Some(release)) => UpdateState::UpdateAvailable(release),
+                Ok(None) => UpdateState::UpToDate,
+                Err(error) => UpdateState::Error(error),
+            };
+            *state.lock().unwrap() = next;
             ctx.request_repaint();
         });
     }
 
-    fn download_and_apply_update(&mut self, version: String, download_url: String, ctx: egui::Context) {
-        *self.update_state.lock().unwrap() = UpdateState::Downloading(format!("Downloading v{}...", version));
-        let state_clone = Arc::clone(&self.update_state);
+    fn download_and_apply_update(&mut self, info: updater::ReleaseInfo, ctx: egui::Context) {
+        if self.has_unsaved_changes || self.current_stroke.is_some() {
+            self.project_notice_title = tr(self.config.lang, "Save your work first", "احفظ شغلك الأول");
+            self.project_notice_body = tr(
+                self.config.lang,
+                "Save your open project (Ctrl+S), then click Install again. We won't restart and lose unsaved work.",
+                "احفظ المشروع المفتوح (Ctrl+S)، وبعد كده اضغط تثبيت تاني. البرنامج مش هيقفل ويضيّع شغلك.",
+            );
+            self.show_project_notice = true;
+            return;
+        }
+        *self.update_state.lock().unwrap() = UpdateState::Downloading(
+            tr(self.config.lang, "Downloading and checking the update...", "بننزّل التحديث وبنتأكد إنه سليم..."),
+        );
+        let state = Arc::clone(&self.update_state);
         std::thread::spawn(move || {
-            if let Ok(resp) = ureq::get(&download_url).set("User-Agent", "Stick-Updater").call() {
-                let mut bytes = Vec::new();
-                if resp.into_reader().read_to_end(&mut bytes).is_ok() {
-                    if let Ok(curr) = std::env::current_exe() {
-                        if let Ok(mut file) = File::create(curr.with_file_name("Stick_new.exe")) {
-                            if file.write_all(&bytes).is_ok() {
-                                save_installed_version(&version);
-                                *state_clone.lock().unwrap() = UpdateState::ReadyToRestart;
-                                ctx.request_repaint();
-                                return;
-                            }
-                        }
-                    }
-                }
-            }
-            *state_clone.lock().unwrap() = UpdateState::Error("Download failed.".to_string());
+            let next = match std::env::current_exe() {
+                Ok(current) => match updater::download_verified(&info, &current) {
+                    Ok(staged_exe) => UpdateState::ReadyToRestart {
+                        version: info.version.clone(),
+                        staged_exe,
+                    },
+                    Err(error) => UpdateState::Error(error),
+                },
+                Err(error) => UpdateState::Error(format!("Couldn't find Stick.exe: {error}")),
+            };
+            *state.lock().unwrap() = next;
             ctx.request_repaint();
         });
     }
 
-    fn restart_with_new_exe(&mut self) {
-        if let Ok(curr) = std::env::current_exe() {
-            let new_exe = curr.with_file_name("Stick_new.exe");
-            let ps = format!("Start-Sleep -Seconds 2; Move-Item -LiteralPath '{}' -Destination '{}' -Force; Start-Process -FilePath '{}'", new_exe.display(), curr.display(), curr.display());
-            let _ = std::process::Command::new("powershell").args(["-NoProfile", "-WindowStyle", "Hidden", "-Command", &ps]).spawn();
-            std::process::exit(0);
+    fn restart_with_new_exe(&mut self, version: String, staged_exe: PathBuf) {
+        if self.has_unsaved_changes || self.current_stroke.is_some() {
+            self.project_notice_title = tr(self.config.lang, "Save before restarting", "احفظ قبل إعادة التشغيل");
+            self.project_notice_body = tr(
+                self.config.lang,
+                "You have unsaved changes. Save your project, then restart the update.",
+                "عندك تعديلات لسه متحفظتش. احفظ المشروع وبعدها كمّل التحديث.",
+            );
+            self.show_project_notice = true;
+            return;
+        }
+        let result = std::env::current_exe()
+            .map_err(|e| e.to_string())
+            .and_then(|current| updater::spawn_replacer(&current, &staged_exe, &version));
+        match result {
+            Ok(()) => std::process::exit(0),
+            Err(error) => *self.update_state.lock().unwrap() = UpdateState::Error(error),
         }
     }
 
@@ -1656,7 +1652,7 @@ impl eframe::App for StickApp {
             &mut patch_acknowledged,
         );
         if patch_acknowledged {
-            self.config.last_seen_patch_version = FALLBACK_VERSION.to_string();
+            self.config.last_seen_patch_version = self.installed_version.clone();
             self.config.save();
             self.play_sfx(SfxType::NewFrame);
         }
@@ -2065,20 +2061,65 @@ impl eframe::App for StickApp {
         }
 
         if self.show_update_dialog {
-            let st = self.update_state.lock().unwrap().clone();
-            egui::Window::new("Updater").collapsible(false).resizable(false).anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0]).show(ctx, |ui| {
-                match st {
-                    UpdateState::Checking => { ui.spinner(); }
-                    UpdateState::UpToDate => { ui.label("Up to date!"); if ui.button("Close").clicked() { self.show_update_dialog = false; } }
-                    UpdateState::UpdateAvailable { version, download_url } => {
-                        if ui.button(format!("Install v{}", version)).clicked() { self.download_and_apply_update(version, download_url, ctx.clone()); }
+            let update_snapshot = self.update_state.lock().unwrap().clone();
+            egui::Window::new(tr(lang, "Stick Updates", "تحديثات Stick"))
+                .collapsible(false)
+                .resizable(false)
+                .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+                .show(ctx, |ui| {
+                    match update_snapshot {
+                        UpdateState::Checking => {
+                            ui.horizontal(|ui| {
+                                ui.spinner();
+                                ui.label(tr(lang, "Checking GitHub for updates...", "بندور على تحديثات جديدة..."));
+                            });
+                        }
+                        UpdateState::UpToDate => {
+                            ui.label(tr(lang, "No updates available right now. You're up to date!", "مفيش تحديث دلوقتي، إنت على آخر إصدار!"));
+                            if ui.button(tr(lang, "Close", "قفل")).clicked() {
+                                self.show_update_dialog = false;
+                            }
+                        }
+                        UpdateState::UpdateAvailable(info) => {
+                            ui.label(tr(lang, "A new Stick version is ready.", "في تحديث جديد لبرنامج Stick."));
+                            ui.label(format!("v{} → v{}", self.installed_version, info.version));
+                            if ui.button(tr(lang, "Download and install update", "نزّل وثبّت التحديث")).clicked() {
+                                self.download_and_apply_update(info, ctx.clone());
+                            }
+                            if ui.button(tr(lang, "Not now", "مش دلوقتي")).clicked() {
+                                self.show_update_dialog = false;
+                            }
+                        }
+                        UpdateState::Downloading(message) => {
+                            ui.spinner();
+                            ui.label(message);
+                        }
+                        UpdateState::ReadyToRestart { version, staged_exe } => {
+                            if self.has_unsaved_changes || self.current_stroke.is_some() {
+                                ui.label(tr(lang, "Update downloaded. Save your project before restarting.", "التحديث اتنزّل. احفظ مشروعك قبل ما البرنامج يعيد التشغيل."));
+                                if ui.button(tr(lang, "Save and restart", "احفظ واعمل إعادة تشغيل")).clicked() {
+                                    if self.trigger_save() {
+                                        self.restart_with_new_exe(version, staged_exe);
+                                    }
+                                }
+                            } else {
+                                ui.label(tr(lang, "Update checked. Restarting Stick to finish installation...", "اتأكدنا إن التحديث سليم. Stick هيعيد التشغيل عشان يكمّل التثبيت..."));
+                                self.restart_with_new_exe(version, staged_exe);
+                            }
+                        }
+                        UpdateState::Error(error) => {
+                            ui.colored_label(egui::Color32::LIGHT_RED, tr(lang, "Update failed. Your current Stick version is safe.", "التحديث فشل، بس نسختك الحالية سليمة."));
+                            ui.label(error);
+                            if ui.button(tr(lang, "Try again", "جرّب تاني")).clicked() {
+                                self.check_for_updates(ctx.clone());
+                            }
+                            if ui.button(tr(lang, "Close", "قفل")).clicked() {
+                                self.show_update_dialog = false;
+                            }
+                        }
+                        UpdateState::Idle => {}
                     }
-                    UpdateState::Downloading(m) => { ui.label(m); }
-                    UpdateState::ReadyToRestart => { if ui.button("Restart").clicked() { self.restart_with_new_exe(); } }
-                    UpdateState::Error(e) => { ui.label(e); if ui.button("Close").clicked() { self.show_update_dialog = false; } }
-                    UpdateState::Idle => {}
-                }
-            });
+                });
         }
 
         if self.show_symbol_dialog {
