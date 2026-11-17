@@ -17,7 +17,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 pub const TCP_PORT: u16 = 47554;
 const DISCOVERY_PORT: u16 = 47553;
 const DISCOVER_REQUEST: &[u8] = b"STICK_STUDIO_LAN_DISCOVER_V1";
-const PROTOCOL: u16 = 1;
+// Protocol v2 includes peer roster and LAN room codes; old v1 peers are rejected.
+const PROTOCOL: u16 = 2;
 const MAX_PACKET: usize = 8 * 1024 * 1024;
 const MAX_MEMBERS: usize = 12;
 const MAX_FRAME: usize = 10_000;
@@ -448,6 +449,17 @@ pub fn discover_rooms() -> Vec<RoomListing> {
     let _ = socket.set_broadcast(true);
     let _ = socket.set_read_timeout(Some(Duration::from_millis(450)));
     let _ = socket.send_to(DISCOVER_REQUEST, ("255.255.255.255", DISCOVERY_PORT));
+    // Windows routers may drop global broadcast but accept the subnet broadcast.
+    if let Ok(addr) = local_address().parse::<SocketAddr>() {
+        if let std::net::IpAddr::V4(ip) = addr.ip() {
+            let mut octets = ip.octets();
+            if !ip.is_loopback() {
+                octets[3] = 255;
+                let bcast = std::net::Ipv4Addr::from(octets);
+                let _ = socket.send_to(DISCOVER_REQUEST, (bcast, DISCOVERY_PORT));
+            }
+        }
+    }
     let _ = socket.send_to(DISCOVER_REQUEST, ("127.0.0.1", DISCOVERY_PORT));
     let mut buf = [0u8; 4096];
     loop {
