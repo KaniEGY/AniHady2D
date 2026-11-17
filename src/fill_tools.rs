@@ -254,29 +254,60 @@ pub fn flood_fill_polygon(
     let iy = py.floor() as usize;
     if ix >= w || iy >= h { return None; }
     let seed = iy*w+ix;
-    // Clicking the contour itself is ambiguous. Old contour fill handles it.
-    if wall[seed] { return None; }
-    let mut visited = vec![false; size];
-    let mut queue = VecDeque::new();
-    visited[seed] = true;
-    queue.push_back(seed);
-    let mut hits_edge = false;
-    let mut count = 0usize;
-    while let Some(index) = queue.pop_front() {
-        count += 1;
-        let x = index % w;
-        let y = index / w;
-        if x <= 1 || y <= 1 || x >= w - 2 || y >= h - 2 {
-            hits_edge = true; break;
-        }
-        for next in [index-1,index+1,index-w,index+w] {
-            if !wall[next] && !visited[next] {
-                visited[next] = true;
-                queue.push_back(next);
+    // Clicking on thick ink is common with small freehand loops. Search for
+    // a nearby interior component, but NEVER turn the exterior into a fill.
+    let mut candidates = Vec::new();
+    if wall[seed] {
+        let radius = ((gap.clamp(0.0,14.0)+9.0)/cell).ceil().clamp(2.0,22.0) as isize;
+        for dy in -radius..=radius {
+            for dx in -radius..=radius {
+                if dx*dx+dy*dy>radius*radius { continue; }
+                let x=ix as isize+dx;
+                let y=iy as isize+dy;
+                if x<2 || y<2 || x>=w as isize-2 || y>=h as isize-2 {continue;}
+                let index=y as usize*w+x as usize;
+                if !wall[index] {candidates.push(((dx*dx+dy*dy) as usize,index));}
             }
         }
+        candidates.sort_unstable_by_key(|&(distance,_)| distance);
+    } else {
+        candidates.push((0,seed));
     }
-    if hits_edge || count < 8 { return None; }
+    if candidates.is_empty() { return None; }
+    let mut rejected = vec![false;size];
+    let mut selected=None;
+    for (_,candidate) in candidates {
+        if rejected[candidate] { continue; }
+        let mut visited=vec![false;size];
+        let mut queue=VecDeque::new();
+        visited[candidate]=true;
+        queue.push_back(candidate);
+        let mut hits_edge=false;
+        let mut count=0usize;
+        while let Some(index)=queue.pop_front() {
+            count+=1;
+            let x=index%w;
+            let y=index/w;
+            if x<=1 || y<=1 || x>=w-2 || y>=h-2 {
+                hits_edge=true;
+            }
+            if x==0 || y==0 || x+1>=w || y+1>=h {continue;}
+            for next in [index-1,index+1,index-w,index+w] {
+                if !wall[next] && !visited[next] {
+                    visited[next]=true;
+                    queue.push_back(next);
+                }
+            }
+        }
+        if !hits_edge && count>=8 {
+            selected=Some(visited);
+            break;
+        }
+        for (index,&was_seen) in visited.iter().enumerate() {
+            if was_seen {rejected[index]=true;}
+        }
+    }
+    let visited=selected?;
 
     // Krita/AniCraft-style fill growth under drawn linework. The wall mask
     // includes a gap-closing dilation. Tracing the bare transparent area
@@ -475,6 +506,19 @@ mod tests {
         ];
         assert!(flood_fill_polygon(&lines,(34.,34.),(120.,120.),1.0).is_none());
     }
+    #[test]
+    fn bucket_finds_interior_when_user_clicks_ink_at_small_loop_edge() {
+        let mut stroke = shape(&[(35.,35.),(95.,35.),(95.,95.),
+                                 (35.,95.),(35.,35.)]);
+        stroke.base_width = 8.0;
+        // The tap is at x=35 (on top of the contour), not well inside it.
+        let polygon=flood_fill_polygon(&[stroke],(35.,60.),(130.,130.),2.5)
+            .expect("neighbor interior should still be fillable");
+        let fill=polygon_fill_stroke(polygon,[240,30,60,255]);
+        assert!(contour_contains(&fill,65.,65.));
+        assert!(!contour_contains(&fill,15.,60.));
+    }
+
     #[test]
     fn bucket_grows_color_beneath_visible_ink_without_leaking_outside() {
         let mut border = shape(&[(25.,25.),(140.,25.),(140.,140.),
