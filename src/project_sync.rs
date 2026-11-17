@@ -164,11 +164,13 @@ mod tests {
         apply_edits(&mut replica, &ops).unwrap();
         assert_eq!(serde_json::to_value(replica).unwrap(), serde_json::to_value(&edited).unwrap());
 
+        let before_delete = edited.clone();
         edited.layers.remove(0);
         edited.layers[0].keyframes.remove(&7);
         edited.total_frames = 1;
-        let reverse = diff_projects(&base, &edited).unwrap();
-        let mut replica = base.clone();
+        let reverse = diff_projects(&before_delete, &edited).unwrap();
+        assert!(!reverse.is_empty());
+        let mut replica = before_delete;
         apply_edits(&mut replica, &reverse).unwrap();
         assert_eq!(serde_json::to_value(replica).unwrap(), serde_json::to_value(edited).unwrap());
     }
