@@ -37,3 +37,16 @@
 - Every additional stored field needs backwards-compatibility tests, and future schema changes need migrations.
 - Release only a complete build after validation; never ship a binary-only hotfix as if it were a new version.
 - Update this handoff with new head SHA, CI URLs, test outcomes and outstanding work at each follow-up.
+
+
+## 17 November 2026 — Online collaboration preview PR #20
+- Base main SHA: de373bd262ba2179e322f681775fa4a4ac0d08ee
+- Branch: feature/online-lan-rooms-20261117-v2
+- PR: https://github.com/KaniEGY/Stick/pull/20
+- Added src/collab.rs and integrated online lobby/room header in src/main.rs. Standalone onboarding in STICK_ONLINE_GUIDE.md.
+- LAN discovery via UDP 47553, host TCP 47554, optional password using per-connection nonce challenge, capacity 2–12 participants including host, join by LAN discovery or direct IPv4.
+- Host-authoritative newly committed stroke broadcasting and initial project snapshot; local unsaved projects are backed up before an incoming snapshot. Absolute media/audio filesystem paths are stripped from outbound project snapshots.
+- **Not yet fully collaborative animation editing:** layer/timeline/move/undo/text/media operations remain unsynchronized, and full host resync is explicit. No global Internet room directory and no end-to-end transport encryption; no CGNAT NAT traversal.
+- Initial PR test workflow (c511c8d) failed because MutexGuard PoisonError was passed to io::Error::other; corrected in 3aca0ff. Subsequent Windows unit tests completed successfully, while release-build and newest-HEAD workflows still require checking. Windows two-PC GUI QA has NOT been performed.
+- Strict release criteria: latest HEAD Windows CI must finish green; test local and second-PC join/packet behavior before claiming the feature is stable. Keep normal Drawing/Animation and save formats unchanged. Do not call an early successful build proof of manual online acceptance.
+- Next task: verify the latest head workflow, then review unsynced structure operations, secure transport and optional Internet discovery/relay architecture.
