@@ -14,6 +14,7 @@
 - **Known boundaries:** bucket fill operates on recognized closed stroke contours (now with improved near-closure tolerance), not arbitrary raster flood fill. Imported artwork/text still needs further parity tests for every transform. No Krita GPL code is copied into Stick.
 
 ### What's new
+- **Arabic support window fix:** donation copy now uses properly ordered, manually wrapped right-aligned Arabic lines, with corrected colloquial spelling and separated emojis to prevent Unicode bidi wrapping errors.
 - **Download progress:** verified GitHub releases now show a real download progress bar, completed percent, and transferred/total megabytes before SHA-256 verification and restart.
 - **Top-bar feedback:** the blue Feedback label now opens the same in-app Instagram / GitHub report dialog as the launcher.
 - **Support modal:** improved its layout, included the developer's requested humorous optional-support message, and retained the original InstaPay link.
@@ -111,6 +112,7 @@
 - **القيود الحالية:** الدلو بيلون المسارات المقفولة اللي بيتعرف عليها، ولسه مش Flood Fill كامل على أي سطح Raster. لم يتم نسخ أكواد Krita الخاضعة لترخيص GPL.
 
 ### إيه الجديد؟
+- **تصحيح نافذة الدعم:** ضبط صياغة رسالة الدعم المصري وتقسيمها إلى سطور قصيرة بمحاذاة اليمين لمنع تلخبط ترتيب الحروف والكلمات أثناء العرض.
 - **شريط التحميل:** النسبة المئوية وحجم الملف المحمّل أثناء تحديث Stick، ثم التحقق من سلامة الملف قبل التثبيت.
 - **الإبلاغ:** زر «ابلغ عن مشكلة» فوق بيفتح نفس نافذة GitHub وInstagram الموجودة في الشاشة الرئيسية.
 - **الدعم:** شكل نافذة القلب الأصفر اتنظّم ونص الدعم اتغيّر حسب طلب المطوّر، مع الحفاظ على رابط InstaPay.
