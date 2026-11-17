@@ -2474,6 +2474,7 @@ impl eframe::App for StickApp {
                     }
                     3 => {
                         ui.label(tr(lang, "Customize the interface", "خصّص شكل البرنامج"));
+                        let mut colors_changed = false;
                         for (en, ar, color) in [
                             ("Panel background", "لون اللوحات", &mut self.config.ui_panel_color),
                             ("Selected accent", "لون التحديد", &mut self.config.ui_accent_color),
@@ -2484,10 +2485,11 @@ impl eframe::App for StickApp {
                             ui.horizontal(|ui| {
                                 ui.label(tr(lang, en, ar));
                                 if ui.color_edit_button_srgba_unmultiplied(color).changed() {
-                                    self.config.save();
+                                    colors_changed = true;
                                 }
                             });
                         }
+                        if colors_changed { self.config.save(); }
                         ui.separator();
                         if ui.button(tr(lang, "Restore Default Colors", "رجّع كل الألوان للأصل")).clicked() {
                             self.config.ui_panel_color = default_ui_panel_color();
