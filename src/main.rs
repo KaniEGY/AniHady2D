@@ -4514,6 +4514,15 @@ impl eframe::App for StickApp {
                                 } else {
                                     egui::Color32::from_rgb(cell[0], cell[1], cell[2])
                                 };
+                                if modern {
+                                    // Continuous exposure strips and diamonds replace the
+                                    // boxed legacy frame grid. Editing actions below stay shared.
+                                    timeline_styles::draw_cell(ui.painter(), cr, is_kf,
+                                        has_d && !is_b, tw,
+                                        self.active_layer_idx == l_idx,
+                                        layer.locked || is_b,
+                                        self.current_frame == f);
+                                } else {
                                 ui.painter().rect_filled(cr.shrink2(egui::vec2(1.0, 2.0)), 4.0, bg);
                                 if self.current_frame == f {
                                     ui.painter().line_segment(
@@ -4523,6 +4532,7 @@ impl eframe::App for StickApp {
                                     );
                                 }
                                 if !is_b { draw_anicraft_timeline_cell(ui.painter(), cr, is_kf, has_d, tw); }
+                                }
                                 if cresp.clicked() {
                                     if is_b { self.timeline_length = f; self.project.total_frames = f; }
                                     self.active_layer_idx = l_idx;
