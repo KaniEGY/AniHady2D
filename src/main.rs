@@ -2,6 +2,7 @@
 
 mod brushes;
 mod brush_engine;
+mod stylus;
 mod changelog;
 mod exporter;
 mod persistence;
@@ -10,6 +11,7 @@ mod project;
 
 use arabic_reshaper::arabic_reshape;
 use brushes::{draw_brush_preset_icon, draw_stroke_pro};
+use stylus::TouchPressureTracker;
 use eframe::egui;
 use exporter::{ImageExportFormat, VideoExportFormat};
 use profile::UserProfile;
@@ -751,6 +753,7 @@ struct StickApp {
     new_symbol_name: String,
     allow_close: bool,
     current_stroke: Option<Stroke>,
+    stylus_tracker: TouchPressureTracker,
     texture_cache: HashMap<String, egui::TextureHandle>,
     status_message: String,
     audio_sink: Option<(OutputStream, Sink)>,
@@ -844,6 +847,7 @@ impl StickApp {
             new_symbol_name: "Symbol_1".to_string(),
             allow_close: false,
             current_stroke: None,
+            stylus_tracker: TouchPressureTracker::default(),
             texture_cache: HashMap::new(),
             status_message: "Stick Studio Ready".to_string(),
             audio_sink: None,
@@ -1732,6 +1736,10 @@ impl eframe::App for StickApp {
             )
         });
 
+        // Best-effort tablet pressure delivered by egui Touch events.
+        // Regular mouse input and unsupported tablets safely use 1.0.
+        let drawing_pressure = ctx.input(|i| self.stylus_tracker.update(&i.events, pointer_pos, pointer_down));
+
         // اختصار F10: التبديل لوضع ملء الشاشة الحقيقي بدون ظهور Taskbar والرجوع للوضع الطبيعي عند الضغط عليه مرة ثانية
         if f10_pressed {
             self.is_fullscreen = !self.is_fullscreen;
@@ -2440,12 +2448,12 @@ impl eframe::App for StickApp {
                             if let Some(stroke) = &mut self.current_stroke {
                                 if let Some(last) = stroke.points.last() {
                                     if ((last.x - virt.x).powi(2) + (last.y - virt.y).powi(2)).sqrt() >= 1.5 {
-                                        stroke.points.push(StrokePoint { x: virt.x, y: virt.y, pressure: 1.0 });
+                                        stroke.points.push(StrokePoint { x: virt.x, y: virt.y, pressure: drawing_pressure });
                                     }
                                 }
                             } else {
                                 self.save_undo_state();
-                                self.current_stroke = Some(Stroke { points: vec![StrokePoint { x: virt.x, y: virt.y, pressure: 1.0 }], color: self.brush_color, fill_color: None, base_width: self.brush_size, is_vector: false, brush_preset: self.active_krita_brush, opacity: self.brush_opacity, brush_texture_id: None });
+                                self.current_stroke = Some(Stroke { points: vec![StrokePoint { x: virt.x, y: virt.y, pressure: drawing_pressure }], color: self.brush_color, fill_color: None, base_width: self.brush_size, is_vector: false, brush_preset: self.active_krita_brush, opacity: self.brush_opacity, brush_texture_id: None });
                             }
                         }
                         ActiveToolUI::SelectNormal | ActiveToolUI::FreeTransform => {
