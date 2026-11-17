@@ -278,6 +278,40 @@ pub fn flood_fill_polygon(
     }
     if hits_edge || count < 8 { return None; }
 
+    // Krita/AniCraft-style fill growth under drawn linework. The wall mask
+    // includes a gap-closing dilation. Tracing the bare transparent area
+    // leaves a white hairline between the color and the visible brush.
+    // Grow the selected component INTO wall cells only, never into another
+    // transparent component: a center divider therefore remains a barrier.
+    let grow_steps = ((gap.clamp(0.0, 14.0) + 1.5) / cell).ceil()
+        .clamp(1.0, 20.0) as usize;
+    let mut covered = visited.clone();
+    let mut boundary = VecDeque::<(usize, usize)>::new();
+    for index in 0..size {
+        if !visited[index] { continue; }
+        let x = index % w;
+        let y = index / w;
+        if x == 0 || y == 0 || x + 1 >= w || y + 1 >= h { continue; }
+        for next in [index - 1, index + 1, index - w, index + w] {
+            if wall[next] && !covered[next] {
+                covered[next] = true;
+                boundary.push_back((next, 1));
+            }
+        }
+    }
+    while let Some((index, distance)) = boundary.pop_front() {
+        if distance >= grow_steps { continue; }
+        let x = index % w;
+        let y = index / w;
+        if x == 0 || y == 0 || x + 1 >= w || y + 1 >= h { continue; }
+        for next in [index - 1, index + 1, index - w, index + w] {
+            if wall[next] && !covered[next] {
+                covered[next] = true;
+                boundary.push_back((next, distance + 1));
+            }
+        }
+    }
+
     // Build clockwise edges of the flooded pixels. The topmost edge is on
     // the outside perimeter; secondary loops (holes) remain undisturbed.
     type Corner = (i32, i32);
@@ -285,7 +319,7 @@ pub fn flood_fill_polygon(
     let mut edge_count = 0usize;
     for y in 2..h-2 {
         for x in 2..w-2 {
-            if !visited[y*w+x] { continue; }
+            if !covered[y*w+x] { continue; }
             let x = x as i32;
             let y = y as i32;
             let pos = (y as usize)*w+(x as usize);
@@ -293,10 +327,10 @@ pub fn flood_fill_polygon(
                 edges.entry(from).or_default().push(to);
                 edge_count += 1;
             };
-            if !visited[pos-w] { add((x,y),(x+1,y)); }
-            if !visited[pos+1] { add((x+1,y),(x+1,y+1)); }
-            if !visited[pos+w] { add((x+1,y+1),(x,y+1)); }
-            if !visited[pos-1] { add((x,y+1),(x,y)); }
+            if !covered[pos-w] { add((x,y),(x+1,y)); }
+            if !covered[pos+1] { add((x+1,y),(x+1,y+1)); }
+            if !covered[pos+w] { add((x+1,y+1),(x,y+1)); }
+            if !covered[pos-1] { add((x,y+1),(x,y)); }
         }
     }
     if edge_count < 8 || edge_count > 70_000 { return None; }
@@ -441,6 +475,21 @@ mod tests {
         ];
         assert!(flood_fill_polygon(&lines,(34.,34.),(120.,120.),1.0).is_none());
     }
+    #[test]
+    fn bucket_grows_color_beneath_visible_ink_without_leaking_outside() {
+        let mut border = shape(&[(25.,25.),(140.,25.),(140.,140.),
+                                  (25.,140.),(25.,25.)]);
+        border.base_width = 8.0;
+        let polygon = flood_fill_polygon(&[border],(80.,80.),(180.,180.),3.5)
+            .expect("enclosed area");
+        let filled = polygon_fill_stroke(polygon,[200,80,20,255]);
+        // The inside half of the 8px line must be filled *under* the ink.
+        assert!(contour_contains(&filled,28.0,70.0),
+            "filling should not leave a white halo just inside the outline");
+        assert!(!contour_contains(&filled,17.0,70.0),
+            "color must not escape outside the contour");
+    }
+
     #[test]
     fn divided_circle_fills_only_the_clicked_half() {
         // The outer closed contour is one stroke. A separate diameter
