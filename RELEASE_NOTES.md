@@ -14,6 +14,9 @@
 - **Known boundaries:** bucket fill operates on recognized closed stroke contours (now with improved near-closure tolerance), not arbitrary raster flood fill. Imported artwork/text still needs further parity tests for every transform. No Krita GPL code is copied into Stick.
 
 ### What's new
+- **Friends online (optional Tailscale):** join a room hosted on your friend's own PC from a different Internet connection. Detect the local Tailscale 100.x address, list rooms from visible online tailnet peers using unicast discovery and copy a host address for direct joining. Requires the separately installed Tailscale client and permission to access the host; not a central public room service.
+- **Free Transform:** 22px resize hit radii and 21px rotate hit radius, constant in screen coordinates across zoom; all four corners now resize from their opposite anchors. The handles are slightly easier to see.
+- **Error guidance:** connection-refused diagnostics distinguish LAN-only addresses from remote Tailscale routes.
 - **Online sync v3:** automatic host-relayed updates to strokes, erasing, bucket fill, layers, visibility, frame/keyframe edits, text and transforms. Creating a room explicitly makes your PC its TCP host/server. Existing LAN discovery, eight-digit codes and optional passwords remain.
 - **Bucket fix:** fills a bounded region separated by internal lines (for example, either half of a bisected circle), rather than automatically filling the whole outer shape.
 - **Timeline:** deleting frame 1 preserves artwork held on the old frame 2; text and symbol instance frames appear as occupied in the timeline.
@@ -81,6 +84,9 @@
 - **القيود الحالية:** الدلو بيلون المسارات المقفولة اللي بيتعرف عليها، ولسه مش Flood Fill كامل على أي سطح Raster. لم يتم نسخ أكواد Krita الخاضعة لترخيص GPL.
 
 ### إيه الجديد؟
+- **اللعب مع أصحابك على نت مختلف:** دعم Tailscale اختياري من غير بورت فوروارد. برنامج Stick بيكتشف عنوان 100.x الخاص بجهازك والغرف اللي يقدر يوصل لها على شبكة Tailscale، وبيسمح بنسخ عنوان الهوست للانضمام المباشر. يلزم تنزيل Tailscale وتسجيل الدخول والسماح للأصحاب بالوصول للجهاز؛ مش سيرفر غرف عالمي.
+- **أداة التحويل:** تكبير مساحة الضغط غير المرئية للمقابض وتثبيتها مع الزوم، مع تفعيل الأربع زوايا للتكبير والتصغير بدل زاوية واحدة. تكبير المقابض المرئية بشكل بسيط.
+- **اتصال الأونلاين:** رسائل مساعدة أوضح لخطأ 10061 ولما المستخدم يحاول يستخدم عنوان LAN بعيد عن البيت.
 - **مزامنة الأونلاين v3:** أي تعديل في محتوى المشروع بيتبعت من خلال جهاز الهوست: رسم ومسح ودلو وإضافة أو حذف ليرات وفريمات وتعديل النص والتحويلات. إنشاء غرفة بيحوّل جهازك فعليًا لسيرفر TCP للغرفة، وبيظهر توضيح واضح في الواجهة.
 - **إصلاح الدلو:** الخط اللي بيقسّم الدايرة بيمنع اللون من الانتقال للنصف التاني، مش بيتملى الشكل كله.
 - **تحسين التايم لاين:** حذف أول فريم بيحافظ على الرسم اللي كان ظاهر في الفريم التاني، والفريمات اللي فيها نص أو Symbol بتبان مش فاضية.
