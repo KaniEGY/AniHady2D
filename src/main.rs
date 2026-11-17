@@ -3288,30 +3288,35 @@ impl eframe::App for StickApp {
         let mut frame_menu_action: Option<(usize, usize, timeline_ops::FrameAction)> = None;
         // شريط التايم لاين السفلي في وضع الأنيميشن
         if self.workspace_mode == WorkspaceMode::AnimationStudio && self.config.show_timeline_dock {
-            egui::TopBottomPanel::bottom("timeline_panel").resizable(true).default_height(255.0).show(ctx, |ui| {
+            egui::TopBottomPanel::bottom("timeline_panel").resizable(true).default_height(295.0).show(ctx, |ui| {
                 let bg = self.config.timeline_bg_color;
                 ui.painter().rect_filled(ui.max_rect(), 0.0,
                     egui::Color32::from_rgb(bg[0],bg[1],bg[2]));
                 ui.horizontal_wrapped(|ui| {
-                    ui.strong(tr(lang, "🎬 TIMELINE", "🎬 التايم لاين"));
+                    ui.label(egui::RichText::new(tr(lang, "● ANIMATION TIMELINE", "● الخط الزمني للأنيميشن"))
+                        .size(16.0).strong().color(egui::Color32::from_rgb(107, 210, 252)));
                     if ui.button("⚙").on_hover_text(
                         tr(lang, "Timeline Settings", "إعدادات التايم لاين")
                     ).clicked() {
                         self.show_timeline_settings = true;
                     }
                     ui.separator();
-                    if ui.button("|<").clicked() { self.current_frame = 1; }
-                    if ui.button("<").clicked() && self.current_frame > 1 { self.current_frame -= 1; }
-                    if ui.button(if self.is_playing { "Pause" } else { "Play" }).clicked() {
+                    if ui.button("⏮").on_hover_text(tr(lang, "First frame", "أول فريم")).clicked() { self.current_frame = 1; }
+                    if ui.button("◀").on_hover_text(tr(lang, "Previous frame", "الفريم السابق")).clicked() && self.current_frame > 1 { self.current_frame -= 1; }
+                    let play_button = egui::Button::new(if self.is_playing { "Ⅱ  PAUSE" } else { "▶  PLAY" })
+                        .fill(if self.is_playing { egui::Color32::from_rgb(163, 59, 62) }
+                            else { egui::Color32::from_rgb(21, 133, 111) });
+                    if ui.add(play_button).clicked() {
                         self.is_playing = !self.is_playing;
                         if self.is_playing { self.start_audio_playback(); } else { self.stop_audio_playback(); }
                     }
-                    if ui.button(">").clicked() && self.current_frame < self.timeline_length { self.current_frame += 1; }
+                    if ui.button("▶").on_hover_text(tr(lang, "Next frame", "الفريم الجاي")).clicked() && self.current_frame < self.timeline_length { self.current_frame += 1; }
                     ui.toggle_value(&mut self.loop_enabled, tr(lang, "🔁 Loop Range", "🔁 تكرار جزء"));
-                    ui.label(format!("{}f / {}f", self.current_frame, self.timeline_length));
-                    if ui.button("Frame (F5)").clicked() { self.action_insert_frame_f5(); }
-                    if ui.button("Keyframe (F6)").clicked() { self.action_insert_keyframe_f6(now_time); }
-                    if ui.button("Blank (F7)").clicked() { self.action_insert_blank_keyframe_f7(now_time); }
+                    ui.label(egui::RichText::new(format!("Frame {} / {}", self.current_frame, self.timeline_length))
+                        .color(egui::Color32::from_rgb(255, 214, 110)).strong());
+                    if ui.button(tr(lang, "+ Frame (F5)", "+ فريم (F5)")).clicked() { self.action_insert_frame_f5(); }
+                    if ui.button(tr(lang, "◆ Keyframe (F6)", "◆ كي فريم (F6)")).clicked() { self.action_insert_keyframe_f6(now_time); }
+                    if ui.button(tr(lang, "◇ Blank (F7)", "◇ فاضي (F7)")).clicked() { self.action_insert_blank_keyframe_f7(now_time); }
                     if ui.checkbox(&mut self.project.onion_skin.enabled, tr(lang, "Onion Skin", "عرض الفريمات المجاورة"))
                         .on_hover_text(tr(lang, "Show faded previous and next frames to help animate.", "إظهار الفريمات السابقة والتالية بشفافية لتسهيل التحريك."))
                         .changed()
@@ -3352,10 +3357,12 @@ impl eframe::App for StickApp {
                 let cols = self.timeline_length.max(30);
                 egui::ScrollArea::both().id_salt("timeline_frame_scroller").show(ui, |ui| {
                     ui.horizontal(|ui| {
-                        ui.allocate_ui(egui::vec2(140.0, 26.0), |ui| { ui.strong(tr(lang, "Frames", "الفريمات")); });
+                        ui.allocate_ui(egui::vec2(158.0, 30.0), |ui| {
+                            ui.strong(tr(lang, "FRAMES / LAYERS", "الفريمات / الطبقات"));
+                        });
                         for f in 1..=cols {
                             let is_c = self.current_frame == f;
-                            let (r, resp) = ui.allocate_exact_size(egui::vec2(cell_w, 26.0), egui::Sense::click_and_drag());
+                            let (r, resp) = ui.allocate_exact_size(egui::vec2(cell_w, 30.0), egui::Sense::click_and_drag());
                             if self.loop_enabled && f >= self.loop_start_frame && f <= self.loop_end_frame {
                                 ui.painter().rect_filled(r.shrink(1.0), 2.0, egui::Color32::from_rgb(57, 103, 83));
                             }
@@ -3375,8 +3382,12 @@ impl eframe::App for StickApp {
                     });
                     for (l_idx, layer) in self.project.layers.iter().enumerate() {
                         ui.horizontal(|ui| {
-                            ui.allocate_ui(egui::vec2(140.0, 30.0), |ui| {
-                                ui.label(egui::RichText::new(&layer.name).strong());
+                            ui.allocate_ui(egui::vec2(158.0, 34.0), |ui| {
+                                ui.label(egui::RichText::new(&layer.name).strong().color(
+                                    if self.active_layer_idx == l_idx {
+                                        egui::Color32::from_rgb(119, 209, 255)
+                                    } else { egui::Color32::WHITE }
+                                ));
                             });
                             for f in 1..=cols {
                                 let is_b = f > self.timeline_length;
@@ -3384,7 +3395,7 @@ impl eframe::App for StickApp {
                                 let eff = if is_b { None } else { Self::get_effective_frame_data(layer, f) };
                                 let has_d = eff.map_or(false, |fd| !fd.strokes.is_empty() || !fd.media_items.is_empty());
                                 let tw = eff.map(|fd| fd.tween_mode).unwrap_or(TweenMode::None);
-                                let (cr, cresp) = ui.allocate_exact_size(egui::vec2(cell_w, 30.0), egui::Sense::click());
+                                let (cr, cresp) = ui.allocate_exact_size(egui::vec2(cell_w, 34.0), egui::Sense::click());
                                 let cell = self.config.timeline_cell_color;
                                 let accent = self.config.ui_accent_color;
                                 let bg = if self.active_layer_idx == l_idx && self.current_frame == f {
@@ -3398,6 +3409,13 @@ impl eframe::App for StickApp {
                                     egui::Color32::from_rgb(cell[0], cell[1], cell[2])
                                 };
                                 ui.painter().rect_filled(cr.shrink2(egui::vec2(1.0, 2.0)), 4.0, bg);
+                                if self.current_frame == f {
+                                    ui.painter().line_segment(
+                                        [cr.left_top() + egui::vec2(0.0, 1.0),
+                                         cr.left_bottom() - egui::vec2(0.0, 1.0)],
+                                        egui::Stroke::new(2.0, egui::Color32::from_rgb(255, 202, 65))
+                                    );
+                                }
                                 if !is_b { draw_anicraft_timeline_cell(ui.painter(), cr, is_kf, has_d, tw); }
                                 if cresp.clicked() {
                                     if is_b { self.timeline_length = f; self.project.total_frames = f; }
