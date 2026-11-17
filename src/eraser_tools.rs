@@ -109,12 +109,16 @@ fn split_stroke(s:Stroke,c:(f32,f32),radius:f32)->Vec<Stroke> {
 /// vertex is near the cursor. Retain legitimate one-point dabs.
 pub fn erase_partial(strokes:&mut Vec<Stroke>,center:(f32,f32),radius:f32)->bool {
     if !center.0.is_finite()||!center.1.is_finite()||!radius.is_finite()||radius<=0.0{return false;}
-    let old=serde_json::to_value(&*strokes).ok();
+    let mut changed=false;
     let mut output=Vec::with_capacity(strokes.len());
     for s in strokes.drain(..) {
-        output.extend(split_stroke(s,center,radius));
+        if stroke_touched(&s,center,radius) {
+            changed=true;
+            output.extend(split_stroke(s,center,radius));
+        } else {
+            output.push(s);
+        }
     }
-    let changed=old.is_none_or(|v|Some(v)!=serde_json::to_value(&output).ok());
     *strokes=output;
     changed
 }
