@@ -37,8 +37,9 @@ pub fn xp_required_for_level(level: u32) -> u64 {
     if level == 0 { return 100; }
     let mut xp = 150u64;
     for _ in 1..level {
-        let next = xp.saturating_mul(115).saturating_add(99) / 100;
-        if next == xp { return xp; } // u64 saturation guard
+        let next = (xp / 100).saturating_mul(115)
+            .saturating_add(((xp % 100) * 115 + 99) / 100);
+        if next <= xp { return u64::MAX; } // overflow guard
         xp = next;
     }
     xp.max(150)
@@ -244,7 +245,7 @@ mod tests {
     #[test]
     fn sound_pool_has_one_hundred_variants() {
         let all: std::collections::HashSet<_> = (0..100).map(
-            |i| level_up_sound_variant(i, 100, 0)
+            |i| level_up_sound_variant(0, i as u64, 0)
         ).collect();
         assert_eq!(all.len(),100);
     }
