@@ -2001,7 +2001,9 @@ impl eframe::App for StickApp {
             if sc_hand { self.active_tool_ui = ActiveToolUI::HandCanvas; }
             if sc_smaller { self.brush_size = (self.brush_size - 2.0).max(1.0); }
             if sc_larger { self.brush_size = (self.brush_size + 2.0).min(120.0); }
-            if del_pressed && !self.selected_stroke_indices.is_empty() {
+            if del_pressed && (!self.selected_stroke_indices.is_empty() || self.selected_text_item_index.is_some())
+                && !self.is_active_layer_locked()
+            {
                 self.save_undo_state();
                 self.ensure_editable_keyframe();
                 if let Some(layer) = self.project.layers.get_mut(self.active_layer_idx) {
@@ -2010,7 +2012,11 @@ impl eframe::App for StickApp {
                         to_rem.sort_unstable_by(|a, b| b.cmp(a));
                         to_rem.dedup();
                         for idx in to_rem { if idx < frame.strokes.len() { frame.strokes.remove(idx); } }
+                        if let Some(index) = self.selected_text_item_index.take() {
+                            if index < frame.text_items.len() { frame.text_items.remove(index); }
+                        }
                         self.selected_stroke_indices.clear();
+                        self.has_unsaved_changes = true;
                     }
                 }
             }
