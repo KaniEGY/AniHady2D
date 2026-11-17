@@ -620,6 +620,34 @@ mod tests {
             thread::sleep(Duration::from_millis(25));
         }
         assert!(delivered, "host must receive guest stroke once");
+
+        // Regression: deleting or creating a layer/frame is an edit just like
+        // painting, and must reach the host and every room participant.
+        let mut guest_project = AniProject::default();
+        guest.set_baseline(&guest_project);
+        let added_layer = guest_project.layers[0].clone();
+        guest_project.layers.insert(0, added_layer);
+        guest_project.layers[0].name = "Guest's new layer".into();
+        guest_project.layers[0].keyframes.insert(4, Default::default());
+        guest_project.total_frames = 4;
+        guest.sync_local_changes(&guest_project).expect("send structural edits");
+        let deadline = std::time::Instant::now() + Duration::from_secs(8);
+        let mut received_edits = false;
+        while std::time::Instant::now() < deadline {
+            for event in host.events() {
+                if let OnlineEvent::Edits(edits) = event {
+                    assert!(!edits.is_empty());
+                    received_edits = true;
+                }
+            }
+            if received_edits { break; }
+            thread::sleep(Duration::from_millis(25));
+        }
+        assert!(received_edits, "the host must see layer/frame changes");
+        let host_document = host.host.as_ref().unwrap().project.lock().unwrap().clone();
+        assert_eq!(host_document.layers.len(), 2);
+        assert_eq!(host_document.layers[0].name, "Guest's new layer");
+        assert!(host_document.layers[0].keyframes.contains_key(&4));
         guest.close();
         host.close();
     }
