@@ -707,72 +707,122 @@ fn get_tool_ui_color(tool: ActiveToolUI) -> egui::Color32 {
     }
 }
 
+// Cohesive two-tone vector icons adapted to the colorful toolbar reference.
+// They stay crisp at high-DPI scaling and at the smaller mouse-cursor size.
 fn draw_tool_ui_icon(painter: &egui::Painter, rect: egui::Rect, tool: ActiveToolUI, active: bool) {
     let c = rect.center();
-    let main_color = if active { egui::Color32::WHITE } else { get_tool_ui_color(tool) };
-    let stroke = egui::Stroke::new(2.0, main_color);
+    let primary = get_tool_ui_color(tool);
+    let pale = egui::Color32::from_rgb(234, 245, 255);
+    let deep = egui::Color32::from_rgb(39, 43, 62);
+    let line = egui::Stroke::new(2.2, primary);
+    let p = |x:f32,y:f32| c+egui::vec2(x,y);
     match tool {
         ActiveToolUI::SelectNormal => {
-            let pts = vec![
-                c + egui::vec2(-5.5, -8.5), c + egui::vec2(-5.5, 7.5), c + egui::vec2(-1.2, 3.8),
-                c + egui::vec2(2.5, 9.5), c + egui::vec2(5.2, 8.0), c + egui::vec2(1.5, 2.2), c + egui::vec2(7.0, 2.2),
-            ];
-            painter.add(egui::Shape::convex_polygon(pts, main_color, egui::Stroke::NONE));
+            painter.add(egui::Shape::convex_polygon(
+                vec![p(-7.,-10.),p(-5.,9.),p(-0.5,3.0),p(5.,2.)],
+                primary,egui::Stroke::new(0.8,pale)));
+            painter.line_segment([p(0.,3.),p(5.,10.)],egui::Stroke::new(3.3,primary));
+            painter.line_segment([p(-5.5,-7.),p(-4.5,4.)],egui::Stroke::new(1.2,pale));
         }
         ActiveToolUI::SelectLasso => {
-            painter.circle_stroke(c + egui::vec2(-1.0, -2.0), 6.5, stroke);
-            painter.line_segment([c + egui::vec2(3.5, 3.0), c + egui::vec2(7.5, 8.5)], stroke);
+            painter.circle_stroke(p(-2.5,-3.5),8.0,egui::Stroke::new(3.0,primary));
+            painter.circle_stroke(p(-2.5,-3.5),5.5,egui::Stroke::new(0.9,pale));
+            painter.line_segment([p(3.5,2.),p(10.,10.)],egui::Stroke::new(3.4,primary));
+            painter.circle_filled(p(10.,10.),2.1,pale);
         }
         ActiveToolUI::FreeTransform => {
-            let sq = egui::Rect::from_center_size(c, egui::vec2(13.0, 13.0));
-            painter.rect_stroke(sq, 1.0, stroke);
-            painter.circle_filled(c, 2.2, main_color);
+            painter.rect_stroke(egui::Rect::from_center_size(c,egui::vec2(14.,14.)),0.,
+                egui::Stroke::new(1.6,primary));
+            for (x,y) in [(-8.,-8.),(8.,-8.),(-8.,8.),(8.,8.)] {
+                let r=egui::Rect::from_center_size(p(x,y),egui::vec2(5.,5.));
+                painter.rect_filled(r,0.,primary);
+                painter.rect_stroke(r,0.,egui::Stroke::new(0.8,pale));
+            }
+            painter.circle_stroke(p(0.,-11.),2.1,egui::Stroke::new(1.7,primary));
         }
         ActiveToolUI::VectorDirectSelect => {
-            let pts = vec![c + egui::vec2(-4.5, -8.5), c + egui::vec2(-4.5, 6.5), c + egui::vec2(0.0, 3.0), c + egui::vec2(5.5, 3.0)];
-            painter.add(egui::Shape::closed_line(pts, stroke));
-            painter.circle_filled(c + egui::vec2(6.0, -5.0), 2.5, main_color);
+            let verts=[p(-8.,-9.),p(-5.,9.),p(8.,0.)];
+            painter.line_segment([verts[0],verts[1]],line);
+            painter.line_segment([verts[1],verts[2]],line);
+            painter.line_segment([verts[0],verts[2]],line);
+            for (i,point) in verts.iter().enumerate() {
+                painter.circle_filled(*point,if i==1{3.4}else{3.0},primary);
+                painter.circle_filled(*point,1.0,pale);
+            }
+            painter.line_segment([p(-5.,9.),p(9.,-9.)],egui::Stroke::new(1.0,primary));
         }
         ActiveToolUI::VectorPen => {
-            let pts = vec![c + egui::vec2(0.0, -9.5), c + egui::vec2(6.5, 1.0), c + egui::vec2(3.5, 8.5), c + egui::vec2(-3.5, 8.5), c + egui::vec2(-6.5, 1.0)];
-            painter.add(egui::Shape::closed_line(pts, stroke));
-            painter.circle_filled(c + egui::vec2(0.0, -0.5), 2.0, main_color);
+            painter.add(egui::Shape::convex_polygon(
+                vec![p(0.,-11.),p(8.,0.),p(3.5,9.),p(-3.5,9.),p(-8.,0.)],
+                primary,egui::Stroke::new(1.0,deep)));
+            painter.line_segment([p(0.,-9.),p(0.,-1.)],egui::Stroke::new(1.5,pale));
+            painter.circle_filled(p(0.,0.5),2.4,pale);
+            painter.rect_filled(egui::Rect::from_min_max(p(-5.,10.),p(5.,12.)),0.,deep);
         }
         ActiveToolUI::Brush => {
-            painter.line_segment([c + egui::vec2(-1.5, 1.5), c + egui::vec2(7.5, -7.5)], egui::Stroke::new(3.2, main_color));
-            let tip = vec![c + egui::vec2(-2.0, 2.0), c + egui::vec2(-7.5, 3.5), c + egui::vec2(-8.5, 8.5), c + egui::vec2(-3.5, 7.5)];
-            painter.add(egui::Shape::convex_polygon(tip, main_color, egui::Stroke::NONE));
+            painter.line_segment([p(-3.,4.),p(8.,-9.)],egui::Stroke::new(5.,primary));
+            painter.line_segment([p(1.,-1.),p(7.,-8.)],egui::Stroke::new(1.4,pale));
+            painter.add(egui::Shape::convex_polygon(
+                vec![p(-4.,3.),p(-10.,7.),p(-10.,10.),p(-3.,9.),p(-1.,6.)],
+                egui::Color32::from_rgb(217,72,56),egui::Stroke::NONE));
+            painter.circle_filled(p(-8.,8.),1.4,primary);
         }
         ActiveToolUI::EraserRed | ActiveToolUI::EraserGreen => {
-            let pts = vec![c + egui::vec2(-7.5, 2.0), c + egui::vec2(1.0, -6.5), c + egui::vec2(7.5, 0.0), c + egui::vec2(-1.0, 8.5)];
-            painter.add(egui::Shape::closed_line(pts, stroke));
-            let half = vec![c + egui::vec2(-7.5, 2.0), c + egui::vec2(-3.2, -2.2), c + egui::vec2(3.2, 4.2), c + egui::vec2(-1.0, 8.5)];
-            painter.add(egui::Shape::convex_polygon(half, main_color, egui::Stroke::NONE));
+            let top = if tool==ActiveToolUI::EraserRed {
+                egui::Color32::from_rgb(244,88,112)
+            } else { egui::Color32::from_rgb(44,207,117) };
+            painter.add(egui::Shape::convex_polygon(
+                vec![p(-9.,3.),p(1.,-10.),p(9.,-3.),p(-1.,10.)],
+                top,egui::Stroke::new(0.7,pale)));
+            painter.add(egui::Shape::convex_polygon(
+                vec![p(-9.,3.),p(-1.,10.),p(4.,3.),p(-4.,-4.)],
+                egui::Color32::from_rgb(190,197,211),egui::Stroke::NONE));
+            painter.line_segment([p(-8.,11.),p(9.,11.)],egui::Stroke::new(1.6,primary));
         }
         ActiveToolUI::Bucket => {
-            let pts = vec![c + egui::vec2(-6.5, 0.0), c + egui::vec2(0.0, -6.5), c + egui::vec2(6.5, 0.0), c + egui::vec2(0.0, 6.5)];
-            painter.add(egui::Shape::closed_line(pts, stroke));
-            painter.circle_filled(c + egui::vec2(7.5, 4.5), 2.6, main_color);
+            painter.add(egui::Shape::convex_polygon(
+                vec![p(-8.,0.),p(-1.,-8.),p(8.,-1.),p(1.,7.)],
+                primary,egui::Stroke::new(1.0,deep)));
+            painter.line_segment([p(-5.,-1.),p(2.,-5.)],egui::Stroke::new(1.5,pale));
+            painter.line_segment([p(-3.,-10.),p(3.,-10.)],egui::Stroke::new(2.3,primary));
+            painter.line_segment([p(-3.,-10.),p(-3.,-5.)],egui::Stroke::new(2.3,primary));
+            painter.add(egui::Shape::convex_polygon(
+                vec![p(7.,3.),p(10.,8.),p(6.,10.),p(4.,8.)],
+                egui::Color32::from_rgb(37,227,183),egui::Stroke::NONE));
         }
         ActiveToolUI::Eyedropper => {
-            painter.line_segment([c + egui::vec2(-7.0, 7.0), c + egui::vec2(2.5, -2.5)], egui::Stroke::new(2.4, main_color));
-            painter.circle_filled(c + egui::vec2(5.0, -5.0), 3.6, main_color);
+            painter.line_segment([p(-7.,7.),p(4.,-4.)],egui::Stroke::new(4.0,primary));
+            painter.circle_filled(p(6.,-6.),4.0,primary);
+            painter.circle_filled(p(7.,-7.),1.5,pale);
+            painter.add(egui::Shape::convex_polygon(
+                vec![p(-8.,6.),p(-10.,10.),p(-4.,8.)],
+                egui::Color32::from_rgb(246,215,68),egui::Stroke::NONE));
         }
         ActiveToolUI::Text => {
-            painter.line_segment([c + egui::vec2(-7.0, -7.5), c + egui::vec2(7.0, -7.5)], egui::Stroke::new(2.5, main_color));
-            painter.line_segment([c + egui::vec2(0.0, -7.5), c + egui::vec2(0.0, 8.0)], egui::Stroke::new(2.5, main_color));
+            painter.line_segment([p(-9.,-9.),p(9.,-9.)],egui::Stroke::new(3.4,primary));
+            painter.line_segment([p(0.,-9.),p(0.,10.)],egui::Stroke::new(3.4,primary));
+            painter.line_segment([p(-5.,10.),p(5.,10.)],egui::Stroke::new(3.4,primary));
+            painter.circle_filled(p(-8.,-9.),1.5,pale);
         }
         ActiveToolUI::ShapeLine => {
-            painter.rect_stroke(egui::Rect::from_min_size(c + egui::vec2(-7.5, -7.5), egui::vec2(8.0, 8.0)), 1.0, stroke);
-            painter.circle_stroke(c + egui::vec2(4.0, 4.0), 4.5, stroke);
+            let sq=egui::Rect::from_min_max(p(-10.,-10.),p(1.,1.));
+            painter.rect_stroke(sq,1.0,egui::Stroke::new(3.0,primary));
+            painter.circle_stroke(p(5.,5.),6.0,egui::Stroke::new(3.0,primary));
+            painter.circle_filled(p(5.,5.),2.5,egui::Color32::from_rgb(46,207,188));
         }
         ActiveToolUI::HandCanvas => {
-            let palm = egui::Rect::from_center_size(c + egui::vec2(0.0, 2.5), egui::vec2(10.0, 9.0));
-            painter.rect_filled(palm, 3.0, main_color);
-            for dx in [-4.0, -1.3, 1.3, 4.0] {
-                painter.line_segment([c + egui::vec2(dx, -1.0), c + egui::vec2(dx, -7.5)], egui::Stroke::new(2.0, main_color));
+            let hand = egui::Color32::from_rgb(172,102,253);
+            painter.add(egui::Shape::convex_polygon(
+                vec![p(-8.,1.),p(7.,1.),p(7.,9.),p(-4.,9.),p(-9.,4.)],
+                hand,egui::Stroke::new(0.9,deep)));
+            for (x,y) in [(-5.,-8.),(-1.,-10.),(3.,-9.),(7.,-6.)] {
+                painter.line_segment([p(x,y),p(x,3.)],egui::Stroke::new(3.1,hand));
             }
+            painter.line_segment([p(-7.,4.),p(-4.,7.)],egui::Stroke::new(1.2,pale));
         }
+    }
+    if active {
+        painter.circle_filled(rect.right_top()+egui::vec2(-2.5,2.5),1.5,pale);
     }
 }
 
@@ -3559,13 +3609,17 @@ impl eframe::App for StickApp {
                             egui::vec2(width, 34.0), egui::Sense::click()
                         );
                         let bg = if selected {
-                            get_tool_ui_color(tool)
+                            egui::Color32::from_rgb(34, 56, 70)
                         } else if response.hovered() {
                             egui::Color32::from_rgb(62, 62, 68)
                         } else {
                             egui::Color32::from_rgb(44, 44, 48)
                         };
                         ui.painter().rect_filled(rect, 6.0, bg);
+                        if selected {
+                            ui.painter().rect_stroke(rect.shrink(0.7),6.0,
+                                egui::Stroke::new(1.6,get_tool_ui_color(tool)));
+                        }
                         let icon_rect = egui::Rect::from_min_size(
                             rect.left_top() + egui::vec2(5.0, 2.0), egui::vec2(30.0, 30.0)
                         );
