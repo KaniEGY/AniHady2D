@@ -8,6 +8,8 @@ mod changelog;
 mod exporter;
 mod persistence;
 mod onion_skin;
+mod fill_tools;
+mod selection_tools;
 mod profile;
 mod project;
 
@@ -772,6 +774,10 @@ struct StickApp {
     shape_drag_start: Option<egui::Pos2>,
     shape_drag_current: Option<egui::Pos2>,
     selected_stroke_indices: Vec<usize>,
+    selected_text_item_index: Option<usize>,
+    selection_rect_start: Option<egui::Pos2>,
+    selection_rect_current: Option<egui::Pos2>,
+    lasso_points: Vec<egui::Pos2>,
     custom_anchor_offset: egui::Vec2,
     brush_color: [u8; 4],
     stage_bg_color: [u8; 4],
@@ -867,6 +873,10 @@ impl StickApp {
             shape_drag_start: None,
             shape_drag_current: None,
             selected_stroke_indices: Vec::new(),
+            selected_text_item_index: None,
+            selection_rect_start: None,
+            selection_rect_current: None,
+            lasso_points: Vec::new(),
             custom_anchor_offset: egui::Vec2::ZERO,
             brush_color: [0, 0, 0, 255],
             stage_bg_color: [255, 255, 255, 255],
@@ -1014,6 +1024,10 @@ impl StickApp {
         self.current_frame = snap.current_frame.clamp(1, self.timeline_length);
         self.active_layer_idx = snap.active_layer_idx.min(self.project.layers.len().saturating_sub(1));
         self.selected_stroke_indices.clear();
+        self.selected_text_item_index = None;
+        self.selection_rect_start = None;
+        self.selection_rect_current = None;
+        self.lasso_points.clear();
     }
 
     fn save_undo_state(&mut self) {
@@ -1679,6 +1693,8 @@ impl StickApp {
             ActiveToolUI::Text => {
                 ui.strong(tr(lang, "Text Properties", "خصائص النص"));
                 ui.add(egui::DragValue::new(&mut self.text_font_size).range(10.0..=180.0));
+                ui.small(tr(lang, "To move text, switch to Selection (V), click the text, then drag.",
+                    "عشان تحرك النص: اختار تحديد (V)، دوس على النص واسحبه."));
             }
             ActiveToolUI::HandCanvas => {
                 ui.strong(tr(lang, "Canvas Orientation", "تدوير وعكس الكانفا"));
@@ -2648,7 +2664,7 @@ impl eframe::App for StickApp {
             if !space_down && !alt_down && self.active_tool_ui != ActiveToolUI::HandCanvas && is_over_canvas && !any_modal_open && !self.is_active_layer_locked() {
                 if let Some(pos) = pointer_pos {
                     let stage_pos = to_stage(pos);
-                    let delta = self.last_pointer_pos.map_or(egui::Vec2::ZERO, |l| (pos - l) / scale);
+                    let delta = self.last_pointer_pos.map_or(egui::Vec2::ZERO, |l| to_stage(pos) - to_stage(l));
                     match self.active_tool_ui {
                         ActiveToolUI::Text if pointer_pressed => { self.pending_text_pos = stage_pos; self.show_text_dialog = true; }
                         ActiveToolUI::ShapeLine => {
@@ -2656,18 +2672,26 @@ impl eframe::App for StickApp {
                             else if pointer_down { self.shape_drag_current = Some(stage_pos); }
                         }
                         ActiveToolUI::Bucket if pointer_pressed => {
-                            self.save_undo_state();
-                            self.ensure_editable_keyframe();
-                            if let Some(l) = self.project.layers.get_mut(self.active_layer_idx) {
-                                if let Some(f) = l.keyframes.get_mut(&self.current_frame) {
-                                    for s in f.strokes.iter_mut().rev() {
-                                        if s.points.iter().any(|p| ((p.x - stage_pos.x).powi(2) + (p.y - stage_pos.y).powi(2)).sqrt() < 35.0) {
-                                            s.fill_color = Some(self.brush_color);
+                            // Bucket works on closed vector shapes. Full
+                            // paint-region flood fill needs a raster backend.
+                            let can_fill = self.project.layers.get(self.active_layer_idx).is_some_and(|l| {
+                                let evaluated = self.project.evaluate_layer_at_frame(l, self.current_frame);
+                                fill_tools::find_topmost_shape(&evaluated.strokes, stage_pos.x, stage_pos.y).is_some()
+                            });
+                            if can_fill {
+                                self.save_undo_state();
+                                self.ensure_editable_keyframe();
+                                if let Some(l) = self.project.layers.get_mut(self.active_layer_idx) {
+                                    if let Some(f) = l.keyframes.get_mut(&self.current_frame) {
+                                        if fill_tools::apply_shape_fill(&mut f.strokes, stage_pos.x, stage_pos.y, self.brush_color) {
                                             self.has_unsaved_changes = true;
-                                            break;
                                         }
                                     }
                                 }
+                            } else {
+                                self.status_message = tr(lang,
+                                    "Bucket: click inside a closed vector shape.",
+                                    "البوكت: دوس جوّه شكل مقفول الأول.");
                             }
                         }
                         ActiveToolUI::EraserRed | ActiveToolUI::EraserGreen if pointer_down => {
@@ -2728,26 +2752,69 @@ impl eframe::App for StickApp {
                         ActiveToolUI::SelectNormal | ActiveToolUI::FreeTransform => {
                             if pointer_pressed {
                                 self.selected_stroke_indices.clear();
-                                if let Some(l) = self.project.layers.get(self.active_layer_idx) {
-                                    let f = self.project.evaluate_layer_at_frame(l, self.current_frame);
-                                    for (i, s) in f.strokes.iter().enumerate() {
-                                        if s.points.iter().any(|p| ((p.x - stage_pos.x).powi(2) + (p.y - stage_pos.y).powi(2)).sqrt() < 20.0) {
-                                            self.selected_stroke_indices.push(i);
-                                            break;
+                                self.selected_text_item_index = None;
+                                self.selection_rect_start = None;
+                                self.selection_rect_current = None;
+                                if let Some(layer) = self.project.layers.get(self.active_layer_idx) {
+                                    let frame = self.project.evaluate_layer_at_frame(layer, self.current_frame);
+                                    self.selected_text_item_index = frame.text_items.iter()
+                                        .enumerate().rev()
+                                        .find(|(_, text)| selection_tools::text_bounds(text).contains(stage_pos))
+                                        .map(|(index, _)| index);
+                                    if self.selected_text_item_index.is_none() {
+                                        let hit = egui::Rect::from_center_size(stage_pos, egui::vec2(12.0, 12.0));
+                                        if let Some((index, _)) = frame.strokes.iter().enumerate().rev()
+                                            .find(|(_, stroke)| selection_tools::stroke_intersects_marquee(stroke, hit)) {
+                                            self.selected_stroke_indices.push(index);
                                         }
                                     }
                                 }
-                            } else if pointer_down && delta.length_sq() > 0.0 {
-                                self.ensure_editable_keyframe();
-                                if let Some(l) = self.project.layers.get_mut(self.active_layer_idx) {
-                                    if let Some(f) = l.keyframes.get_mut(&self.current_frame) {
-                                        for &idx in &self.selected_stroke_indices {
-                                            if let Some(s) = f.strokes.get_mut(idx) {
-                                                for p in &mut s.points { p.x += delta.x; p.y += delta.y; }
+                                if self.selected_text_item_index.is_none() && self.selected_stroke_indices.is_empty() {
+                                    self.selection_rect_start = Some(stage_pos);
+                                    self.selection_rect_current = Some(stage_pos);
+                                } else {
+                                    self.save_undo_state();
+                                }
+                            } else if pointer_down {
+                                if self.selection_rect_start.is_some() {
+                                    self.selection_rect_current = Some(stage_pos);
+                                } else if delta.length_sq() > 0.0 {
+                                    if self.selected_text_item_index.is_some() || !self.selected_stroke_indices.is_empty() {
+                                        self.ensure_editable_keyframe();
+                                        if let Some(layer) = self.project.layers.get_mut(self.active_layer_idx) {
+                                            if let Some(frame) = layer.keyframes.get_mut(&self.current_frame) {
+                                                if let Some(index) = self.selected_text_item_index {
+                                                    if let Some(text) = frame.text_items.get_mut(index) {
+                                                        text.x += delta.x;
+                                                        text.y += delta.y;
+                                                    }
+                                                }
+                                                for &index in &self.selected_stroke_indices {
+                                                    if let Some(stroke) = frame.strokes.get_mut(index) {
+                                                        for p in &mut stroke.points {
+                                                            p.x += delta.x;
+                                                            p.y += delta.y;
+                                                        }
+                                                    }
+                                                }
+                                                self.has_unsaved_changes = true;
                                             }
                                         }
-                                        self.has_unsaved_changes = true;
                                     }
+                                }
+                            }
+                        }
+                        ActiveToolUI::SelectLasso => {
+                            if pointer_pressed {
+                                self.lasso_points.clear();
+                                self.selected_stroke_indices.clear();
+                                self.selected_text_item_index = None;
+                                self.lasso_points.push(stage_pos);
+                            } else if pointer_down && self.lasso_points.last()
+                                .is_none_or(|&prev| prev.distance(stage_pos) >= 2.5) {
+                                // Limit to avoid memory growth on very long drag gestures.
+                                if self.lasso_points.len() < 4_096 {
+                                    self.lasso_points.push(stage_pos);
                                 }
                             }
                         }
@@ -2757,6 +2824,34 @@ impl eframe::App for StickApp {
             }
 
             if pointer_released {
+                if let (Some(start), Some(end)) = (
+                    self.selection_rect_start.take(), self.selection_rect_current.take()
+                ) {
+                    let rect = egui::Rect::from_two_pos(start, end);
+                    if rect.width() > 3.0 || rect.height() > 3.0 {
+                        if let Some(layer) = self.project.layers.get(self.active_layer_idx) {
+                            let frame = self.project.evaluate_layer_at_frame(layer, self.current_frame);
+                            self.selected_stroke_indices = frame.strokes.iter().enumerate()
+                                .filter_map(|(idx, s)| selection_tools::stroke_intersects_marquee(s, rect).then_some(idx))
+                                .collect();
+                            self.selected_text_item_index = frame.text_items.iter().position(
+                                |text| selection_tools::text_bounds(text).intersects(rect)
+                            );
+                        }
+                    }
+                }
+                if self.lasso_points.len() >= 3 {
+                    if let Some(layer) = self.project.layers.get(self.active_layer_idx) {
+                        let frame = self.project.evaluate_layer_at_frame(layer, self.current_frame);
+                        self.selected_stroke_indices = frame.strokes.iter().enumerate()
+                            .filter_map(|(idx, s)| selection_tools::stroke_inside_lasso(s, &self.lasso_points).then_some(idx))
+                            .collect();
+                        self.selected_text_item_index = frame.text_items.iter().position(
+                            |txt| selection_tools::point_in_polygon(selection_tools::text_bounds(txt).center(), &self.lasso_points)
+                        );
+                    }
+                }
+                self.lasso_points.clear();
                 self.stabilized_cursor = None;
                 if let (Some(p0), Some(p1)) = (self.shape_drag_start.take(), self.shape_drag_current.take()) {
                     if p0.distance(p1) > 3.0 {
@@ -2839,6 +2934,32 @@ impl eframe::App for StickApp {
                 }
             }
 
+            if let (Some(start), Some(end)) = (self.selection_rect_start, self.selection_rect_current) {
+                let a = to_screen(start);
+                let b = to_screen(end);
+                painter.rect_stroke(
+                    egui::Rect::from_two_pos(a, b), 0.0,
+                    egui::Stroke::new(1.4, egui::Color32::from_rgb(45, 170, 255)),
+                );
+            }
+            if self.lasso_points.len() >= 2 {
+                let path: Vec<_> = self.lasso_points.iter().copied().map(&to_screen).collect();
+                painter.add(egui::Shape::line(path, egui::Stroke::new(
+                    1.4, egui::Color32::from_rgb(45, 170, 255)
+                )));
+            }
+            if let Some(idx) = self.selected_text_item_index {
+                if let Some(layer) = self.project.layers.get(self.active_layer_idx) {
+                    let frame = self.project.evaluate_layer_at_frame(layer, self.current_frame);
+                    if let Some(txt) = frame.text_items.get(idx) {
+                        let bounds = selection_tools::text_bounds(txt);
+                        painter.rect_stroke(
+                            egui::Rect::from_two_pos(to_screen(bounds.min), to_screen(bounds.max)),
+                            1.5, egui::Stroke::new(1.4, egui::Color32::from_rgb(45, 170, 255))
+                        );
+                    }
+                }
+            }
             if let Some(stroke) = &self.current_stroke { draw_stroke_pro(&painter, stroke, None, 1.0, scale, 0.0, 0.0, &to_screen); }
             if let (Some(p0), Some(p1)) = (self.shape_drag_start, self.shape_drag_current) {
                 draw_stroke_pro(&painter, &build_geometric_stroke(self.selected_shape_kind, p0, p1, self.brush_color, self.brush_size), None, 1.0, scale, 0.0, 0.0, &to_screen);
