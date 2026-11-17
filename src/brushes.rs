@@ -171,13 +171,27 @@ pub fn draw_stroke_pro<F: Fn(egui::Pos2) -> egui::Pos2>(
         return;
     }
 
-    // Drawing engine step 1: identical pressure-aware G-Pen geometry on
-    // screen and in exports. Existing project files and other brushes remain unchanged.
-    if !stroke.is_vector && stroke.brush_preset == KritaBrushPreset::GPenInk {
-        for dab in crate::brush_engine::sample_pressure_dabs(&stroke.points, stroke.base_width) {
-            let p = to_screen(egui::pos2(dab.x + ox, dab.y + oy));
-            painter.circle_filled(p, (dab.radius * scale.abs()).max(0.25), color);
+    // Draw a pressure-aware brush as a SINGLE alpha layer, rather than
+    // stamping hundreds of translucent circles over each other. The latter
+    // made blobs and visible seams at 50% opacity.
+    if !stroke.is_vector && stroke.brush_preset == KritaBrushPreset::GPenInk
+        && stroke.tip_shape == BrushTipShape::Round && stroke.points.len() > 1
+    {
+        let outline=crate::stroke_geometry::pressure_outline(&stroke.points,stroke.base_width);
+        if !outline.is_empty() {
+            let path:Vec<egui::Pos2>=outline.iter().map(|&(x,y)|
+                to_screen(egui::pos2(x+ox,y+oy))).collect();
+            if let Some(mesh)=crate::fill_render::solid_polygon_mesh(&path,color) {
+                painter.add(egui::Shape::mesh(mesh));
+                return;
+            }
         }
+        // A self-crossing path can be impossible to triangulate, but never
+        // fall back to repeated, darkening circular dabs.
+        let points:Vec<_>=stroke.points.iter().map(|p|
+            to_screen(egui::pos2(p.x+ox,p.y+oy))).collect();
+        painter.add(egui::Shape::line(points,
+            egui::Stroke::new((stroke.base_width*scale).max(0.25),color)));
         return;
     }
 
