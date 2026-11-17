@@ -2538,8 +2538,18 @@ impl eframe::App for StickApp {
         }
 
         if self.show_text_dialog {
-            egui::Window::new(tr(lang, "Insert Text", "إضافة نص")).collapsible(false).resizable(false).anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0]).show(ctx, |ui| {
-                ui.text_edit_singleline(&mut self.text_input_buf);
+            egui::Window::new(tr(lang, "Insert Text", "إضافة نص")).collapsible(false).resizable(true)
+                .default_width(440.0).anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0]).show(ctx, |ui| {
+                ui.label(tr(lang, "Type here. The preview shows correctly joined Arabic letters.",
+                    "اكتب هنا؛ المعاينة بتعرض الحروف العربية متصلة بشكل صحيح."));
+                ui.add(egui::TextEdit::multiline(&mut self.text_input_buf)
+                    .desired_width(f32::INFINITY).desired_rows(4));
+                if !self.text_input_buf.is_empty() {
+                    ui.label(tr(lang, "Live text preview", "معاينة النص"));
+                    ui.label(egui::RichText::new(fix_ar(&self.text_input_buf))
+                        .size(self.text_font_size.clamp(14.0, 48.0))
+                        .color(egui::Color32::from_rgb(236, 241, 255)));
+                }
                 ui.horizontal(|ui| {
                     if ui.button(tr(lang, "Add", "إضافة")).clicked() {
                         if !self.text_input_buf.trim().is_empty() {

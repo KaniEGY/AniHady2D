@@ -5,6 +5,7 @@ use rayon::prelude::*;
 use std::fs;
 use std::io::{Cursor, Read};
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 use std::process::Command;
 use tiny_skia::{Color, Paint, PathBuilder, Pixmap, Stroke, Transform};
 
@@ -194,6 +195,11 @@ pub fn render_frame_pixmap(project: &AniProject, frame_idx: usize, transparent_b
             draw_skia_stroke(&mut layer_pixmap, s, Transform::identity(), 1.0);
         }
 
+        // Text must be present in every export, not only in the editor preview.
+        for item in &fd.text_items {
+            draw_export_text(&mut layer_pixmap, item);
+        }
+
         for inst in &fd.symbol_instances {
             if let Some(sym) = project.library_symbols.get(&inst.symbol_name) {
                 let sym_strokes = project.evaluate_symbol_strokes(sym, frame_idx);
@@ -220,6 +226,63 @@ pub fn render_frame_pixmap(project: &AniProject, frame_idx: usize, transparent_b
         );
     }
     pixmap
+}
+
+/// Load one local system font that can draw both Arabic presentation forms
+/// and Latin letters. The font file is not bundled or redistributed.
+fn export_text_font() -> Option<&'static fontdue::Font> {
+    static FONT: OnceLock<Option<fontdue::Font>> = OnceLock::new();
+    FONT.get_or_init(|| {
+        for path in [
+            r"C:\Windows\Fonts\tahoma.ttf",
+            r"C:\Windows\Fonts\arial.ttf",
+            r"C:\Windows\Fonts\segoeui.ttf",
+        ] {
+            if let Ok(bytes) = std::fs::read(path) {
+                if let Ok(font) = fontdue::Font::from_bytes(bytes, fontdue::FontSettings::default()) {
+                    return Some(font);
+                }
+            }
+        }
+        None
+    }).as_ref()
+}
+
+fn draw_export_text(pixmap: &mut Pixmap, item: &crate::project::TextItem) {
+    let Some(font) = export_text_font() else { return; };
+    if item.content.trim().is_empty() || !item.font_size.is_finite() { return; }
+    use fontdue::layout::{CoordinateSystem, Layout, LayoutSettings, TextStyle};
+    let shaped = crate::fix_ar(&item.content);
+    let mut layout = Layout::new(CoordinateSystem::PositiveYDown);
+    layout.reset(&LayoutSettings {
+        x: item.x, y: item.y,
+        ..LayoutSettings::default()
+    });
+    layout.append(&[font], &TextStyle::new(&shaped, item.font_size.clamp(4.0, 512.0), 0));
+    let (width, height) = (pixmap.width() as i32, pixmap.height() as i32);
+    let bytes = pixmap.data_mut();
+    for glyph in layout.glyphs() {
+        let (metrics, bitmap) = font.rasterize_config(glyph.key);
+        for y in 0..metrics.height {
+            let py = glyph.y.floor() as i32 + y as i32;
+            if py < 0 || py >= height { continue; }
+            for x in 0..metrics.width {
+                let px = glyph.x.floor() as i32 + x as i32;
+                if px < 0 || px >= width { continue; }
+                let coverage = bitmap[y * metrics.width + x] as f32 / 255.0;
+                let src_alpha = coverage * (item.color[3] as f32 / 255.0);
+                if src_alpha <= 0.0 { continue; }
+                let target = (py as usize * width as usize + px as usize) * 4;
+                let retain = 1.0 - src_alpha;
+                for channel in 0..3 {
+                    bytes[target + channel] = (item.color[channel] as f32 * src_alpha
+                        + bytes[target + channel] as f32 * retain).round().clamp(0.0, 255.0) as u8;
+                }
+                bytes[target + 3] = (255.0 * src_alpha
+                    + bytes[target + 3] as f32 * retain).round().clamp(0.0, 255.0) as u8;
+            }
+        }
+    }
 }
 
 fn draw_skia_stroke(pixmap: &mut Pixmap, s: &crate::project::Stroke, ts: Transform, width_scale: f32) {
@@ -678,6 +741,23 @@ mod layer_opacity_tests {
         assert_eq!(center_alpha(&project_with_solid_dab(1.0)), 255);
         let half = center_alpha(&project_with_solid_dab(0.5));
         assert!((125..=130).contains(&half), "expected about 128, got {half}");
+    }
+
+    #[test]
+    fn latin_and_arabic_text_export_uses_the_local_font_when_present() {
+        if export_text_font().is_none() { return; }
+        let mut project = AniProject::default();
+        project.width = 200;
+        project.height = 120;
+        project.layers[0].keyframes.get_mut(&1).unwrap().text_items.push(
+            crate::project::TextItem {
+                content: "Hello أهلاً".to_owned(),
+                x: 12.0, y: 16.0,
+                font_size: 32.0, color: [0, 0, 0, 255],
+            }
+        );
+        let rendered = render_frame_pixmap(&project, 1, true, [0,0,0,0]);
+        assert!(rendered.data().chunks_exact(4).any(|p| p[3] != 0));
     }
 
     #[test]
