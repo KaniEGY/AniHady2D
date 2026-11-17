@@ -831,9 +831,54 @@ mod tests {
         assert_eq!(host_document.layers.len(), 2);
         assert_eq!(host_document.layers[0].name, "Guest's new layer");
         assert!(host_document.layers[0].keyframes.contains_key(&4));
+
+        // Host-only moderation propagates through the live roster.
+        host.change_member_color(1, [247, 115, 87]).expect("host recolors first guest");
+        let deadline = std::time::Instant::now() + Duration::from_secs(4);
+        let mut color_received = false;
+        while std::time::Instant::now() < deadline {
+            for event in guest.events() {
+                if let OnlineEvent::Roster(members) = event {
+                    if members.iter().any(|p| p.name == "Guest" && p.color == [247,115,87]) {
+                        color_received = true;
+                    }
+                }
+            }
+            if color_received { break; }
+            thread::sleep(Duration::from_millis(25));
+        }
+        assert!(color_received, "host color edits must reach the guest");
+
+        // The earliest guest is elected. Real takeover/binding requires
+        // separate Windows PCs because both instances here use TCP 47554.
+        assert!(host.handoff_before_leave().expect("handoff should queue"));
+        host.close();
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        let mut first_promoted = false;
+        let mut second_redirected = false;
+        while std::time::Instant::now() < deadline {
+            for event in guest.events() {
+                if let OnlineEvent::HostHandoff { promote, project, room_code, .. } = event {
+                    assert!(promote, "earliest guest should become the host");
+                    assert!(project.is_some());
+                    assert_eq!(room_code, host.room_code);
+                    first_promoted = true;
+                }
+            }
+            for event in guest_two.events() {
+                if let OnlineEvent::HostHandoff { promote, project, .. } = event {
+                    assert!(!promote);
+                    assert!(project.is_none());
+                    second_redirected = true;
+                }
+            }
+            if first_promoted && second_redirected { break; }
+            thread::sleep(Duration::from_millis(25));
+        }
+        assert!(first_promoted && second_redirected,
+            "all connected peers must receive the controlled host transfer");
         guest.close();
         guest_two.close();
-        host.close();
     }
 
     #[test]
