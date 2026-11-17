@@ -14,6 +14,9 @@
 - **Known boundaries:** bucket fill operates on recognized closed stroke contours (now with improved near-closure tolerance), not arbitrary raster flood fill. Imported artwork/text still needs further parity tests for every transform. No Krita GPL code is copied into Stick.
 
 ### What's new
+- **Artist cloud profile continuity:** opt-in automatic profile-only Google Drive sync for XP, displayed artist name, progress and a bounded 256px avatar PNG; the local avatar path is never uploaded. Restoring a profile refreshes the visible avatar. Requires app-owner OAuth setup and actual Windows sign-in validation.
+- **Settings discovery:** main top-right gear is larger, amber and high-contrast with a tooltip.
+- **Online test stability:** Windows integration tests run serially to prevent hard-coded local TCP-port contention; this does not establish worldwide room discovery or internet-wide collaboration.
 - **Google Sign in / cloud backups (requires developer OAuth setup):** added a new Sign in settings tab using browser-based Desktop OAuth with PKCE, Windows credential storage and private Google Drive appDataFolder for artist XP/level data and saved Stick project files. Supports manual backup, cloud listing, safe restore and opt-in automatic backup after local save. **The production release needs the app owner's Google OAuth Client ID configured first; see GOOGLE_DRIVE_SETUP.md.** External media files are not bundled yet.
 - **Perspective guides:** start disabled on every application launch, independent of the prior stored guide setting. New 2-point perspective controls the left/right vanishing points plus horizon; guides remain non-destructive and excluded from exports.
 - **Eyedropper accuracy:** visible eyedropper tip now aligns precisely with actual cursor hit point across icon scale levels and samples from the top visible layer first.
@@ -103,6 +106,9 @@
 - **القيود الحالية:** الدلو بيلون المسارات المقفولة اللي بيتعرف عليها، ولسه مش Flood Fill كامل على أي سطح Raster. لم يتم نسخ أكواد Krita الخاضعة لترخيص GPL.
 
 ### إيه الجديد؟
+- **الحفظ السحابي لملف الفنان:** المزامنة الاختيارية بقت ترفع مستوى الفنان والاسم والتقدم والصورة الشخصية المصغرة بشكل مستقل عن حفظ المشروع. الصورة بتتخزن كصورة صغيرة مش كمسار من الجهاز، وتظهر عند الاستعادة. لازم إعداد OAuth واختبار جوجل فعليًا.
+- **ترس الإعدادات:** أكبر ولونه ذهبي واضح في أعلى اليمين، مع شرح عند الوقوف عليه.
+- **اختبارات الأونلاين:** تشغيل اختبارات الاتصال بالتتابع لتجنب تعارض المنفذ المحلي. كود الـ8 أرقام ما زال مش خدمة غرف عالمية.
 - **تسجيل الدخول وجوجل درايف:** تبويب تسجيل دخول جديد، باستخدام متصفح جوجل الرسمي وWindows Credential Manager. تقدر تحفظ مستوى الرسام ومشاريعه المحفوظة يدويًا أو تفعل النسخ التلقائي بعد حفظ المشروع، وتسترجع نسخة بدون الكتابة فوق المشروع المحلي. **تشغيل جوجل لكل المستخدمين محتاج إعداد Google OAuth Client ID للتطبيق في Google Cloud أولًا؛ التفاصيل في GOOGLE_DRIVE_SETUP.md.** الملفات الخارجية للصوت/الصور لسه مش جزء من النسخ السحابية.
 - **المنظور:** يبدأ دائمًا مقفول عند تشغيل Stick، ومعاه منظور جديد بنقطتي تلاشي تقدر تتحكم في الأولى والثانية وفي ارتفاع الأفق، من غير ما خطوط الإرشاد تظهر في التصدير.
 - **القطارة:** رأس أيقونة القطارة بقى على مكان النقر الفعلي بدل الإزاحة القديمة، واللون بيتاخد من أعلى طبقة ظاهرة.
