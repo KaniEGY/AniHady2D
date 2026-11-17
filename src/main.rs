@@ -27,7 +27,7 @@ use project::{
     AniProject, AudioSyncMode, AudioTrack, EasingCurve, FrameData, KritaBrushPreset, Layer, MediaItem, MediaType,
     BrushTipShape, Stroke, StrokePoint, Symbol, SymbolInstance, TextItem, TweenMode, PROJECT_SCHEMA_VERSION,
 };
-use rodio::source::SineWave;
+// Game UI sounds are generated as samples without shipping external audio assets.
 use rodio::{Decoder, OutputStream, Sink, Source};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -118,65 +118,80 @@ enum SfxType {
     ToolSelect(u8),
 }
 
-fn play_sfx_async(enabled: bool, sfx: SfxType, wait_finish: bool) {
-    if !enabled {
-        return;
+// Original synthesised game-style UI sounds. No external assets or audio downloads.
+fn game_ui_samples(sfx: SfxType) -> Vec<f32> {
+    let duration = match sfx {
+        SfxType::UiClick => 0.062,
+        SfxType::NewFrame => 0.095,
+        SfxType::VectorPenTick => 0.042,
+        SfxType::BrushScratch => 0.044,
+        SfxType::EraserRub => 0.062,
+        SfxType::LassoSelect => 0.115,
+        SfxType::ZoomStep => 0.040,
+        SfxType::ExportSuccess => 0.340,
+        SfxType::ExitFarewell => 0.190,
+        SfxType::LevelUpFanfare(_) => 0.520,
+        SfxType::ToolSelect(_) => 0.090,
+    };
+    let rate = 44_100.0f32;
+    let count = (duration * rate) as usize;
+    let mut output = Vec::with_capacity(count);
+    let mut seed = 0x9e37_79b9u32;
+    for i in 0..count {
+        let t = i as f32 / rate;
+        let progress = (t / duration).clamp(0.0,1.0);
+        // Pitch slides make more expressive 'pop', 'blip' and 'reward' sounds
+        // than the old flat sine-wave beeps.
+        let (f0,f1,loud,noise) = match sfx {
+            SfxType::UiClick => (770.,520.,0.14,0.06),
+            SfxType::NewFrame => (510.,970.,0.18,0.03),
+            SfxType::VectorPenTick => (1160.,740.,0.085,0.045),
+            SfxType::BrushScratch => (580.,310.,0.06,0.16),
+            SfxType::EraserRub => (360.,190.,0.075,0.20),
+            SfxType::LassoSelect => (580.,1120.,0.14,0.07),
+            SfxType::ZoomStep => (680.,815.,0.09,0.02),
+            SfxType::ExportSuccess => (560.,950.,0.17,0.025),
+            SfxType::ExitFarewell => (530.,230.,0.11,0.03),
+            SfxType::LevelUpFanfare(variation) => {
+                let band = 420. + (variation/10) as f32*24.;
+                (band,band*1.8,0.18,0.03)
+            }
+            SfxType::ToolSelect(index) => {
+                let base = 535. + (index as f32)*26.;
+                (base,base*1.21,0.095,0.05)
+            }
+        };
+        let f = f0+(f1-f0)*progress;
+        // Chirp phase integral, with a short upper-octave sparkle.
+        let phase = std::f32::consts::TAU*(f0*t + (f1-f0)*t*t/(2.0*duration));
+        let mut tone = phase.sin()*0.73 + (2.02*phase).sin()*0.20;
+        if matches!(sfx, SfxType::ExportSuccess | SfxType::LevelUpFanfare(_)) {
+            let note = (progress*4.0).floor() as usize;
+            let arpeggio = [1.0,1.25,1.5,2.0][note.min(3)];
+            tone = (phase*arpeggio).sin()*0.8 + (phase*arpeggio*2.0).sin()*0.18;
+        }
+        seed ^= seed<<13;
+        seed ^= seed>>17;
+        seed ^= seed<<5;
+        let grit = ((seed&65535) as f32/32767.5-1.0)*noise;
+        let attack = (t/0.007).min(1.0);
+        let release = (1.0-progress).powf(2.4);
+        output.push(((tone+grit)*loud*attack*release).clamp(-0.38,0.38));
     }
+    output
+}
+
+fn play_sfx_async(enabled: bool, sfx: SfxType, wait_finish: bool) {
+    if !enabled { return; }
     let handle = std::thread::spawn(move || {
-        if let Ok((_stream, stream_handle)) = OutputStream::try_default() {
+        if let Ok((_stream,stream_handle)) = OutputStream::try_default() {
             if let Ok(sink) = Sink::try_new(&stream_handle) {
-                match sfx {
-                    SfxType::UiClick => sink.append(SineWave::new(740.0).take_duration(Duration::from_millis(28)).amplify(0.12)),
-                    SfxType::NewFrame => {
-                        sink.append(SineWave::new(620.0).take_duration(Duration::from_millis(50)).amplify(0.18));
-                        sink.append(SineWave::new(920.0).take_duration(Duration::from_millis(55)).amplify(0.18));
-                    }
-                    SfxType::VectorPenTick => sink.append(SineWave::new(1180.0).take_duration(Duration::from_millis(22)).amplify(0.09)),
-                    SfxType::BrushScratch => sink.append(SineWave::new(290.0).take_duration(Duration::from_millis(32)).amplify(0.09)),
-                    SfxType::EraserRub => sink.append(SineWave::new(175.0).take_duration(Duration::from_millis(45)).amplify(0.13)),
-                    SfxType::LassoSelect => {
-                        sink.append(SineWave::new(540.0).take_duration(Duration::from_millis(35)).amplify(0.14));
-                        sink.append(SineWave::new(810.0).take_duration(Duration::from_millis(45)).amplify(0.14));
-                    }
-                    SfxType::ZoomStep => sink.append(SineWave::new(660.0).take_duration(Duration::from_millis(22)).amplify(0.09)),
-                    SfxType::ExportSuccess => {
-                        sink.append(SineWave::new(523.25).take_duration(Duration::from_millis(110)).amplify(0.20));
-                        sink.append(SineWave::new(659.25).take_duration(Duration::from_millis(110)).amplify(0.20));
-                        sink.append(SineWave::new(783.99).take_duration(Duration::from_millis(190)).amplify(0.22));
-                    }
-                    SfxType::ExitFarewell => {
-                        sink.append(SineWave::new(520.0).take_duration(Duration::from_millis(130)).amplify(0.18));
-                        sink.append(SineWave::new(340.0).take_duration(Duration::from_millis(170)).amplify(0.18));
-                    }
-                    SfxType::LevelUpFanfare(variant) => {
-                        // 10 pitch bands x 10 motifs = 100 distinct procedural jingles.
-                        let base = 350.0 + (variant / 10) as f32 * 32.0;
-                        let motif = (variant % 10) as usize;
-                        let notes = [1.0, 1.125, 1.25, 1.3333, 1.5, 1.6667, 1.75];
-                        for i in 0..4usize {
-                            let index = (i * 2 + motif) % notes.len();
-                            let duration = 55 + motif as u64 * 3 + i as u64 * 23;
-                            sink.append(SineWave::new(base * notes[index])
-                                .take_duration(Duration::from_millis(duration))
-                                .amplify(0.12 + 0.015 * i as f32));
-                        }
-                    }
-                    SfxType::ToolSelect(tool) => {
-                        let base = 280.0 + tool as f32 * 53.0;
-                        sink.append(SineWave::new(base)
-                            .take_duration(Duration::from_millis(38)).amplify(0.08));
-                        sink.append(SineWave::new(base * (1.10 + tool as f32 * 0.016))
-                            .take_duration(Duration::from_millis(25 + tool as u64 * 2))
-                            .amplify(0.05));
-                    }
-                }
+                sink.append(rodio::buffer::SamplesBuffer::new(1, 44_100, game_ui_samples(sfx)));
                 sink.sleep_until_end();
             }
         }
     });
-    if wait_finish {
-        let _ = handle.join();
-    }
+    if wait_finish { let _ = handle.join(); }
 }
 
 fn extract_audio_waveform(path: &str, max_bars: usize) -> Vec<f32> {
