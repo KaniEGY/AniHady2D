@@ -375,7 +375,7 @@ enum UpdateState {
     Checking,
     UpToDate,
     UpdateAvailable(updater::ReleaseInfo),
-    Downloading(String),
+    Downloading { received: u64, total: u64 },
     ReadyToRestart { version: String, staged_exe: PathBuf },
     Error(String),
 }
@@ -2483,18 +2483,27 @@ impl StickApp {
             self.show_project_notice = true;
             return;
         }
-        *self.update_state.lock().unwrap() = UpdateState::Downloading(
-            tr(self.config.lang, "Downloading and checking the update...", "بننزّل التحديث وبنتأكد إنه سليم..."),
-        );
+        *self.update_state.lock().unwrap() = UpdateState::Downloading {
+            received: 0,
+            total: info.size,
+        };
         let state = Arc::clone(&self.update_state);
         std::thread::spawn(move || {
             let next = match std::env::current_exe() {
-                Ok(current) => match updater::download_verified(&info, &current) {
-                    Ok(staged_exe) => UpdateState::ReadyToRestart {
-                        version: info.version.clone(),
-                        staged_exe,
-                    },
-                    Err(error) => UpdateState::Error(error),
+                Ok(current) => {
+                    let progress_state = Arc::clone(&state);
+                    let progress_ctx = ctx.clone();
+                    match updater::download_verified_with_progress(&info, &current, move |received, total| {
+                        if let Ok(mut guard) = progress_state.lock() {
+                            *guard = UpdateState::Downloading { received, total };
+                        }
+                        progress_ctx.request_repaint();
+                    }) {
+                        Ok(staged_exe) => UpdateState::ReadyToRestart {
+                            version: info.version.clone(), staged_exe,
+                        },
+                        Err(error) => UpdateState::Error(error),
+                    }
                 },
                 Err(error) => UpdateState::Error(format!("Couldn't find Stick.exe: {error}")),
             };
@@ -2556,9 +2565,21 @@ impl StickApp {
                                 self.show_update_dialog = false;
                             }
                         }
-                        UpdateState::Downloading(message) => {
-                            ui.spinner();
-                            ui.label(message);
+                        UpdateState::Downloading { received, total } => {
+                            ui.label(tr(lang, "Downloading update...", "جاري تحميل التحديث..."));
+                            let fraction = if total == 0 { 0.0 } else {
+                                (received as f32 / total as f32).clamp(0.0, 1.0)
+                            };
+                            ui.add(egui::ProgressBar::new(fraction)
+                                .desired_width(310.0).show_percentage());
+                            ui.label(format!("{:.1} / {:.1} MB  •  {}%",
+                                received as f64 / 1_048_576.0,
+                                total as f64 / 1_048_576.0,
+                                (fraction * 100.0).round() as u32));
+                            if received == total {
+                                ui.small(tr(lang, "Checking SHA-256 and preparing installation...",
+                                    "جاري التحقق من سلامة الملف وتجهيز التثبيت..."));
+                            }
                         }
                         UpdateState::ReadyToRestart { version, staged_exe } => {
                             if self.has_unsaved_changes || self.current_stroke.is_some() {
@@ -3923,21 +3944,40 @@ impl eframe::App for StickApp {
             });
         }
         if self.show_support_dialog {
-            egui::Window::new(tr(lang, "Support Stick Studio", "ادعم Stick Studio"))
-                .collapsible(false).resizable(false).default_width(450.0)
+            let mut open = true;
+            let mut close_clicked = false;
+            egui::Window::new(tr(lang, "Support Stick Studio 💛", "💛 ادعم Stick Studio"))
+                .open(&mut open).collapsible(false).resizable(false)
+                .default_width(490.0)
                 .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0]).show(ctx, |ui| {
-                    ui.heading(tr(lang, "💛 Optional support", "💛 الدعم اختياري"));
-                    ui.separator();
-                    ui.label(tr(lang,
-                        "This is my InstaPay support link. I like money, but you really don't have to send anything! Whether you support me or not, I'll keep building and updating the app depending on my mood. 😔",
-                        "ده رابط الدعم المادي عن طريق إنستا باي. أنا راجل مادي بس بقولك مش لازم تبعت حاجة، لأن سواء دعمتني أو لأ البرنامج هيتطور وهيتحدث على حسب نفسيتي 😔"));
-                    ui.add_space(12.0);
-                    ui.hyperlink_to(tr(lang, "Open InstaPay support link", "افتح رابط الدعم على إنستا باي"), SUPPORT_URL);
-                    if ui.button(tr(lang, "Close", "إغلاق")).clicked() { self.show_support_dialog = false; }
+                    ui.set_min_width(475.0);
+                    ui.vertical_centered(|ui| {
+                        ui.label(egui::RichText::new("💛")
+                            .size(31.0).color(egui::Color32::from_rgb(255, 208, 66)));
+                        ui.heading(tr(lang, "Optional support", "الدعم اختياري تمامًا"));
+                    });
+                    ui.add_space(10.0);
+                    egui::Frame::none()
+                        .fill(egui::Color32::from_rgb(34, 37, 49))
+                        .rounding(9.0)
+                        .inner_margin(egui::Margin::same(14.0))
+                        .show(ui, |ui| {
+                            ui.label(egui::RichText::new(tr(lang,
+                                "I'm broke, poor, and barely getting by... but you really don't have to send any money 🙂. As I said, development will continue from time to time as long as people enjoy Stick. Support is only for anyone who likes the program and thinks I deserve a little reward 🥳. That's all!",
+                                "انا صحيح كحيان و فقير و جربوع ومش لاقي اكل ولكن .... انت مش لازم تبعت فلوس 🙂يب زي ما بقولك تطوير البرنامج هيفضل شغال من فترة للتانيه طول ما الناس عجبها البرنامج ولكن جزء الدعم ده لو حد عجبه البرنامج وشايف اني استحق مكافئه🥳 وبس"
+                            )).size(15.0).color(egui::Color32::from_rgb(238, 237, 245)));
+                        });
+                    ui.add_space(14.0);
+                    ui.horizontal(|ui| {
+                        ui.hyperlink_to(tr(lang, "💛 Support via InstaPay", "💛 رابط المكافأة على إنستا باي"), SUPPORT_URL);
+                        if ui.button(tr(lang, "Close", "إغلاق")).clicked() { close_clicked = true; }
+                    });
                 });
+            self.show_support_dialog = open && !close_clicked;
         }
 
         self.render_update_dialog(ctx, lang);
+        self.render_feedback_dialog(ctx);
 
         if self.show_symbol_dialog {
             egui::Window::new("Symbol").collapsible(false).resizable(false).anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0]).show(ctx, |ui| {
@@ -4090,10 +4130,11 @@ impl eframe::App for StickApp {
                     self.show_export_studio = true;
                 }
                 if ui.button(tr(lang, "Check for Updates", "تحديث البرنامج")).clicked() { self.check_for_updates(ctx.clone()); }
-                ui.hyperlink_to(
-                    tr(lang, "Feedback", "ابلغ عن مشكلة"),
-                    "https://github.com/KaniEGY/Stick/issues/new/choose",
-                );
+                if ui.link(egui::RichText::new(
+                    tr(lang, "Feedback", "ابلغ عن مشكلة"))
+                    .color(egui::Color32::from_rgb(80, 190, 255))).clicked() {
+                    self.show_feedback_dialog = true;
+                }
 
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     let (gr, gresp) = ui.allocate_exact_size(egui::vec2(34.0, 27.0), egui::Sense::click());
