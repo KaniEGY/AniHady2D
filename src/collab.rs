@@ -38,7 +38,7 @@ pub struct RoomListing {
 
 #[derive(Serialize, Deserialize, Debug)]
 enum Packet {
-    Hello { name: String, protocol: u16 },
+    Hello { name: String, protocol: u16, mode: OnlineMode },
     Challenge { nonce: String },
     Auth { proof: String },
     Welcome { project: Box<AniProject> },
@@ -172,11 +172,11 @@ fn writer_loop(mut stream: TcpStream, rx: mpsc::Receiver<Packet>, running: Arc<A
 fn host_peer(mut stream: TcpStream, host: Arc<HostShared>) -> io::Result<()> {
     stream.set_read_timeout(Some(Duration::from_millis(300)))?;
     stream.set_write_timeout(Some(Duration::from_secs(3)))?;
-    let (name, protocol) = match packet_read(&mut stream, &host.running)? {
-        Packet::Hello { name, protocol } => (name, protocol),
+    let (name, protocol, mode) = match packet_read(&mut stream, &host.running)? {
+        Packet::Hello { name, protocol, mode } => (name, protocol, mode),
         _ => return Err(io::Error::new(io::ErrorKind::InvalidData, "Handshake required")),
     };
-    if protocol != PROTOCOL || name.trim().is_empty() || name.chars().count() > 40 {
+    if protocol != PROTOCOL || mode != host.mode || name.trim().is_empty() || name.chars().count() > 40 {
         packet_write(&mut stream, &Packet::Rejected { reason: "Invalid name or client protocol".into() })?;
         return Ok(());
     }
@@ -311,7 +311,7 @@ impl OnlineSession {
                 let mut stream = TcpStream::connect_timeout(&addr, Duration::from_secs(5)).map_err(|e| format!("Connection failed: {}", e))?;
                 stream.set_read_timeout(Some(Duration::from_millis(300))).map_err(|e| e.to_string())?;
                 stream.set_write_timeout(Some(Duration::from_secs(3))).map_err(|e| e.to_string())?;
-                packet_write(&mut stream, &Packet::Hello { name: nickname, protocol: PROTOCOL }).map_err(|e| e.to_string())?;
+                packet_write(&mut stream, &Packet::Hello { name: nickname, protocol: PROTOCOL, mode }).map_err(|e| e.to_string())?;
                 let nonce = match packet_read(&mut stream, &running_worker).map_err(|e| e.to_string())? {
                     Packet::Challenge { nonce } => nonce,
                     Packet::Rejected { reason } => return Err(reason),
