@@ -468,21 +468,36 @@ impl Default for AppConfig {
     }
 }
 
+/// User-specific settings live in the user's writable profile rather than in
+/// Program Files. The executable-adjacent location is a legacy read fallback.
+fn local_setting_paths(filename: &str) -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+    if let Some(base) = std::env::var_os("LOCALAPPDATA") {
+        paths.push(PathBuf::from(base).join("StickStudio").join(filename));
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        paths.push(exe.with_file_name(filename));
+    }
+    paths
+}
+
 impl AppConfig {
     fn load() -> Self {
-        if let Ok(exe) = std::env::current_exe() {
-            if let Ok(data) = std::fs::read_to_string(exe.with_file_name("stick_config.json")) {
-                if let Ok(parsed) = serde_json::from_str(&data) {
-                    return parsed;
-                }
+        for path in local_setting_paths("stick_config.json") {
+            if let Ok(data) = std::fs::read_to_string(path) {
+                if let Ok(parsed) = serde_json::from_str(&data) { return parsed; }
             }
         }
         Self::default()
     }
+
     fn save(&self) {
-        if let Ok(exe) = std::env::current_exe() {
-            if let Ok(json) = serde_json::to_string_pretty(self) {
-                let _ = std::fs::write(exe.with_file_name("stick_config.json"), json);
+        if let Ok(json) = serde_json::to_string_pretty(self) {
+            for path in local_setting_paths("stick_config.json") {
+                if let Some(parent) = path.parent() {
+                    if std::fs::create_dir_all(parent).is_err() { continue; }
+                }
+                if std::fs::write(&path, &json).is_ok() { break; }
             }
         }
     }
