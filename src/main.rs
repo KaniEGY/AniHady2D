@@ -346,6 +346,14 @@ struct AppConfig {
     sound_effects_enabled: bool,
     #[serde(default)]
     show_grid: bool,
+    #[serde(default = "default_true_val")]
+    show_top_bar: bool,
+    #[serde(default = "default_true_val")]
+    show_left_dock: bool,
+    #[serde(default = "default_true_val")]
+    show_right_dock: bool,
+    #[serde(default = "default_true_val")]
+    show_timeline_dock: bool,
     #[serde(default = "default_grid_size")]
     grid_size: f32,
     #[serde(default = "default_tl_bg")]
@@ -419,6 +427,10 @@ impl Default for AppConfig {
             recent_projects: Vec::new(),
             sound_effects_enabled: true,
             show_grid: false,
+            show_top_bar: true,
+            show_left_dock: true,
+            show_right_dock: true,
+            show_timeline_dock: true,
             grid_size: 40.0,
             timeline_bg_color: default_tl_bg(),
             timeline_cell_color: default_tl_cell(),
@@ -2565,6 +2577,7 @@ impl eframe::App for StickApp {
                     ui.selectable_value(&mut self.settings_tab, 1, tr(lang, "Art System", "نظام الفنان"));
                     ui.selectable_value(&mut self.settings_tab, 2, tr(lang, "Shortcuts", "اختصارات"));
                     ui.selectable_value(&mut self.settings_tab, 3, tr(lang, "Colors & Timeline", "ألوان وتايم لاين"));
+                    ui.selectable_value(&mut self.settings_tab, 4, tr(lang, "Personalization", "التخصيص"));
                 });
                 ui.separator();
                 match self.settings_tab {
@@ -2727,6 +2740,30 @@ impl eframe::App for StickApp {
                         ui.small(tr(lang, "You can also resize the Timeline by dragging its top edge.",
                             "تقدر تكبّر أو تصغّر التايم لاين بسحب حافته من فوق."));
                     }
+                    4 => {
+                        ui.heading(tr(lang, "Customize your workspace", "خصص مساحة شغلك"));
+                        ui.small(tr(lang, "Hide panels to maximize canvas space. Your choices are saved.",
+                            "اخفي اللي مش محتاجه عشان تكبر مساحة الرسم. الاختيارات بتتحفظ."));
+                        let mut changed = false;
+                        changed |= ui.checkbox(&mut self.config.show_left_dock,
+                            tr(lang, "Left tools panel", "قائمة الأدوات على الشمال")).changed();
+                        changed |= ui.checkbox(&mut self.config.show_right_dock,
+                            tr(lang, "Right properties and layers panel", "الخصائص والطبقات على اليمين")).changed();
+                        changed |= ui.checkbox(&mut self.config.show_timeline_dock,
+                            tr(lang, "Timeline in animation mode", "التايم لاين في وضع الأنيميشن")).changed();
+                        changed |= ui.checkbox(&mut self.config.show_top_bar,
+                            tr(lang, "Top toolbar", "الشريط العلوي")).changed();
+                        if ui.button(tr(lang, "Restore standard workspace", "رجّع شكل البرنامج الافتراضي")).clicked() {
+                            self.config.show_left_dock = true;
+                            self.config.show_right_dock = true;
+                            self.config.show_top_bar = true;
+                            self.config.show_timeline_dock = true;
+                            changed = true;
+                        }
+                        if changed { self.config.save(); }
+                        ui.small(tr(lang, "When the top bar is hidden, use the floating gear to reopen settings.",
+                            "لو خفيت الشريط العلوي، تقدر تفتح الإعدادات من الترس العائم."));
+                    }
                     _ => {}
                 }
                 ui.add_space(8.0);
@@ -2806,6 +2843,7 @@ impl eframe::App for StickApp {
         }
 
         // الشريط العلوي
+        if self.config.show_top_bar {
         egui::TopBottomPanel::top("top_bar").show(ctx, |ui| {
             egui::menu::bar(ui, |ui| {
                 let (h_rect, h_resp) = ui.allocate_exact_size(egui::vec2(22.0, 20.0), egui::Sense::click());
@@ -2877,7 +2915,21 @@ impl eframe::App for StickApp {
             });
         });
 
+        }
+        if !self.config.show_top_bar {
+            egui::Area::new(egui::Id::new("restore_workspace_settings"))
+                .anchor(egui::Align2::LEFT_TOP, egui::vec2(8.0, 8.0))
+                .order(egui::Order::Foreground)
+                .show(ctx, |ui| {
+                    if ui.button("⚙").on_hover_text(tr(lang, "Workspace settings", "إعدادات مساحة العمل"))
+                        .clicked() {
+                        self.show_settings_dialog = true;
+                        self.settings_tab = 4;
+                    }
+                });
+        }
         // شريط أدوات ثنائي اللغة: اسم دائم بجوار كل أيقونة واختصار فعلي من الإعدادات.
+        if self.config.show_left_dock {
         egui::SidePanel::left("tools_panel").resizable(true).default_width(210.0).min_width(180.0).show(ctx, |ui| {
             ui.vertical_centered(|ui| {
                 ui.add_space(5.0);
@@ -2928,12 +2980,14 @@ impl eframe::App for StickApp {
             });
         });
 
+        }
         // Split dock: tools keep their own scrolling upper section; layers
         // remain in a dedicated lower section, like a painting editor.
         let mut layer_menu_action: Option<(usize, layer_ops::LayerAction)> = None;
         let mut copy_layer_index: Option<usize> = None;
         let mut paste_layer_index: Option<usize> = None;
         let mut rename_layer_index: Option<usize> = None;
+        if self.config.show_right_dock {
         egui::SidePanel::right("right_panel").resizable(true).default_width(318.0)
             .min_width(250.0).show(ctx, |ui| {
             ui.horizontal(|ui| {
@@ -3070,6 +3124,7 @@ impl eframe::App for StickApp {
             }
                 }); // scrollable layer dock
         });
+        }
         if let Some(idx) = copy_layer_index {
             self.layer_clipboard = self.project.layers.get(idx).cloned();
         }
@@ -3153,7 +3208,7 @@ impl eframe::App for StickApp {
 
         let mut frame_menu_action: Option<(usize, usize, timeline_ops::FrameAction)> = None;
         // شريط التايم لاين السفلي في وضع الأنيميشن
-        if self.workspace_mode == WorkspaceMode::AnimationStudio {
+        if self.workspace_mode == WorkspaceMode::AnimationStudio && self.config.show_timeline_dock {
             egui::TopBottomPanel::bottom("timeline_panel").resizable(true).default_height(255.0).show(ctx, |ui| {
                 let bg = self.config.timeline_bg_color;
                 ui.painter().rect_filled(ui.max_rect(), 0.0,
