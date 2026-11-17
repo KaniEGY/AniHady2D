@@ -1,61 +1,51 @@
-# Stick Online — LAN-first collaboration (preview)
+# Stick Online — friends over the Internet and LAN
 
-Stick Online extends the existing Drawing and Animation editors. It does not require a developer-operated server: one participant hosts a room using their own PC. **The current protocol (v3) synchronizes document-level edits across LAN participants. It is still a preview until two-PC Windows GUI acceptance testing has passed.**
+Stick is **hosted on the creator's own computer**. It listens on TCP 47554 for collaborators and uses UDP 47553 to discover rooms. This implementation uses protocol v3 and synchronizes document edits via the host. There is **no central Stick account, global room directory or server operated by Stick**.
 
-## How to start
+## Play with friends on different Internet connections (recommended)
 
-1. Open Stick Studio and choose **Online / أونلاين** underneath Drawing and Animation.
-2. Pick **Draw Together / نرسم سوا** or **Animate Together / أنيميشن سوا**.
-3. Choose **Create Room** to host, or **Join Room** to connect.
-4. Hosting: name your room, optionally provide a unique password, and select a maximum of 2–12 total participants (including the host).
-5. Joining on the same LAN: press **Refresh rooms**, select the room from the list and supply its password if necessary.
-6. If automatic discovery is blocked, enter the host's **LAN IPv4:47554**, for example **192.168.1.24:47554**, then select Join.
-7. In the editor, the green Online status bar displays the room and current participant count. All participants automatically send drawing, erasing, fill, layer, frame, text and project edits through the host. **Sync full project** is an exceptional recovery action; the host remains the authority for editing order. **Leave Room** disconnects without deleting your local project.
+1. Each person installs [Tailscale for Windows](https://tailscale.com/download) and signs in. Tailscale is **optional third-party software**, not bundled with Stick.
+2. The host can **share only their computer** with a friend's Tailscale account, or invite that friend to the same tailnet. Do not share passwords or accounts. Review access policies before inviting people to a wider network. [Official sharing instructions](https://tailscale.com/docs/features/sharing).
+3. In Stick, choose **Online → Draw Together / Animate Together → Create Room**. The creator's PC stays the host. Keep Stick and Tailscale running.
+4. The host can copy the **Friends 100.x.y.z:47554** button at the top of the editor and send the address to their invited friend. This is a private Tailscale IP, **not** the router's public IP.
+5. The friend chooses **Online → Join Room**, clicks **Refresh rooms**, and selects the room if it is discovered. If no room appears, paste the host's **100.x.y.z:47554** into the Host IP field and press Join. Use the room password if required.
+6. Tailscale establishes a private encrypted path and can use its own DERP relay when direct NAT traversal fails. Stick itself still uses TCP and does **not** implement additional application-level encrypted transport. You do **not** need port forwarding for the Tailscale route.
 
-## Network requirements
+**Important:** An eight-digit Stick room code resolves only among rooms **actually discovered** on the LAN or accessible tailnet peers. It is not a worldwide invite service. Use the host's Tailscale address when discovery fails.
 
-- TCP **47554**: direct room connection, all edits/initial project data.
-- UDP **47553**: LAN broadcast room discovery, not an Internet directory.
-- Windows may prompt the host to allow Stick on private networks. Both PCs should be on the same LAN without client isolation.
-- You can test two app instances on the same Windows PC by using **127.0.0.1:47554**.
-- Outside the LAN, guests must know the host's accessible public IPv4 address, and the host's router must forward TCP 47554 to its Windows PC. This is **not** automatic NAT traversal.
-- Connections behind **CGNAT**, firewalls, isolated guest Wi-Fi, or different networks without port forwarding can fail. No worldwide room catalogue is available without a discovery/rendezvous facility.
+## Same home / LAN
 
-## Safety, privacy and current limitations
+- Host creates a room; friend selects it from the LAN discovery list or uses host's **LAN IPv4:47554**.
+- TCP **47554** carries all edits and the joining snapshot.
+- UDP **47553** advertises rooms using LAN broadcast or unicast to visible Tailscale peers.
+- Two instances on the same PC can test `127.0.0.1:47554`.
+- Both ends must run compatible Stick protocol v3 builds.
 
-- Traffic is **not end-to-end encrypted**. Use a temporary, unique room password; do not share private/sensitive project files with people you do not trust. The nonce challenge avoids transmitting the literal password, but this is *not* a substitute for authenticated encryption or secure Internet access.
-- Host may receive each collaborator's public or LAN IP address. Sharing a public host IP exposes that connection endpoint to participants.
-- The host sends its current project when guests join and serializes **newly committed strokes** across connected artists. Vector and brush strokes support simultaneous additions within the existing layer/frame structure.
-- **NOT yet synchronized automatically:** layer creation/reordering/names, erasing/editing existing strokes, transforms, undo/redo, independent keyframe edits, media/audio, text editing, and timeline operations. The host's explicit full-project resync overwrites the clients' local copy; save a backup first if collaborators have unsynchronized changes.
-- All users should run the same Stick version. The room is closed when the host leaves.
-- Networking is not a secure public server. Hardening (encrypted transport, bandwidth limits, malicious-client resistance, conflict resolution, reconnect, and relay/IPv6) is future work.
+## Troubleshooting
 
-## Required Windows acceptance checks
+- **Windows error 10061 / actively refused:** there is no accepting server at the chosen IP and TCP port, or software is blocking it. Confirm the room is open on the host, the IP is correct, and that inbound **TCP 47554** is allowed for Stick from trusted devices.
+- **192.168.x.x or 10.x.x.x works at home but not from your friend's network:** that address is LAN-only. Use the **100.x** Tailscale host IP instead. Public IPv4 port forwarding is an advanced alternative only if the host actually has a reachable public address.
+- **Tailscale not connected:** install it, sign in, connect and make sure the friend is permitted to reach the host device. Press **Refresh rooms** after it is running.
+- **Room not listed but direct address works:** UDP **47553** discovery may be blocked. If desired, allow UDP discovery traffic **only from trusted LAN/Tailscale devices**; manual IP joining does not need the UDP discovery port.
+- **Connection times out:** Tailscale peer visibility, access policies and host firewall may prevent reaching TCP 47554. Do not switch off Windows Firewall globally.
+- **Host leaves:** the room closes; each client keeps its local project. This is not a cloud-synced permanent room.
 
-- [ ] Host drawing room, join from second Windows PC over LAN using discovery.
-- [ ] Join by manual IPv4, wrong-password rejection, full-room rejection.
-- [ ] Draw on both PCs; each new stroke appears on both, exactly once, same frame/layer.
-- [ ] Repeat on separate animation frames, confirm inherited frame content.
-- [ ] Verify guests don't overwrite the host project when joining; save locally as a new file.
-- [ ] Host syncs a snapshot explicitly; ensure guests receive it.
-- [ ] Disconnect client then host; ensure both keep local project work and ports are released.
-- [ ] Check Windows firewall prompts and failures with discovery blocked.
-- [ ] Test local projects created with old Stick versions and standard save/reopen.
-- [ ] Confirm no attempt is made to contact an official Stick server.
+## Collaboration limitations / الأمان
 
-The GitHub Actions unit test and release build checks do not replace this two-PC GUI/network test.
+- The host serializes edits, including drawing, bucket fill, erasing, layers, keyframes, frame content, text and transforms.
+- Concurrent edits to the same array position can still conflict. The host can use **Sync full project** to restore participants to the same document.
+- External image/audio **file contents are not transferred** through Stick; absolute local asset paths are deliberately suppressed. Saving and reopening a legacy project needs its original files.
+- There is no dedicated reconnect/replay service, global player directory or end-to-end transport encryption **inside Stick**. Tailscale encrypts its transport when used; plain LAN/direct TCP is not independently encrypted by Stick.
+- Keep a unique password for private rooms, limit device sharing to trusted friends and review what tailnet access you grant.
 
-## Room codes and roster (protocol v2)
-- The host displays a copyable eight-digit **LAN room identifier**. Guests on the same LAN refresh the list, select the room or enter its code. For remote networks a code by itself **cannot** discover the host without a rendezvous service; use public reachable IPv4:47554 and port forwarding.
-- Host and guest advertise display names and local, unverified progression levels. Each connected guest is assigned a distinct UI accent from the per-room palette. This is NOT cloud identity, anti-cheat or Google account linking.
-- A new room now hosts the currently open project rather than wiping it to a blank canvas. Save/Export local copies via the normal Stick file actions. Other operations besides committed strokes are NOT fully synchronized.
-- Protocol v2 is intentionally incompatible with older Stick online beta builds. All participants must upgrade to this version.
+## مطلوب اختبار Windows بين جهازين حقيقيين
 
-## v3 document edit synchronization
+- [ ] Host Tailscale connected, guest joined from a different ISP; verify drawing and all document edits.
+- [ ] Direct guest join using the host's 100.x address when UDP discovery is blocked.
+- [ ] Test room listing over Tailscale when UDP discovery is allowed.
+- [ ] Test password rejection, capacity, disconnect, reopened room and LAN behavior.
+- [ ] Test erasing, adding/deleting layers, animation keyframes, and explicit host resync on both PCs.
+- [ ] Test selection transform at zoom 25%, 100%, 400% and each of its four corner handles.
+- [ ] Confirm old project save/reopen and Previous Versions rollback remain functional.
 
-- The PC that creates the room is the **actual TCP host/server**; the UI explains this before creation. Guests connect to it over LAN or directly by accessible IPv4.
-- The host serializes incremental project edits and broadcasts accepted changes to all other participants. Edits cover strokes, bucket fill, erasing, layer create/delete/reorder/visibility, keyframes and frame contents, text and document-level settings.
-- Concurrent edits targeting different frames/fields can merge. Simultaneous edits targeting the same array position (e.g., deleting a layer while another artist edits its strokes) can still conflict. Ask the host to send **Sync full project** if clients diverge.
-- Files referenced by an absolute path (external image/audio) are **not transferred**. Their paths are suppressed from outgoing project edits and snapshots; the editor needs a future asset-transfer design for shared media.
-- Protocol v3 rejects older v1/v2 clients. All participants must install a matching build. UDP discovery works within the same reachable LAN; room code is a locator for discovered rooms, not an Internet invite or authentication token.
-- This release is **not** an end-to-end encrypted multi-user service, NAT traversal or a worldwide searchable room directory.
+GitHub Actions compilation/unit tests do **not** replace this acceptance test.
