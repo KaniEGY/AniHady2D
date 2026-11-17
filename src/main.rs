@@ -4089,6 +4089,8 @@ impl eframe::App for StickApp {
         }
 
         let mut frame_menu_action: Option<(usize, usize, timeline_ops::FrameAction)> = None;
+        let mut timeline_visibility_toggle: Option<usize> = None;
+        let mut timeline_lock_toggle: Option<usize> = None;
         // شريط التايم لاين السفلي في وضع الأنيميشن
         if self.workspace_mode == WorkspaceMode::AnimationStudio && self.config.show_timeline_dock {
             // Explicit height and an interior drag grip prevent the timeline from
@@ -4189,8 +4191,9 @@ impl eframe::App for StickApp {
                 let cols = self.timeline_length.max(30);
                 egui::ScrollArea::both().id_salt("timeline_frame_scroller").show(ui, |ui| {
                     ui.horizontal(|ui| {
-                        ui.allocate_ui(egui::vec2(158.0, 30.0), |ui| {
-                            ui.strong(tr(lang, "FRAMES / LAYERS", "الفريمات / الطبقات"));
+                        ui.allocate_ui(egui::vec2(198.0, 30.0), |ui| {
+                            ui.strong(egui::RichText::new(tr(lang, "LAYERS  /  FRAMES", "الطبقات  /  الفريمات"))
+                                .color(egui::Color32::from_rgb(117, 196, 241)));
                         });
                         for f in 1..=cols {
                             let is_c = self.current_frame == f;
@@ -4214,12 +4217,23 @@ impl eframe::App for StickApp {
                     });
                     for (l_idx, layer) in self.project.layers.iter().enumerate() {
                         ui.horizontal(|ui| {
-                            ui.allocate_ui(egui::vec2(158.0, 34.0), |ui| {
-                                ui.label(egui::RichText::new(&layer.name).strong().color(
-                                    if self.active_layer_idx == l_idx {
-                                        egui::Color32::from_rgb(119, 209, 255)
-                                    } else { egui::Color32::WHITE }
-                                ));
+                            ui.allocate_ui(egui::vec2(198.0, 34.0), |ui| {
+                                ui.horizontal(|ui| {
+                                    if ui.small_button(if layer.visible { "◉" } else { "○" })
+                                        .on_hover_text(tr(lang, "Toggle visibility", "إظهار أو إخفاء اللير"))
+                                        .clicked() { timeline_visibility_toggle = Some(l_idx); }
+                                    if ui.small_button(if layer.locked { "▣" } else { "▢" })
+                                        .on_hover_text(tr(lang, "Toggle layer lock", "قفل أو فتح اللير"))
+                                        .clicked() { timeline_lock_toggle = Some(l_idx); }
+                                    if ui.selectable_label(self.active_layer_idx == l_idx,
+                                        egui::RichText::new(&layer.name).strong().size(12.5)
+                                            .color(if self.active_layer_idx == l_idx {
+                                                egui::Color32::from_rgb(113, 209, 255)
+                                            } else { egui::Color32::WHITE }))
+                                        .on_hover_text(&layer.name).clicked() {
+                                        self.active_layer_idx = l_idx;
+                                    }
+                                });
                             });
                             for f in 1..=cols {
                                 let is_b = f > self.timeline_length;
@@ -4305,6 +4319,20 @@ impl eframe::App for StickApp {
                 });
             });
             // The grip and the height slider both modify the same persisted value.
+        }
+        if let Some(idx) = timeline_visibility_toggle {
+            self.save_undo_state();
+            if let Some(layer) = self.project.layers.get_mut(idx) {
+                layer.visible = !layer.visible;
+                self.has_unsaved_changes = true;
+            }
+        }
+        if let Some(idx) = timeline_lock_toggle {
+            self.save_undo_state();
+            if let Some(layer) = self.project.layers.get_mut(idx) {
+                layer.locked = !layer.locked;
+                self.has_unsaved_changes = true;
+            }
         }
 
         if self.show_timeline_settings && self.workspace_mode == WorkspaceMode::AnimationStudio {
