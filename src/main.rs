@@ -352,6 +352,14 @@ enum UpdateState {
     Error(String),
 }
 
+#[derive(Clone)]
+enum RollbackState {
+    Idle,
+    Checking,
+    Available(Vec<updater::ArchivedRelease>),
+    Error(String),
+}
+
 #[derive(Serialize, Deserialize, Clone)]
 struct AppConfig {
     lang: AppLang,
@@ -917,6 +925,7 @@ struct StickApp {
     pending_delete_layer: Option<usize>,
     layer_rename_index: Option<usize>,
     layer_rename_buffer: String,
+    layer_filter: String,
     layer_clipboard: Option<Layer>,
     right_properties_ratio: f32,
     symmetry_mode: SymmetryMode,
@@ -975,6 +984,8 @@ struct StickApp {
     artist_avatar: Option<egui::TextureHandle>,
     installed_version: String,
     update_state: Arc<Mutex<UpdateState>>,
+    rollback_state: Arc<Mutex<RollbackState>>,
+    rollback_choice: Option<updater::ReleaseInfo>,
     new_symbol_name: String,
     allow_close: bool,
     current_stroke: Option<Stroke>,
@@ -1043,8 +1054,9 @@ impl StickApp {
             pending_delete_layer: None,
             layer_rename_index: None,
             layer_rename_buffer: String::new(),
+            layer_filter: String::new(),
             layer_clipboard: None,
-            right_properties_ratio: 0.46,
+            right_properties_ratio: 0.36,
             symmetry_mode: SymmetryMode::Off,
             stabilizer_strength: 0.30,
             stabilized_cursor: None,
@@ -1101,6 +1113,8 @@ impl StickApp {
             artist_avatar,
             installed_version: get_installed_version(),
             update_state: Arc::new(Mutex::new(UpdateState::Idle)),
+            rollback_state: Arc::new(Mutex::new(RollbackState::Idle)),
+            rollback_choice: None,
             new_symbol_name: "Symbol_1".to_string(),
             allow_close: false,
             current_stroke: None,
@@ -2021,6 +2035,21 @@ impl StickApp {
         });
     }
 
+    fn refresh_release_history(&mut self, ctx: egui::Context) {
+        *self.rollback_state.lock().unwrap() = RollbackState::Checking;
+        self.rollback_choice = None;
+        let state = Arc::clone(&self.rollback_state);
+        let installed = self.installed_version.clone();
+        std::thread::spawn(move || {
+            let result = match updater::fetch_rollback_history(&installed) {
+                Ok(releases) => RollbackState::Available(releases),
+                Err(error) => RollbackState::Error(error),
+            };
+            *state.lock().unwrap() = result;
+            ctx.request_repaint();
+        });
+    }
+
     fn download_and_apply_update(&mut self, info: updater::ReleaseInfo, ctx: egui::Context) {
         if self.has_unsaved_changes || self.current_stroke.is_some() {
             self.project_notice_title = tr_notice(self.config.lang, "Save your work first", "احفظ شغلك الأول");
@@ -2921,6 +2950,7 @@ impl eframe::App for StickApp {
                     ui.selectable_value(&mut self.settings_tab, 2, tr(lang, "Shortcuts", "اختصارات"));
                     ui.selectable_value(&mut self.settings_tab, 3, tr(lang, "Colors & Timeline", "ألوان وتايم لاين"));
                     ui.selectable_value(&mut self.settings_tab, 4, tr(lang, "Personalization", "التخصيص"));
+                    ui.selectable_value(&mut self.settings_tab, 5, tr(lang, "Previous Versions", "النسخة الاحتياطية"));
                 });
                 ui.separator();
                 match self.settings_tab {
@@ -3106,6 +3136,85 @@ impl eframe::App for StickApp {
                         if changed { self.config.save(); }
                         ui.small(tr(lang, "When the top bar is hidden, use the floating gear to reopen settings.",
                             "لو خفيت الشريط العلوي، تقدر تفتح الإعدادات من الترس العائم."));
+                    }
+                    5 => {
+                        ui.heading(tr(lang, "Restore a previous Stick version", "الرجوع لإصدار سابق من Stick"));
+                        ui.label(tr(lang,
+                            "Official GitHub releases only. The old version is downloaded, hash-checked, and installed when Stick restarts.",
+                            "الإصدارات الرسمية فقط من GitHub. هننزّل النسخة القديمة ونتحقق منها قبل استبدال البرنامج."));
+                        ui.separator();
+                        let snapshot = self.rollback_state.lock().unwrap().clone();
+                        if matches!(snapshot, RollbackState::Idle) {
+                            self.refresh_release_history(ctx.clone());
+                        } else {
+                            if ui.button(tr(lang, "Refresh release list", "تحديث قائمة الإصدارات")).clicked() {
+                                self.refresh_release_history(ctx.clone());
+                            }
+                            match snapshot {
+                                RollbackState::Checking => {
+                                    ui.horizontal(|ui| {
+                                        ui.spinner();
+                                        ui.label(tr(lang, "Loading the release history...", "بنحمّل سجل الإصدارات من GitHub..."));
+                                    });
+                                }
+                                RollbackState::Available(releases) => {
+                                    if releases.is_empty() {
+                                        ui.label(tr(lang, "No verified older releases available.",
+                                            "مفيش إصدارات أقدم متاحة ومتحقق منها."));
+                                    } else {
+                                        ui.add_space(8.0);
+                                        ui.label(egui::RichText::new(tr(lang, "Back to previous version", "الرجوع للنسخة السابقة")).strong());
+                                        let previous = &releases[0];
+                                        ui.horizontal(|ui| {
+                                            ui.label(format!("Stick v{}   •   {}", previous.info.version,
+                                                previous.published_at.get(0..10).unwrap_or("?")));
+                                            if ui.button(tr(lang, "Restore previous", "ارجع للنسخة السابقة")).clicked() {
+                                                self.rollback_choice = Some(previous.info.clone());
+                                            }
+                                        });
+                                        ui.add_space(10.0);
+                                        ui.label(egui::RichText::new(tr(lang,
+                                            "Last 5 eligible older releases", "آخر 5 إصدارات أقدم متاحة")).strong());
+                                        egui::ScrollArea::vertical().max_height(205.0).show(ui, |ui| {
+                                            for (index, release) in releases.iter().enumerate() {
+                                                ui.horizontal(|ui| {
+                                                    ui.label(format!("{}. v{}", index + 1, release.info.version));
+                                                    ui.label(release.published_at.get(0..10).unwrap_or("?"));
+                                                    if ui.small_button(tr(lang, "Select", "اختيار")).clicked() {
+                                                        self.rollback_choice = Some(release.info.clone());
+                                                    }
+                                                });
+                                            }
+                                        });
+                                    }
+                                }
+                                RollbackState::Error(error) => {
+                                    ui.colored_label(egui::Color32::LIGHT_RED, error);
+                                    ui.hyperlink_to(tr(lang, "Open GitHub release history", "افتح إصدارات GitHub"),
+                                        "https://github.com/KaniEGY/Stick/releases");
+                                }
+                                RollbackState::Idle => {}
+                            }
+                        }
+                        if let Some(release) = self.rollback_choice.clone() {
+                            ui.add_space(10.0);
+                            ui.separator();
+                            ui.colored_label(egui::Color32::from_rgb(246, 190, 100),
+                                tr(lang, "Older Stick builds may not support projects saved by newer versions. Back up your projects first.",
+                                    "تحذير: النسخ القديمة ممكن متفتحش المشاريع المحفوظة بإصدارات أحدث. احفظ نسخة احتياطية من مشاريعك الأول."));
+                            ui.label(format!("v{}  →  v{}", self.installed_version, release.version));
+                            ui.horizontal(|ui| {
+                                if ui.button(tr(lang, "Confirm download and restore", "تأكيد تنزيل واسترجاع الإصدار")).clicked() {
+                                    self.rollback_choice = None;
+                                    self.show_settings_dialog = false;
+                                    self.show_update_dialog = true;
+                                    self.download_and_apply_update(release, ctx.clone());
+                                }
+                                if ui.button(tr(lang, "Cancel", "إلغاء")).clicked() {
+                                    self.rollback_choice = None;
+                                }
+                            });
+                        }
                     }
                     _ => {}
                 }
@@ -3419,8 +3528,8 @@ impl eframe::App for StickApp {
         let mut paste_layer_index: Option<usize> = None;
         let mut rename_layer_index: Option<usize> = None;
         if self.config.show_right_dock {
-        egui::SidePanel::right("right_panel").resizable(true).default_width(318.0)
-            .min_width(250.0).show(ctx, |ui| {
+        egui::SidePanel::right("right_panel").resizable(true).default_width(376.0)
+            .min_width(285.0).show(ctx, |ui| {
             ui.horizontal(|ui| {
                 ui.strong(tr(lang, "Tool Properties", "خصائص الأداة"));
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -3473,12 +3582,18 @@ impl eframe::App for StickApp {
                         }); // independent tool-props scroll
                 }); // adjustable upper dock
             ui.separator();
-            ui.strong(tr(lang, "▤ Layers • Right-click for more", "▤ الطبقات • كليك يمين للخيارات"));
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new(tr(lang, "LAYERS", "الطبقات")).size(16.0)
+                    .strong().color(egui::Color32::from_rgb(115, 208, 244)));
+                ui.label(format!("({})", self.project.layers.len()));
+            });
+            ui.add(egui::TextEdit::singleline(&mut self.layer_filter)
+                .hint_text(tr(lang, "Search layers...", "ابحث عن لير..."))
+                .desired_width(f32::INFINITY));
             egui::ScrollArea::vertical().id_salt("layer_dock_scroll")
                 .auto_shrink([false, false]).show(ui, |ui| {
             ui.horizontal(|ui| {
-                ui.strong(tr(lang, "Layers", "الطبقات"));
-                if ui.small_button("+ Layer").clicked() {
+                if ui.small_button(tr(lang, "+ New Layer", "+ لير جديد")).clicked() {
                     self.save_undo_state();
                     let mut kf = HashMap::new();
                     kf.insert(1, Default::default());
@@ -3508,20 +3623,60 @@ impl eframe::App for StickApp {
                 });
             }
             let can_delete_layers = self.project.layers.len() > 1;
+            let dims = (self.project.width.max(1) as f32, self.project.height.max(1) as f32);
+            let current_frame = self.current_frame;
+            let filter = self.layer_filter.trim().to_lowercase();
             for (idx, layer) in self.project.layers.iter_mut().enumerate() {
+                if !filter.is_empty() && !layer.name.to_lowercase().contains(&filter) { continue; }
                 let selected_row = self.active_layer_idx == idx;
                 egui::Frame::none()
                     .fill(if selected_row { egui::Color32::from_rgb(34, 65, 90) }
                         else { egui::Color32::from_rgb(37, 39, 46) })
-                    .rounding(5.0)
-                    .inner_margin(egui::Margin::symmetric(5.0, 4.0))
+                    .stroke(egui::Stroke::new(if selected_row { 1.4 } else { 0.5 },
+                        if selected_row { egui::Color32::from_rgb(78, 183, 235) }
+                        else { egui::Color32::from_gray(67) }))
+                    .rounding(6.0)
+                    .inner_margin(egui::Margin::symmetric(6.0, 7.0))
                     .show(ui, |ui| {
                 ui.horizontal(|ui| {
                     let has_art = layer.keyframes.values().any(|frame|
                         !frame.strokes.is_empty() || !frame.text_items.is_empty() || !frame.media_items.is_empty());
-                    ui.label(egui::RichText::new(if has_art { "◆" } else { "◇" })
-                        .color(if has_art { egui::Color32::from_rgb(105, 218, 207) }
-                               else { egui::Color32::from_gray(115) }).size(15.0));
+                    // Live thumbnail based on the layer's stored drawing strokes.
+                    let (thumb, _) = ui.allocate_exact_size(egui::vec2(48.0, 38.0), egui::Sense::hover());
+                    ui.painter().rect_filled(thumb, 3.0, egui::Color32::from_gray(82));
+                    let inner = thumb.shrink(3.0);
+                    ui.painter().rect_filled(inner, 2.0, egui::Color32::from_gray(236));
+                    if let Some((_, data)) = layer.keyframes.iter()
+                        .filter(|(f,_)| **f <= current_frame).max_by_key(|(f,_)| **f) {
+                        for stroke in data.strokes.iter().take(70) {
+                            let color = egui::Color32::from_rgb(stroke.color[0], stroke.color[1], stroke.color[2]);
+                            let project_to_thumb = |p: &StrokePoint| egui::pos2(
+                                inner.left() + (p.x / dims.0).clamp(0.0,1.0)*inner.width(),
+                                inner.top() + (p.y / dims.1).clamp(0.0,1.0)*inner.height());
+                            if stroke.points.len() == 1 {
+                                let p = &stroke.points[0];
+                                if p.x.is_finite() && p.y.is_finite() {
+                                    ui.painter().circle_filled(project_to_thumb(p), 1.4, color);
+                                }
+                            } else {
+                                for pair in stroke.points.windows(2).step_by((stroke.points.len()/28).max(1)) {
+                                    if pair.iter().all(|p| p.x.is_finite() && p.y.is_finite()) {
+                                        ui.painter().line_segment([project_to_thumb(&pair[0]),
+                                            project_to_thumb(&pair[1])], egui::Stroke::new(1.1, color));
+                                    }
+                                }
+                            }
+                        }
+                        if !data.media_items.is_empty() || !data.text_items.is_empty() {
+                            ui.painter().text(inner.center(), egui::Align2::CENTER_CENTER,
+                                "▧", egui::FontId::proportional(13.0),
+                                egui::Color32::from_rgb(40, 110, 161));
+                        }
+                    }
+                    if !has_art {
+                        ui.painter().circle_stroke(inner.center(), 5.0,
+                            egui::Stroke::new(1.0, egui::Color32::from_gray(150)));
+                    }
                     if ui.checkbox(&mut layer.visible, "")
                         .on_hover_text(tr(lang, "Show or hide layer", "أظهر أو اخفي اللير")).changed() {
                         self.has_unsaved_changes = true;
@@ -3531,11 +3686,22 @@ impl eframe::App for StickApp {
                         layer.locked = !layer.locked;
                         self.has_unsaved_changes = true;
                     }
-                    let layer_response = ui.selectable_label(self.active_layer_idx == idx, &layer.name);
+                    let layer_response = ui.vertical(|ui| {
+                        let response = ui.selectable_label(selected_row,
+                            egui::RichText::new(&layer.name).strong().size(14.0));
+                        let stroke_count: usize = layer.keyframes.values().map(|f| f.strokes.len()).sum();
+                        ui.label(egui::RichText::new(format!("{} {} • {} {}{}",
+                            layer.keyframes.len(), tr(lang, "frames", "فريم"),
+                            stroke_count, tr(lang, "strokes", "خط"),
+                            if layer.is_guide { " • GUIDE" } else { "" }))
+                            .small().color(egui::Color32::from_gray(160)));
+                        response
+                    }).inner;
                     if layer_response.clicked() {
                         self.active_layer_idx = idx;
                         self.selected_stroke_indices.clear();
                     }
+                    if layer_response.double_clicked() { rename_layer_index = Some(idx); }
                     layer_response.context_menu(|ui| {
                         ui.strong(&layer.name);
                         ui.separator();
@@ -3548,6 +3714,13 @@ impl eframe::App for StickApp {
                         if ui.add_enabled(self.layer_clipboard.is_some(),
                             egui::Button::new(tr(lang, "Paste Layer", "الصق اللير"))).clicked() {
                             paste_layer_index = Some(idx); ui.close_menu();
+                        }
+                        if ui.button(tr(lang,
+                            if layer.is_guide { "Disable Guide Layer" } else { "Make Guide Layer (not exported)" },
+                            if layer.is_guide { "إلغاء وضع الإرشاد" } else { "لير إرشادي (مش بيتصدر)" })).clicked() {
+                            layer.is_guide = !layer.is_guide;
+                            self.has_unsaved_changes = true;
+                            ui.close_menu();
                         }
                         if ui.button(tr(lang, "Duplicate", "دبلكيت اللير")).clicked() {
                             layer_menu_action = Some((idx, layer_ops::LayerAction::Duplicate));

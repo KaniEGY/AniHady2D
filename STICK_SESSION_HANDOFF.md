@@ -50,3 +50,13 @@
 - Initial PR test workflow (c511c8d) failed because MutexGuard PoisonError was passed to io::Error::other; corrected in 3aca0ff. Subsequent Windows unit tests completed successfully, while release-build and newest-HEAD workflows still require checking. Windows two-PC GUI QA has NOT been performed.
 - Strict release criteria: latest HEAD Windows CI must finish green; test local and second-PC join/packet behavior before claiming the feature is stable. Keep normal Drawing/Animation and save formats unchanged. Do not call an early successful build proof of manual online acceptance.
 - Next task: verify the latest head workflow, then review unsynced structure operations, secure transport and optional Internet discovery/relay architecture.
+
+
+## 17 November 2026 — Automatic publication, rollback and Layers dock
+- User explicitly requests publication of EVERY tested update through GitHub Releases and Stick updater. Do not hold working builds or replace full versions with repair-only files. Preserve historical releases for rollback and never publish a known failing build.
+- Online beta PR #20 merged to main at commit 5afb33b2b2ece1e5ccb44e100dde2395608198fb, following latest-HEAD passing Windows CI. Confirm main publication run separately.
+- Next branch: feature/release-rollback-layers-20261117
+- src/updater.rs: query GitHub Releases, sort by published_at, verify official asset URLs, SHA-256 digest and sizes, offer up to 5 older builds. Reuse existing safe staged installer. Regression tests added.
+- src/main.rs: settings Previous Versions tab with immediate predecessor, 5 older releases, dates, confirmation and unsaved work guard; improved resizable right Layers dock with search, sampled actual thumbnail preview, per-layer metadata, double-click rename and guide action.
+- RELEASE_NOTES.md bilingual update. No GPL Krita source code imported.
+- QA: latest PR Windows cargo test and release build must be green before merge; Windows manual rollback, export, reopening older projects and live layer dock validation remain unverified. Online beta is NOT secure/encrypted Internet collaboration, only limited LAN/direct-IP stroke synchronization.

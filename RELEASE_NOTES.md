@@ -14,6 +14,9 @@
 - **Known boundaries:** bucket fill operates on recognized closed stroke contours (now with improved near-closure tolerance), not arbitrary raster flood fill. Imported artwork/text still needs further parity tests for every transform. No Krita GPL code is copied into Stick.
 
 ### What's new
+- **Version Backup / النسخة الاحتياطية:** open Settings → Previous Versions to return to the preceding official release or choose from the five latest eligible older GitHub builds, each showing its publication date. All downloads use the existing SHA-256-verified installer flow and require confirmation; unsaved projects block restart.
+- **Layers dock refresh:** wider resizable Krita-inspired sidebar with live stroke thumbnails, quick layer-name search, colored selection, stroke/frame metadata, guide-layer context action, and existing visibility, lock, rename, duplicate, delete, move, opacity controls. No Krita GPL code imported.
+- **Stick Online beta:** third option under Drawing and Animation. LAN-hosted rooms, optional password, participant limit, LAN discovery and manual direct IPv4 connection. Newly committed strokes synchronize with the host; room-wide timeline/layer edits and Internet-wide discovery are not implemented yet. This preview is not end-to-end encrypted.
 - Art System: anime-style bilingual artist profile with editable display name, local avatar image and a level/rank progress bar. Progress formulas are not displayed.
 - Customizable workspace, cursor-anchored smooth zoom, transform rotation handle, draggable lasso selections, right-click tool choices and more versatile brush-tip geometry.
 - A centered 10-second LEVEL UP panel shows one of 1,000 unique motivating lines in easy US English or Egyptian Arabic, with one of 100 small procedural sound variations.
@@ -68,6 +71,9 @@
 - **القيود الحالية:** الدلو بيلون المسارات المقفولة اللي بيتعرف عليها، ولسه مش Flood Fill كامل على أي سطح Raster. لم يتم نسخ أكواد Krita الخاضعة لترخيص GPL.
 
 ### إيه الجديد؟
+- **النسخة الاحتياطية:** خانة جديدة في ترس الإعدادات، تقدر ترجع منها لآخر إصدار أقدم أو تختار من 5 إصدارات قديمة متاحة بتاريخ نشر كل واحد. البرنامج بيتأكد من سلامة ملف EXE ببصمة SHA-256 وبيطلب تأكيد، ومش بيقفل لو في شغل لسه متحفظش.
+- **لوحة الليرز:** مساحة أوسع قابلة للتمدد شبه برامج الرسم الاحترافية، ومعاينة فعلية صغيرة من خطوط كل لير، وبحث بالاسم، ومعلومات عن عدد الفريمات والخطوط، وخيارات للكليك يمين، بالإضافة لأزرار القفل والإظهار والنسخ والترتيب والشفافية. الكود مكتوب لـStick من غير نقل كود Krita.
+- **أونلاين تجريبي:** اختيار جديد في شاشة البداية للرسم أو الأنيميشن سوا، مع غرف محلية وكلمة سر اختيارية وحد أقصى للأعضاء، وإظهار الغرف على نفس الشبكة أو الدخول بعنوان IP. مزامنة الخطوط الجديدة متاحة؛ التايم لاين والليرز مش متزامنين بالكامل، ومفيش دليل عالمي بالغرف أو تشفير كامل لسه.
 - نظام الفنان (Art System) الجديد: شكل أنمي مع اسم تقدر تعدّله، وصورة شخصية من جهازك، وشريط المستوى والرتبة. تفاصيل احتساب التقدم مش ظاهرة.
 - تخصيص مساحة الرسم، زووم ناحية الماوس، سهم تدوير حر للتحديد، تحريك التحديد الحر، وقائمة كليك يمين للأدوات، وست أشكال لرأس الفرشة.
 - لما المستوى يعلى هتظهر نافذة حماسية في نص الشاشة 10 ثواني، وفيها رسالة من 1000 جملة مختلفة بالمصري أو الإنجليزي، ومعها صوت من 100 تنويعة مختلفة وخفيفة.
