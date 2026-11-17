@@ -8,6 +8,7 @@ mod changelog;
 mod exporter;
 mod persistence;
 mod onion_skin;
+mod layer_ops;
 mod profile;
 mod project;
 
@@ -766,6 +767,8 @@ struct StickApp {
     active_krita_brush: KritaBrushPreset,
     brush_opacity: f32,
     selected_shape_kind: GeometricShapeKind,
+    shape_fill_enabled: bool,
+    pending_delete_layer: Option<usize>,
     symmetry_mode: SymmetryMode,
     stabilizer_strength: f32,
     stabilized_cursor: Option<egui::Pos2>,
@@ -861,6 +864,8 @@ impl StickApp {
             active_krita_brush: KritaBrushPreset::GPenInk,
             brush_opacity: 1.0,
             selected_shape_kind: GeometricShapeKind::StraightLine,
+            shape_fill_enabled: false,
+            pending_delete_layer: None,
             symmetry_mode: SymmetryMode::Off,
             stabilizer_strength: 0.30,
             stabilized_cursor: None,
@@ -1619,6 +1624,8 @@ impl StickApp {
                     ui.add(egui::DragValue::new(&mut self.brush_size).range(1.0..=100.0));
                 });
                 ui.add(egui::Slider::new(&mut self.brush_size, 1.0..=100.0).show_value(false));
+                ui.add(egui::Slider::new(&mut self.brush_opacity, 0.0..=1.0)
+                    .text(tr(lang, "Opacity", "الشفافية")));
             }
             ActiveToolUI::Brush => {
                 ui.strong(tr(lang, "Brushes (Icon Presets)", "اختر الفرشة بالأيقونة"));
@@ -1667,6 +1674,12 @@ impl StickApp {
                 ui.radio_value(&mut self.selected_shape_kind, GeometricShapeKind::Circle, tr(lang, "Circle", "دائرة"));
                 ui.radio_value(&mut self.selected_shape_kind, GeometricShapeKind::Square, tr(lang, "Square", "مربع"));
                 ui.radio_value(&mut self.selected_shape_kind, GeometricShapeKind::Rectangle, tr(lang, "Rectangle", "مستطيل"));
+                ui.separator();
+                ui.add(egui::Slider::new(&mut self.brush_size, 1.0..=120.0)
+                    .text(tr(lang, "Outline Size", "سُمك حدود الشكل")));
+                ui.add(egui::Slider::new(&mut self.brush_opacity, 0.0..=1.0)
+                    .text(tr(lang, "Opacity", "شفافية الشكل")));
+                ui.checkbox(&mut self.shape_fill_enabled, tr(lang, "Fill shape", "لوّن جوّه الشكل"));
             }
             ActiveToolUI::EraserRed | ActiveToolUI::EraserGreen => {
                 ui.strong(tr(lang, "Eraser Properties", "خصائص الممحاة"));
@@ -1674,11 +1687,14 @@ impl StickApp {
                     if ui.selectable_label(self.active_tool_ui == ActiveToolUI::EraserRed, tr(lang, "Red (Full E)", "حمراء (كامل E)")).clicked() { self.active_tool_ui = ActiveToolUI::EraserRed; }
                     if ui.selectable_label(self.active_tool_ui == ActiveToolUI::EraserGreen, tr(lang, "Green (Part T)", "خضراء (جزئي T)")).clicked() { self.active_tool_ui = ActiveToolUI::EraserGreen; }
                 });
-                ui.add(egui::Slider::new(&mut self.brush_size, 2.0..=120.0));
+                ui.add(egui::Slider::new(&mut self.brush_size, 2.0..=120.0)
+                    .text(tr(lang, "Eraser Size", "حجم الممحاة")));
             }
             ActiveToolUI::Text => {
                 ui.strong(tr(lang, "Text Properties", "خصائص النص"));
                 ui.add(egui::DragValue::new(&mut self.text_font_size).range(10.0..=180.0));
+                ui.add(egui::Slider::new(&mut self.brush_opacity, 0.0..=1.0)
+                    .text(tr(lang, "Text Opacity", "شفافية النص")));
             }
             ActiveToolUI::HandCanvas => {
                 ui.strong(tr(lang, "Canvas Orientation", "تدوير وعكس الكانفا"));
@@ -2450,8 +2466,14 @@ impl eframe::App for StickApp {
             });
         });
 
-        // اللوحة اليمنى
-        egui::SidePanel::right("right_panel").resizable(true).default_width(270.0).show(ctx, |ui| {
+        // Scrolling the properties panel must scroll PROPERTIES, never the
+        // canvas or artwork. The canvas zoom handler runs only in CentralPanel.
+        let mut layer_menu_action: Option<(usize, layer_ops::LayerAction)> = None;
+        egui::SidePanel::right("right_panel").resizable(true).default_width(280.0).show(ctx, |ui| {
+            egui::ScrollArea::vertical()
+                .id_salt("tool_properties_scroll")
+                .auto_shrink([false, false])
+                .show(ui, |ui| {
             self.render_tool_properties_ui(ui, lang);
             ui.add_space(8.0);
             ui.separator();
@@ -2516,12 +2538,62 @@ impl eframe::App for StickApp {
             }
             for (idx, layer) in self.project.layers.iter_mut().enumerate() {
                 ui.horizontal(|ui| {
-                    ui.checkbox(&mut layer.visible, "");
-                    if ui.small_button(if layer.locked { "🔒" } else { "🔓" }).clicked() { layer.locked = !layer.locked; }
-                    if ui.selectable_label(self.active_layer_idx == idx, &layer.name).clicked() { self.active_layer_idx = idx; }
+                    if ui.checkbox(&mut layer.visible, "")
+                        .on_hover_text(tr(lang, "Show or hide layer", "أظهر أو اخفي اللير")).changed() {
+                        self.has_unsaved_changes = true;
+                    }
+                    if ui.small_button(if layer.locked { "🔒" } else { "🔓" })
+                        .on_hover_text(tr(lang, "Lock or unlock layer", "اقفل أو افتح قفل اللير")).clicked() {
+                        layer.locked = !layer.locked;
+                        self.has_unsaved_changes = true;
+                    }
+                    if ui.selectable_label(self.active_layer_idx == idx, &layer.name).clicked() {
+                        self.active_layer_idx = idx;
+                        self.selected_stroke_indices.clear();
+                    }
+                    if ui.add_enabled(self.project.layers.len() > 1 && !layer.locked,
+                        egui::Button::new("×"))
+                        .on_hover_text(tr(lang, "Delete Layer", "احذف اللير")).clicked() {
+                        self.pending_delete_layer = Some(idx);
+                    }
                 });
             }
+                }); // property scroll
         });
+        if let Some(index) = self.pending_delete_layer {
+            let layer_name = self.project.layers.get(index).map(|l| l.name.clone()).unwrap_or_default();
+            egui::Window::new(tr(lang, "Delete Layer?", "عايز تحذف اللير؟"))
+                .collapsible(false).resizable(false)
+                .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+                .show(ctx, |ui| {
+                    ui.label(format!("{}: {}", tr(lang, "Layer", "اللير"), layer_name));
+                    ui.label(tr(lang, "This removes the whole layer. You can undo it.",
+                        "ده هيمسح اللير كله. وتقدر ترجع بالتراجع."));
+                    ui.horizontal(|ui| {
+                        if ui.button(tr(lang, "Cancel", "إلغاء")).clicked() {
+                            self.pending_delete_layer = None;
+                        }
+                        if ui.button(tr(lang, "Delete Layer", "احذف اللير")).clicked() {
+                            layer_menu_action = Some((index, layer_ops::LayerAction::Delete));
+                            self.pending_delete_layer = None;
+                        }
+                    });
+                });
+        }
+        if let Some((index, action)) = layer_menu_action {
+            self.save_undo_state();
+            match layer_ops::apply_layer_action(&mut self.project, index, action) {
+                Ok(new_index) => {
+                    self.active_layer_idx = new_index;
+                    self.selected_stroke_indices.clear();
+                    self.has_unsaved_changes = true;
+                }
+                Err(reason) => {
+                    self.undo_stack.pop();
+                    self.status_message = reason.to_owned();
+                }
+            }
+        }
 
         // شريط التايم لاين السفلي في وضع الأنيميشن
         if self.workspace_mode == WorkspaceMode::AnimationStudio {
