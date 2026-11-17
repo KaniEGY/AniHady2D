@@ -16,6 +16,8 @@ mod profile;
 mod project;
 mod collab;
 mod project_sync;
+mod remote_access;
+mod transform_handles;
 
 use arabic_reshaper::arabic_reshape;
 use brushes::{draw_brush_preset_icon, draw_stroke_pro};
@@ -991,7 +993,8 @@ struct StickApp {
     online_code_input: String,
     online_participants: Vec<Participant>,
     online_rooms: Vec<RoomListing>,
-    online_discovery: Option<std::sync::mpsc::Receiver<Vec<RoomListing>>>,
+    online_discovery: Option<std::sync::mpsc::Receiver<collab::RoomSearchResult>>,
+    online_remote_info: Option<remote_access::TailnetInfo>,
     online_session: Option<OnlineSession>,
     online_message: String,
     online_members: usize,
@@ -1122,6 +1125,7 @@ impl StickApp {
             online_participants: Vec::new(),
             online_rooms: Vec::new(),
             online_discovery: None,
+            online_remote_info: None,
             online_session: None,
             online_message: String::new(),
             online_members: 1,
@@ -1232,14 +1236,15 @@ impl StickApp {
 
     fn refresh_online_rooms(&mut self) {
         let (tx, rx) = std::sync::mpsc::channel();
-        std::thread::spawn(move || { let _ = tx.send(collab::discover_rooms()); });
+        std::thread::spawn(move || { let _ = tx.send(collab::discover_rooms_with_remote()); });
         self.online_discovery = Some(rx);
     }
 
     fn poll_online_events(&mut self, ctx: &egui::Context) {
         let discovered = self.online_discovery.as_ref().and_then(|rx| rx.try_recv().ok());
-        if let Some(rooms) = discovered {
-            self.online_rooms = rooms;
+        if let Some(result) = discovered {
+            self.online_rooms = result.rooms;
+            self.online_remote_info = Some(result.tailnet);
             self.online_discovery = None;
         }
         let events = self.online_session.as_ref().map(|s| s.events()).unwrap_or_default();
@@ -2622,6 +2627,7 @@ impl eframe::App for StickApp {
                         self.online_page = OnlinePage::ChooseMode;
                         self.online_message.clear();
                         self.workspace_mode = WorkspaceMode::OnlineLobby;
+                        self.refresh_online_rooms();
                     }
                 });
                 ui.add_space(16.0);
@@ -4733,17 +4739,10 @@ impl eframe::App for StickApp {
                                 // A dedicated handle above the selection provides free rotation.
                                 let bounds = self.selected_canvas_bounds();
                                 let rotate_pivot = if self.active_tool_ui == ActiveToolUI::FreeTransform {
-                                    bounds.filter(|rect| {
-                                        (rect.center_top() + egui::vec2(0.0, -26.0 / scale))
-                                            .distance(stage_pos) < (14.0 / scale)
-                                    }).map(|rect| rect.center())
+                                    bounds.and_then(|rect| transform_handles::rotation_pivot(rect, stage_pos, scale))
                                 } else { None };
                                 let resize_anchor = if self.active_tool_ui == ActiveToolUI::FreeTransform {
-                                    bounds.and_then(|rect| {
-                                        if rect.max.distance(stage_pos) <= (16.0 / scale).max(4.0) {
-                                            Some(rect.min)
-                                        } else { None }
-                                    })
+                                    bounds.and_then(|rect| transform_handles::resize_anchor(rect, stage_pos, scale))
                                 } else { None };
                                 let reuse_selection = bounds.is_some_and(|rect| rect.contains(stage_pos))
                                     && (!self.selected_stroke_indices.is_empty() || self.selected_text_item_index.is_some());
@@ -5015,15 +5014,17 @@ impl eframe::App for StickApp {
                     ));
                     if self.active_tool_ui == ActiveToolUI::FreeTransform {
                         let top = to_screen(bounds.center_top());
-                        let handle = to_screen(bounds.center_top() + egui::vec2(0.0, -26.0 / scale));
+                        let handle = to_screen(bounds.center_top()
+                            + egui::vec2(0.0, -transform_handles::ROTATE_OFFSET_PX / scale));
                         painter.line_segment([top, handle], egui::Stroke::new(1.5, egui::Color32::from_rgb(54, 194, 255)));
-                        painter.circle_filled(handle, 11.0, egui::Color32::from_rgb(19, 31, 42));
-                        painter.circle_stroke(handle, 11.0, egui::Stroke::new(2.0, egui::Color32::from_rgb(54, 194, 255)));
+                        painter.circle_filled(handle, 12.5, egui::Color32::from_rgb(19, 31, 42));
+                        painter.circle_stroke(handle, 12.5, egui::Stroke::new(2.0, egui::Color32::from_rgb(54, 194, 255)));
                         painter.text(handle, egui::Align2::CENTER_CENTER, "↻",
                             egui::FontId::proportional(16.0), egui::Color32::WHITE);
                         for corner in [screen_bounds.left_top(), screen_bounds.right_top(),
                                        screen_bounds.left_bottom(), screen_bounds.right_bottom()] {
-                            let handle = egui::Rect::from_center_size(corner, egui::vec2(9.0, 9.0));
+                            let handle = egui::Rect::from_center_size(corner,
+                                egui::vec2(transform_handles::RESIZE_VISUAL_PX, transform_handles::RESIZE_VISUAL_PX));
                             painter.rect_filled(handle, 1.0, egui::Color32::WHITE);
                             painter.rect_stroke(handle, 1.0, egui::Stroke::new(
                                 1.5, egui::Color32::from_rgb(54, 194, 255)
