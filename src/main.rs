@@ -9,6 +9,8 @@ mod exporter;
 mod persistence;
 mod onion_skin;
 mod fill_tools;
+mod fill_render;
+mod eraser_tools;
 mod selection_tools;
 mod layer_ops;
 mod timeline_ops;
@@ -880,52 +882,6 @@ struct HistorySnapshot {
     active_layer_idx: usize,
 }
 
-fn erase_partial_from_strokes(strokes: &mut Vec<Stroke>, center: egui::Pos2, radius: f32) {
-    let mut new_strokes = Vec::with_capacity(strokes.len());
-    for s in strokes.drain(..) {
-        if s.points.len() == 1 {
-            if ((s.points[0].x - center.x).powi(2) + (s.points[0].y - center.y).powi(2)).sqrt() >= radius {
-                new_strokes.push(s);
-            }
-            continue;
-        }
-        let mut current_seg: Vec<StrokePoint> = Vec::new();
-        for p in s.points {
-            if ((p.x - center.x).powi(2) + (p.y - center.y).powi(2)).sqrt() >= radius {
-                current_seg.push(p);
-            } else if current_seg.len() >= 2 {
-                new_strokes.push(Stroke {
-                    points: std::mem::take(&mut current_seg),
-                    color: s.color,
-                    fill_color: None,
-                    base_width: s.base_width,
-                    is_vector: s.is_vector,
-                    brush_preset: s.brush_preset,
-                    opacity: s.opacity,
-                    brush_texture_id: s.brush_texture_id.clone(),
-                    tip_shape: s.tip_shape,
-                });
-            } else {
-                current_seg.clear();
-            }
-        }
-        if current_seg.len() >= 2 {
-            new_strokes.push(Stroke {
-                points: current_seg,
-                color: s.color,
-                fill_color: None,
-                base_width: s.base_width,
-                is_vector: s.is_vector,
-                brush_preset: s.brush_preset,
-                opacity: s.opacity,
-                brush_texture_id: s.brush_texture_id,
-                tip_shape: s.tip_shape,
-            });
-        }
-    }
-    *strokes = new_strokes;
-}
-
 fn build_geometric_stroke(kind: GeometricShapeKind, p0: egui::Pos2, p1: egui::Pos2, color: [u8; 4], width: f32) -> Stroke {
     let mut pts = Vec::new();
     match kind {
@@ -944,7 +900,9 @@ fn build_geometric_stroke(kind: GeometricShapeKind, p0: egui::Pos2, p1: egui::Po
         GeometricShapeKind::Square => {
             let (dx, dy) = (p1.x - p0.x, p1.y - p0.y);
             let side = dx.abs().max(dy.abs());
-            let (sx, sy) = (p0.x + side * dx.signum(), p0.y + side * dy.signum());
+            let sx_dir = if dx < 0.0 { -1.0 } else { 1.0 };
+            let sy_dir = if dy < 0.0 { -1.0 } else { 1.0 };
+            let (sx, sy) = (p0.x + side * sx_dir, p0.y + side * sy_dir);
             for c in [egui::pos2(p0.x, p0.y), egui::pos2(sx, p0.y), egui::pos2(sx, sy), egui::pos2(p0.x, sy), egui::pos2(p0.x, p0.y)] {
                 pts.push(StrokePoint { x: c.x, y: c.y, pressure: 1.0 });
             }
@@ -1051,6 +1009,8 @@ struct StickApp {
     brush_color: [u8; 4],
     stage_bg_color: [u8; 4],
     brush_size: f32,
+    bucket_gap_close: f32,
+    bucket_reference_all_layers: bool,
     brush_tip_shape: BrushTipShape,
     zoom_level: f32,
     pan_offset: egui::Vec2,
@@ -1182,6 +1142,8 @@ impl StickApp {
             brush_color: [0, 0, 0, 255],
             stage_bg_color: [255, 255, 255, 255],
             brush_size: 7.0,
+            bucket_gap_close: 3.0,
+            bucket_reference_all_layers: false,
             brush_tip_shape: BrushTipShape::Round,
             zoom_level: 0.75,
             pan_offset: egui::Vec2::ZERO,
@@ -2535,9 +2497,23 @@ impl StickApp {
                 });
                 ui.add(egui::Slider::new(&mut self.canvas_rotation_deg, -180.0..=180.0));
             }
-            ActiveToolUI::Bucket | ActiveToolUI::Eyedropper => {
-                ui.strong(tr(lang, "Fill & Picker (Solid Color)", "لون التعبئة (Solid)"));
+            ActiveToolUI::Bucket => {
+                ui.strong(tr(lang, "Paint Bucket • Bounded Regions", "الدلو • تلوين المساحات المقفولة"));
                 ui.color_edit_button_srgba_unmultiplied(&mut self.brush_color);
+                ui.add(egui::Slider::new(&mut self.bucket_gap_close, 0.0..=12.0)
+                    .text(tr(lang, "Close small gaps", "قفل الفجوات الصغيرة")));
+                ui.checkbox(&mut self.bucket_reference_all_layers,
+                    tr(lang, "Reference all visible layers", "استخدم حدود كل الليرات الظاهرة"));
+                ui.small(tr(lang,
+                    "Fill follows the visible enclosed area and grows slightly under outlines. Lower gap tolerance if adjacent regions merge.",
+                    "الدلو بيلون المنطقة المقفولة ويمد اللون تحت الخط عشان ميعملش حواف بيضا. قلل قفل الفجوات لو منطقتين اتصلوا ببعض."));
+            }
+            ActiveToolUI::Eyedropper => {
+                ui.strong(tr(lang, "Eyedropper • Pick Fill / Line", "القطّارة • لون التعبئة أو الخط"));
+                ui.color_edit_button_srgba_unmultiplied(&mut self.brush_color);
+                ui.small(tr(lang,
+                    "Click any visible colored stroke or filled region on the active layer.",
+                    "اضغط على خط أو مساحة متلونة في اللير الحالي لاختيار لونها."));
             }
         }
     }
@@ -4656,25 +4632,42 @@ impl eframe::App for StickApp {
                             // Existing exact vector-contour fill takes priority. If the
                             // region is drawn using many brush strokes or intersections,
                             // use a bounded raster wall mask + traced vector region.
-                            let (can_fill, fallback) = self.project.layers.get(self.active_layer_idx)
-                                .map(|l| {
-                                    let evaluated = self.project.evaluate_layer_at_frame(l, self.current_frame);
-                                    // The enclosed pixel region takes precedence over a
-                                    // closed outer shape when there are interior dividers.
-                                    let polygon = fill_tools::flood_fill_polygon(
-                                        &evaluated.strokes, (stage_pos.x, stage_pos.y),
-                                        (self.project.width as f32, self.project.height as f32), 1.4);
-                                    let direct = polygon.is_none() && fill_tools::can_fill_contour(
-                                        &evaluated.strokes, stage_pos.x, stage_pos.y);
-                                    (direct, polygon)
-                                }).unwrap_or((false, None));
+                            // Optionally fill an active color layer using the combined
+                            // visible outlines, as in modern 2D painting workflows.
+                            let reference_strokes: Vec<Stroke> = if self.bucket_reference_all_layers {
+                                self.project.layers.iter()
+                                    .filter(|layer| layer.visible && !layer.is_guide)
+                                    .flat_map(|layer|
+                                        self.project.evaluate_layer_at_frame(layer, self.current_frame).strokes)
+                                    .collect()
+                            } else {
+                                self.project.layers.get(self.active_layer_idx)
+                                    .map(|layer|
+                                        self.project.evaluate_layer_at_frame(layer, self.current_frame).strokes)
+                                    .unwrap_or_default()
+                            };
+                            let fallback = fill_tools::flood_fill_polygon(
+                                &reference_strokes, (stage_pos.x, stage_pos.y),
+                                (self.project.width as f32, self.project.height as f32),
+                                self.bucket_gap_close);
+                            let can_fill = !self.bucket_reference_all_layers
+                                && fallback.is_none()
+                                && fill_tools::can_fill_contour(
+                                    &reference_strokes, stage_pos.x, stage_pos.y);
                             if can_fill || fallback.is_some() {
                                 self.save_undo_state();
                                 self.ensure_editable_keyframe();
                                 if let Some(l) = self.project.layers.get_mut(self.active_layer_idx) {
                                     if let Some(f) = l.keyframes.get_mut(&self.current_frame) {
                                         if fallback.map(|points| {
-                                            f.strokes.insert(0, fill_tools::polygon_fill_stroke(
+                                            // Re-filling an existing region must visibly
+                                            // override the previous fill while staying below
+                                            // every outline. Previously insert(0) hid new
+                                            // colors beneath older fill-only elements.
+                                            let insert_at = f.strokes.iter().rposition(|s|
+                                                s.color[3] == 0 && s.fill_color.is_some())
+                                                .map(|i| i + 1).unwrap_or(0);
+                                            f.strokes.insert(insert_at, fill_tools::polygon_fill_stroke(
                                                 points, self.brush_color));
                                             true
                                         }).unwrap_or(false)
@@ -4695,25 +4688,43 @@ impl eframe::App for StickApp {
                             self.ensure_editable_keyframe();
                             if let Some(l) = self.project.layers.get_mut(self.active_layer_idx) {
                                 if let Some(f) = l.keyframes.get_mut(&self.current_frame) {
-                                    let r = self.brush_size;
-                                    if self.active_tool_ui == ActiveToolUI::EraserRed {
-                                        f.strokes.retain(|s| !s.points.iter().any(|p| ((p.x - stage_pos.x).powi(2) + (p.y - stage_pos.y).powi(2)).sqrt() < r));
+                                    let r = self.brush_size.max(2.0);
+                                    let previous = if pointer_pressed {
+                                        stage_pos
                                     } else {
-                                        erase_partial_from_strokes(&mut f.strokes, stage_pos, r);
+                                        self.last_pointer_pos.map(&to_stage).unwrap_or(stage_pos)
+                                    };
+                                    // Interpolate along quick mouse/tablet drags. The old
+                                    // point-only eraser left gaps between input frames.
+                                    let distance = previous.distance(stage_pos);
+                                    let steps = (distance / (r * 0.5).max(2.0))
+                                        .ceil().clamp(1.0, 80.0) as usize;
+                                    let mut changed = false;
+                                    for step in 0..=steps {
+                                        let sample = previous.lerp(stage_pos, step as f32 / steps as f32);
+                                        changed |= if self.active_tool_ui == ActiveToolUI::EraserRed {
+                                            eraser_tools::erase_whole(
+                                                &mut f.strokes, (sample.x, sample.y), r)
+                                        } else {
+                                            eraser_tools::erase_partial(
+                                                &mut f.strokes, (sample.x, sample.y), r)
+                                        };
                                     }
-                                    self.has_unsaved_changes = true;
+                                    if changed { self.has_unsaved_changes = true; }
                                 }
                             }
                         }
                         ActiveToolUI::Eyedropper if pointer_pressed => {
-                            if let Some(l) = self.project.layers.get(self.active_layer_idx) {
-                                let f = self.project.evaluate_layer_at_frame(l, self.current_frame);
-                                for s in &f.strokes {
-                                    if s.points.iter().any(|p| ((p.x - stage_pos.x).powi(2) + (p.y - stage_pos.y).powi(2)).sqrt() < 15.0) {
-                                        self.brush_color = s.color;
-                                        break;
-                                    }
-                                }
+                            let picked = self.project.layers.iter()
+                                .filter(|layer| layer.visible && !layer.is_guide)
+                                .find_map(|layer| {
+                                    let evaluated = self.project.evaluate_layer_at_frame(
+                                        layer, self.current_frame);
+                                    selection_tools::pick_color(
+                                        &evaluated.strokes, stage_pos, (5.0 / scale).max(1.0))
+                                });
+                            if let Some(color) = picked {
+                                self.brush_color = color;
                             }
                         }
                         ActiveToolUI::VectorPen if pointer_down => {
@@ -4812,9 +4823,9 @@ impl eframe::App for StickApp {
                                         .find(|(_, text)| selection_tools::text_bounds(text).contains(stage_pos))
                                         .map(|(index, _)| index);
                                     if self.selected_text_item_index.is_none() {
-                                        let hit = egui::Rect::from_center_size(stage_pos, egui::vec2(12.0, 12.0));
                                         if let Some((index, _)) = frame.strokes.iter().enumerate().rev()
-                                            .find(|(_, stroke)| selection_tools::stroke_intersects_marquee(stroke, hit)) {
+                                            .find(|(_, stroke)| selection_tools::stroke_hit_test(
+                                                stroke, stage_pos, (6.0 / scale).max(1.0))) {
                                             self.selected_stroke_indices.push(index);
                                         }
                                     }
@@ -4922,6 +4933,21 @@ impl eframe::App for StickApp {
                     }
                 }
                 if let Some(mut stroke) = self.current_stroke.take() {
+                    // Keep the actual pointer-up endpoint so stabilized brush
+                    // strokes don't visibly stop short or leave a tiny loop gap.
+                    if !stroke.is_vector {
+                        if let Some(pointer) = pointer_pos.filter(|p| canvas_rect.contains(*p)) {
+                            let last_stage = to_stage(pointer);
+                            if stroke.points.last().is_some_and(|p|
+                                (p.x-last_stage.x).hypot(p.y-last_stage.y)>0.75) {
+                                let pressure = stroke.points.last()
+                                    .map(|p| p.pressure).unwrap_or(1.0);
+                                stroke.points.push(StrokePoint {
+                                    x: last_stage.x, y: last_stage.y, pressure
+                                });
+                            }
+                        }
+                    }
                     if stroke.is_vector {
                         stroke.simplify_vector_nodes(2.2);
                         stroke.fit_cubic_bezier_spline(8);
@@ -5255,6 +5281,35 @@ mod tool_discovery_tests {
         let mut config = AppConfig::default();
         config.tool_brush = "J".to_string();
         assert_eq!(tool_shortcut(ActiveToolUI::Brush, &config), "J");
+    }
+
+    #[test]
+    fn geometric_tools_generate_finite_closed_shapes() {
+        let from = egui::pos2(20.0, 25.0);
+        let to = egui::pos2(130.0, 145.0);
+        for kind in [
+            GeometricShapeKind::Circle, GeometricShapeKind::Square,
+            GeometricShapeKind::Rectangle, GeometricShapeKind::Triangle,
+            GeometricShapeKind::Pentagon
+        ] {
+            let shape = build_geometric_stroke(kind,from,to,[220,10,10,255],5.0);
+            assert!(shape.points.len()>=4);
+            let first=&shape.points[0];
+            let last=shape.points.last().unwrap();
+            assert!((first.x-last.x).abs() < 0.1 && (first.y-last.y).abs() < 0.1);
+            assert!(shape.points.iter().all(|p|p.x.is_finite()&&p.y.is_finite()));
+            assert!(fill_tools::contour_contains(&shape,75.0,83.0));
+        }
+    }
+
+    #[test]
+    fn squares_have_real_area_even_for_purely_vertical_drag() {
+        let square=build_geometric_stroke(
+            GeometricShapeKind::Square,
+            egui::pos2(50.0,20.0),egui::pos2(50.0,80.0),[0,0,0,255],3.0);
+        let xs: Vec<_>=square.points.iter().map(|p|p.x).collect();
+        assert!(xs.iter().copied().fold(f32::NEG_INFINITY,f32::max)
+            -xs.iter().copied().fold(f32::INFINITY,f32::min)>50.0);
     }
 
     #[test]

@@ -14,6 +14,10 @@
 - **Known boundaries:** bucket fill operates on recognized closed stroke contours (now with improved near-closure tolerance), not arbitrary raster flood fill. Imported artwork/text still needs further parity tests for every transform. No Krita GPL code is copied into Stick.
 
 ### What's new
+- **Tools reliability sprint (all 13 toolbar tools reviewed):** Bucket now fills enclosed complex/concave freehand loops with proper tessellation, grows color beneath visible outlines to avoid white halos, supports small ink-edge clicks, and exposes adjustable gap closure and optional all-visible-layer reference. Redrawing the same region changes its color on top of older fills.
+- **Erasers:** complete eraser detects long stroke segments even without nearby vertices; partial eraser clips lines at exact intersection points and both erasers sweep over fast pointer paths.
+- **Selection & Eyedropper:** precise geometry hit tests replace overly broad bounding boxes; eyedropper picks actual fill/line colors from the frontmost visible layer.
+- **Brush & Shapes:** stabilized strokes now retain the pointer-up endpoint; square drawing no longer collapses on perfectly vertical drags. Added comprehensive regression tests; see TOOLS_AUDIT_2026_11_17.md. Windows GUI/physical stylus QA still pending.
 - **Friends online (optional Tailscale):** join a room hosted on your friend's own PC from a different Internet connection. Detect the local Tailscale 100.x address, list rooms from visible online tailnet peers using unicast discovery and copy a host address for direct joining. Requires the separately installed Tailscale client and permission to access the host; not a central public room service.
 - **Free Transform:** 22px resize hit radii and 21px rotate hit radius, constant in screen coordinates across zoom; all four corners now resize from their opposite anchors. The handles are slightly easier to see.
 - **Error guidance:** connection-refused diagnostics distinguish LAN-only addresses from remote Tailscale routes.
@@ -84,6 +88,10 @@
 - **القيود الحالية:** الدلو بيلون المسارات المقفولة اللي بيتعرف عليها، ولسه مش Flood Fill كامل على أي سطح Raster. لم يتم نسخ أكواد Krita الخاضعة لترخيص GPL.
 
 ### إيه الجديد؟
+- **تحديث تطوير أدوات الرسم:** راجعنا الأدوات الـ13؛ أصلحنا الدلو مع الحلقات والخطوط المتقاطعة والأشكال المقعّرة، وخفّفنا الفراغات البيضا بين التلوين وحدود الخط. اتضاف قفل فجوات قابل للتعديل وخيار استخدام حدود كل الليرات الظاهرة.
+- **الممحاة الكاملة والجزئية:** بقوا بيحسبوا تقاطع الممحاة مع الخط نفسه وبيمسحوا أثناء الحركة السريعة، حتى لو مفيش نقاط خط تحت المؤشر بالضبط.
+- **التحديد والقطارة:** الضغط على الخطوط بقى أدق، والقطارة بتجيب ألوان الخط أو التعبئة من أعلى لاير ظاهر.
+- **الفرشة والأشكال:** الاحتفاظ بنهاية حركة الفرشة، ومنع المربعات الفاضية لو سحبت بشكل عمودي تمامًا. اختبارات الآلية اتوسعت، ولسه مطلوب تجربة الواجهة الحقيقية.
 - **اللعب مع أصحابك على نت مختلف:** دعم Tailscale اختياري من غير بورت فوروارد. برنامج Stick بيكتشف عنوان 100.x الخاص بجهازك والغرف اللي يقدر يوصل لها على شبكة Tailscale، وبيسمح بنسخ عنوان الهوست للانضمام المباشر. يلزم تنزيل Tailscale وتسجيل الدخول والسماح للأصحاب بالوصول للجهاز؛ مش سيرفر غرف عالمي.
 - **أداة التحويل:** تكبير مساحة الضغط غير المرئية للمقابض وتثبيتها مع الزوم، مع تفعيل الأربع زوايا للتكبير والتصغير بدل زاوية واحدة. تكبير المقابض المرئية بشكل بسيط.
 - **اتصال الأونلاين:** رسائل مساعدة أوضح لخطأ 10061 ولما المستخدم يحاول يستخدم عنوان LAN بعيد عن البيت.

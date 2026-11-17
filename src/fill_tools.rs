@@ -254,29 +254,94 @@ pub fn flood_fill_polygon(
     let iy = py.floor() as usize;
     if ix >= w || iy >= h { return None; }
     let seed = iy*w+ix;
-    // Clicking the contour itself is ambiguous. Old contour fill handles it.
-    if wall[seed] { return None; }
-    let mut visited = vec![false; size];
-    let mut queue = VecDeque::new();
-    visited[seed] = true;
-    queue.push_back(seed);
-    let mut hits_edge = false;
-    let mut count = 0usize;
-    while let Some(index) = queue.pop_front() {
-        count += 1;
+    // Clicking on thick ink is common with small freehand loops. Search for
+    // a nearby interior component, but NEVER turn the exterior into a fill.
+    let mut candidates = Vec::new();
+    if wall[seed] {
+        let radius = ((gap.clamp(0.0,14.0)+9.0)/cell).ceil().clamp(2.0,22.0) as isize;
+        for dy in -radius..=radius {
+            for dx in -radius..=radius {
+                if dx*dx+dy*dy>radius*radius { continue; }
+                let x=ix as isize+dx;
+                let y=iy as isize+dy;
+                if x<2 || y<2 || x>=w as isize-2 || y>=h as isize-2 {continue;}
+                let index=y as usize*w+x as usize;
+                if !wall[index] {candidates.push(((dx*dx+dy*dy) as usize,index));}
+            }
+        }
+        candidates.sort_unstable_by_key(|&(distance,_)| distance);
+    } else {
+        candidates.push((0,seed));
+    }
+    if candidates.is_empty() { return None; }
+    let mut rejected = vec![false;size];
+    let mut selected=None;
+    for (_,candidate) in candidates {
+        if rejected[candidate] { continue; }
+        let mut visited=vec![false;size];
+        let mut queue=VecDeque::new();
+        visited[candidate]=true;
+        queue.push_back(candidate);
+        let mut hits_edge=false;
+        let mut count=0usize;
+        while let Some(index)=queue.pop_front() {
+            count+=1;
+            let x=index%w;
+            let y=index/w;
+            if x<=1 || y<=1 || x>=w-2 || y>=h-2 {
+                hits_edge=true;
+            }
+            if x==0 || y==0 || x+1>=w || y+1>=h {continue;}
+            for next in [index-1,index+1,index-w,index+w] {
+                if !wall[next] && !visited[next] {
+                    visited[next]=true;
+                    queue.push_back(next);
+                }
+            }
+        }
+        if !hits_edge && count>=8 {
+            selected=Some(visited);
+            break;
+        }
+        for (index,&was_seen) in visited.iter().enumerate() {
+            if was_seen {rejected[index]=true;}
+        }
+    }
+    let visited=selected?;
+
+    // Krita/AniCraft-style fill growth under drawn linework. The wall mask
+    // includes a gap-closing dilation. Tracing the bare transparent area
+    // leaves a white hairline between the color and the visible brush.
+    // Grow the selected component INTO wall cells only, never into another
+    // transparent component: a center divider therefore remains a barrier.
+    let grow_steps = ((gap.clamp(0.0, 14.0) + 1.5) / cell).ceil()
+        .clamp(1.0, 20.0) as usize;
+    let mut covered = visited.clone();
+    let mut boundary = VecDeque::<(usize, usize)>::new();
+    for index in 0..size {
+        if !visited[index] { continue; }
         let x = index % w;
         let y = index / w;
-        if x <= 1 || y <= 1 || x >= w - 2 || y >= h - 2 {
-            hits_edge = true; break;
-        }
-        for next in [index-1,index+1,index-w,index+w] {
-            if !wall[next] && !visited[next] {
-                visited[next] = true;
-                queue.push_back(next);
+        if x == 0 || y == 0 || x + 1 >= w || y + 1 >= h { continue; }
+        for next in [index - 1, index + 1, index - w, index + w] {
+            if wall[next] && !covered[next] {
+                covered[next] = true;
+                boundary.push_back((next, 1));
             }
         }
     }
-    if hits_edge || count < 8 { return None; }
+    while let Some((index, distance)) = boundary.pop_front() {
+        if distance >= grow_steps { continue; }
+        let x = index % w;
+        let y = index / w;
+        if x == 0 || y == 0 || x + 1 >= w || y + 1 >= h { continue; }
+        for next in [index - 1, index + 1, index - w, index + w] {
+            if wall[next] && !covered[next] {
+                covered[next] = true;
+                boundary.push_back((next, distance + 1));
+            }
+        }
+    }
 
     // Build clockwise edges of the flooded pixels. The topmost edge is on
     // the outside perimeter; secondary loops (holes) remain undisturbed.
@@ -285,7 +350,7 @@ pub fn flood_fill_polygon(
     let mut edge_count = 0usize;
     for y in 2..h-2 {
         for x in 2..w-2 {
-            if !visited[y*w+x] { continue; }
+            if !covered[y*w+x] { continue; }
             let x = x as i32;
             let y = y as i32;
             let pos = (y as usize)*w+(x as usize);
@@ -293,10 +358,10 @@ pub fn flood_fill_polygon(
                 edges.entry(from).or_default().push(to);
                 edge_count += 1;
             };
-            if !visited[pos-w] { add((x,y),(x+1,y)); }
-            if !visited[pos+1] { add((x+1,y),(x+1,y+1)); }
-            if !visited[pos+w] { add((x+1,y+1),(x,y+1)); }
-            if !visited[pos-1] { add((x,y+1),(x,y)); }
+            if !covered[pos-w] { add((x,y),(x+1,y)); }
+            if !covered[pos+1] { add((x+1,y),(x+1,y+1)); }
+            if !covered[pos+w] { add((x+1,y+1),(x,y+1)); }
+            if !covered[pos-1] { add((x,y+1),(x,y)); }
         }
     }
     if edge_count < 8 || edge_count > 70_000 { return None; }
@@ -441,6 +506,63 @@ mod tests {
         ];
         assert!(flood_fill_polygon(&lines,(34.,34.),(120.,120.),1.0).is_none());
     }
+    #[test]
+    fn bucket_fills_one_lobe_of_self_crossing_doodle_only() {
+        // Two touching loops drawn as a single, continuous freehand stroke.
+        let mut doodle=shape(&[
+            (110.,110.),(145.,75.),(180.,110.),(145.,145.),(110.,110.),
+            (75.,75.),(40.,110.),(75.,145.),(110.,110.)
+        ]);
+        doodle.is_vector=false;
+        doodle.base_width=5.0;
+        let polygon=flood_fill_polygon(&[doodle],(155.,110.),(220.,220.),2.0)
+            .expect("right lobe of the doodle is enclosed");
+        let fill=polygon_fill_stroke(polygon,[240,120,40,255]);
+        assert!(contour_contains(&fill,155.,110.));
+        assert!(!contour_contains(&fill,65.,110.),
+            "the crossing must not spill into the second enclosed lobe");
+    }
+
+    #[test]
+    fn bucket_closes_small_brush_gaps_without_flooding_the_canvas() {
+        let outline=vec![
+            shape(&[(24.,25.),(110.,25.),(110.,110.),(25.,110.),(25.,31.)])
+        ];
+        let polygon=flood_fill_polygon(&outline,(65.,60.),(140.,140.),3.5)
+            .expect("a 6px endpoint gap is within closure tolerance");
+        let fill=polygon_fill_stroke(polygon,[40,180,90,255]);
+        assert!(contour_contains(&fill,65.,60.));
+        assert!(!contour_contains(&fill,9.,60.));
+    }
+
+    #[test]
+    fn bucket_finds_interior_when_user_clicks_ink_at_small_loop_edge() {
+        let mut stroke = shape(&[(35.,35.),(95.,35.),(95.,95.),
+                                 (35.,95.),(35.,35.)]);
+        stroke.base_width = 8.0;
+        // The tap is at x=35 (on top of the contour), not well inside it.
+        let polygon=flood_fill_polygon(&[stroke],(35.,60.),(130.,130.),2.5)
+            .expect("neighbor interior should still be fillable");
+        let fill=polygon_fill_stroke(polygon,[240,30,60,255]);
+        assert!(contour_contains(&fill,65.,65.));
+        assert!(!contour_contains(&fill,15.,60.));
+    }
+
+    #[test]
+    fn bucket_grows_color_beneath_visible_ink_without_leaking_outside() {
+        let mut border = shape(&[(25.,25.),(140.,25.),(140.,140.),
+                                  (25.,140.),(25.,25.)]);
+        border.base_width = 8.0;
+        let polygon = flood_fill_polygon(&[border],(80.,80.),(180.,180.),3.5)
+            .expect("enclosed area");
+        let filled = polygon_fill_stroke(polygon,[200,80,20,255]);
+        // The inside half of the 8px line must be filled *under* the ink.
+        assert!(contour_contains(&filled,28.0,70.0),
+            "filling should not leave a white halo just inside the outline");
+        assert!(!contour_contains(&filled,17.0,70.0),
+            "color must not escape outside the contour");
+    }
+
     #[test]
     fn divided_circle_fills_only_the_clicked_half() {
         // The outer closed contour is one stroke. A separate diameter
