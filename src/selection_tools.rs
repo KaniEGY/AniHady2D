@@ -82,6 +82,55 @@ pub fn rotate_points_around(stroke: &mut Stroke, pivot: egui::Pos2, angle_rad: f
     }
 }
 
+/// Exact stroke/region hit-testing instead of using a whole stroke's
+/// bounding rectangle. Especially important for diagonal lines and curves
+/// whose large bounding boxes contain lots of blank canvas.
+pub fn stroke_hit_test(stroke: &Stroke, cursor: egui::Pos2, slop: f32) -> bool {
+    if !cursor.x.is_finite() || !cursor.y.is_finite()
+        || stroke.points.is_empty()
+        || stroke.points.iter().any(|p| !p.x.is_finite() || !p.y.is_finite()) {
+        return false;
+    }
+    let radius = (stroke.base_width.abs() * 0.5 + slop.max(0.0)).max(0.5);
+    let r_sq = radius * radius;
+    let pt = &stroke.points[0];
+    if stroke.points.len() == 1 {
+        return (pt.x - cursor.x).powi(2) + (pt.y - cursor.y).powi(2) <= r_sq;
+    }
+    for segment in stroke.points.windows(2) {
+        let (a,b)=(&segment[0],&segment[1]);
+        let dx=b.x-a.x;
+        let dy=b.y-a.y;
+        let len_sq=dx*dx+dy*dy;
+        let t=if len_sq>1e-8 {
+            ((cursor.x-a.x)*dx+(cursor.y-a.y)*dy)/len_sq
+        } else {0.0}.clamp(0.0,1.0);
+        if (cursor.x - (a.x+t*dx)).powi(2)
+          + (cursor.y - (a.y+t*dy)).powi(2) <= r_sq {
+            return true;
+        }
+    }
+    stroke.fill_color.is_some() &&
+        crate::fill_tools::contour_contains(stroke, cursor.x, cursor.y)
+}
+
+/// Pick the visually relevant outline or fill color from the nearest topmost
+/// touched stroke. Fill-only regions have transparent outlines; these should
+/// return their fill color instead of transparent black.
+pub fn pick_color(strokes: &[Stroke], cursor: egui::Pos2, slop: f32) -> Option<[u8;4]> {
+    for stroke in strokes.iter().rev() {
+        if stroke.color[3] > 0 && stroke_hit_test(stroke, cursor, slop) {
+            return Some(stroke.color);
+        }
+        if let Some(fill) = stroke.fill_color {
+            if crate::fill_tools::contour_contains(stroke, cursor.x, cursor.y) {
+                return Some(fill);
+            }
+        }
+    }
+    None
+}
+
 /// Return the nearest editable vertex on any vector stroke within a
 /// stage-space radius; brush raster paths are intentionally not node-edited.
 pub fn nearest_vector_node(
@@ -141,6 +190,31 @@ mod tests {
             opacity: 1.0, brush_texture_id: None, tip_shape: crate::project::BrushTipShape::Round,
         }
     }
+    #[test]
+    fn select_click_rejects_diagonal_line_bounding_box_false_positive() {
+        let s=stroke(0.,0.,100.,100.);
+        assert!(!stroke_hit_test(&s,egui::pos2(50.,85.),3.));
+        assert!(stroke_hit_test(&s,egui::pos2(50.,51.),3.));
+    }
+
+    #[test]
+    fn eyedropper_uses_segments_and_opaque_fill_colors() {
+        let mut s=stroke(0.,0.,100.,100.);
+        s.color=[22,44,66,255];
+        assert_eq!(pick_color(&[s],egui::pos2(70.,71.),3.),Some([22,44,66,255]));
+        let mut filled=stroke(0.,0.,100.,0.);
+        filled.points=vec![
+            crate::project::StrokePoint{x:10.,y:10.,pressure:1.},
+            crate::project::StrokePoint{x:100.,y:10.,pressure:1.},
+            crate::project::StrokePoint{x:100.,y:100.,pressure:1.},
+            crate::project::StrokePoint{x:10.,y:100.,pressure:1.},
+            crate::project::StrokePoint{x:10.,y:10.,pressure:1.}
+        ];
+        filled.color=[0,0,0,0];
+        filled.fill_color=Some([240,70,10,255]);
+        assert_eq!(pick_color(&[filled],egui::pos2(40.,45.),3.),Some([240,70,10,255]));
+    }
+
     #[test]
     fn marquee_selects_crossing_strokes_with_outside_endpoints() {
         let rect = egui::Rect::from_min_max(egui::pos2(5.0,5.0), egui::pos2(20.0,20.0));
