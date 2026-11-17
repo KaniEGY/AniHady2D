@@ -44,3 +44,9 @@ Stick Online extends the existing Drawing and Animation editors. It does not req
 - [ ] Confirm no attempt is made to contact an official Stick server.
 
 The GitHub Actions unit test and release build checks do not replace this two-PC GUI/network test.
+
+## Room codes and roster (protocol v2)
+- The host displays a copyable eight-digit **LAN room identifier**. Guests on the same LAN refresh the list, select the room or enter its code. For remote networks a code by itself **cannot** discover the host without a rendezvous service; use public reachable IPv4:47554 and port forwarding.
+- Host and guest advertise display names and local, unverified progression levels. Each connected guest is assigned a distinct UI accent from the per-room palette. This is NOT cloud identity, anti-cheat or Google account linking.
+- A new room now hosts the currently open project rather than wiping it to a blank canvas. Save/Export local copies via the normal Stick file actions. Other operations besides committed strokes are NOT fully synchronized.
+- Protocol v2 is intentionally incompatible with older Stick online beta builds. All participants must upgrade to this version.
