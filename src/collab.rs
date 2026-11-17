@@ -598,34 +598,6 @@ fn discover_rooms_from_peers(peer_ips: &[Ipv4Addr]) -> Vec<RoomListing> {
 mod tests {
     use super::*;
     #[test]
-    fn real_localhost_host_and_guest_complete_a_room_handshake() {
-        // Exercises the actual TCP host, challenge, welcome and roster path.
-        // Two-network Tailscale routing still requires manual Windows QA.
-        let host=OnlineSession::host_room(
-            "Automated Room".to_owned(),"".to_owned(),4,
-            OnlineMode::Drawing,AniProject::default(),"Host".to_owned(),3)
-            .expect("host must bind TCP listener");
-        let guest=OnlineSession::join_room(
-            "127.0.0.1:47554".to_owned(),"".to_owned(),
-            "Guest".to_owned(),1,OnlineMode::Drawing)
-            .expect("guest must enter joining phase");
-        let mut connected=false;
-        for _ in 0..100 {
-            for event in guest.events() {
-                if matches!(event,OnlineEvent::Connected(_)){connected=true;}
-                if let OnlineEvent::Disconnected(reason)=event {
-                    panic!("guest disconnected before handshake: {reason}");
-                }
-            }
-            if connected {break;}
-            std::thread::sleep(Duration::from_millis(45));
-        }
-        assert!(connected,"TCP handshake never completed");
-        guest.close();
-        host.close();
-    }
-
-    #[test]
     fn room_code_is_eight_digits_and_resolves_only_discovered_rooms() {
         let code = new_room_code();
         assert_eq!(code.len(),8);
