@@ -145,16 +145,17 @@ pub fn draw_stroke_pro<F: Fn(egui::Pos2) -> egui::Pos2>(
             .iter()
             .map(|p| to_screen(egui::pos2(p.x + ox, p.y + oy)))
             .collect();
-        painter.add(egui::Shape::convex_polygon(
-            pts,
+        // Region fills are often concave. Convex-only tessellation used
+        // to produce white seams and incorrect triangles in the live canvas.
+        if let Some(mesh) = crate::fill_render::solid_polygon_mesh(
+            &pts,
             egui::Color32::from_rgba_unmultiplied(
-                fill_c[0],
-                fill_c[1],
-                fill_c[2],
+                fill_c[0], fill_c[1], fill_c[2],
                 (fill_c[3] as f32 * combined_opacity) as u8,
             ),
-            egui::Stroke::NONE,
-        ));
+        ) {
+            painter.add(egui::Shape::mesh(mesh));
+        }
     }
 
     // Polygonal tips share their sampled geometry with PNG/video exports.
