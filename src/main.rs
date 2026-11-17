@@ -3263,6 +3263,7 @@ impl eframe::App for StickApp {
                 match self.active_tool_ui {
                     ActiveToolUI::Text => egui::CursorIcon::Text,
                     ActiveToolUI::Bucket | ActiveToolUI::ShapeLine
+                        | ActiveToolUI::VectorDirectSelect | ActiveToolUI::FreeTransform
                         | ActiveToolUI::SelectNormal | ActiveToolUI::SelectLasso
                         | ActiveToolUI::Eyedropper => egui::CursorIcon::Crosshair,
                     _ => egui::CursorIcon::Default,
@@ -3387,8 +3388,51 @@ impl eframe::App for StickApp {
                                 self.current_stroke = Some(Stroke { points: vec![StrokePoint { x: virt.x, y: virt.y, pressure: drawing_pressure }], color: self.brush_color, fill_color: None, base_width: self.brush_size, is_vector: false, brush_preset: self.active_krita_brush, opacity: self.brush_opacity, brush_texture_id: None });
                             }
                         }
+                        ActiveToolUI::VectorDirectSelect => {
+                            if pointer_pressed {
+                                self.selected_vector_node = self.project.layers.get(self.active_layer_idx)
+                                    .and_then(|layer| {
+                                        let frame = self.project.evaluate_layer_at_frame(layer, self.current_frame);
+                                        selection_tools::nearest_vector_node(
+                                            &frame.strokes, stage_pos, (14.0 / scale).max(2.0)
+                                        )
+                                    });
+                                if self.selected_vector_node.is_some() {
+                                    self.save_undo_state();
+                                }
+                            } else if pointer_down && delta.length_sq() > 0.0 {
+                                if let Some((stroke_index, node_index)) = self.selected_vector_node {
+                                    self.ensure_editable_keyframe();
+                                    if let Some(layer) = self.project.layers.get_mut(self.active_layer_idx) {
+                                        if let Some(frame) = layer.keyframes.get_mut(&self.current_frame) {
+                                            if let Some(stroke) = frame.strokes.get_mut(stroke_index) {
+                                                if let Some(node) = stroke.points.get_mut(node_index) {
+                                                    node.x += delta.x;
+                                                    node.y += delta.y;
+                                                    self.has_unsaved_changes = true;
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
                         ActiveToolUI::SelectNormal | ActiveToolUI::FreeTransform => {
                             if pointer_pressed {
+                                // In Free Transform, grab the bottom-right handle
+                                // to resize an existing multi-object selection.
+                                let resize_anchor = if self.active_tool_ui == ActiveToolUI::FreeTransform {
+                                    self.selected_canvas_bounds().and_then(|rect| {
+                                        if rect.max.distance(stage_pos) <= (16.0 / scale).max(4.0) {
+                                            Some(rect.min)
+                                        } else { None }
+                                    })
+                                } else { None };
+                                if let Some(anchor) = resize_anchor {
+                                    self.save_undo_state();
+                                    self.transform_drag_anchor = Some(anchor);
+                                } else {
+                                self.transform_drag_anchor = None;
                                 self.selected_stroke_indices.clear();
                                 self.selected_text_item_index = None;
                                 self.selection_rect_start = None;
@@ -3413,8 +3457,17 @@ impl eframe::App for StickApp {
                                 } else {
                                     self.save_undo_state();
                                 }
+                                } // finished regular selection; otherwise grabbed transform handle
                             } else if pointer_down {
-                                if self.selection_rect_start.is_some() {
+                                if let Some(anchor) = self.transform_drag_anchor {
+                                    if let Some(previous) = self.last_pointer_pos {
+                                        let previous_stage = to_stage(previous);
+                                        let old_length = previous_stage.distance(anchor).max(1.0);
+                                        let new_length = stage_pos.distance(anchor).max(1.0);
+                                        self.resize_selection_from_corner(anchor,
+                                            (new_length / old_length).clamp(0.4, 2.5));
+                                    }
+                                } else if self.selection_rect_start.is_some() {
                                     self.selection_rect_current = Some(stage_pos);
                                 } else if delta.length_sq() > 0.0 {
                                     if self.selected_text_item_index.is_some() || !self.selected_stroke_indices.is_empty() {
@@ -3462,6 +3515,7 @@ impl eframe::App for StickApp {
             }
 
             if pointer_released {
+                self.transform_drag_anchor = None;
                 if let (Some(start), Some(end)) = (
                     self.selection_rect_start.take(), self.selection_rect_current.take()
                 ) {
