@@ -133,10 +133,21 @@ pub fn level_up_sound_variant(level: u32, xp: u64, seed: u64) -> u8 {
     (seed.wrapping_add(xp).wrapping_add(level as u64 * 131) % 100) as u8
 }
 
+fn profile_paths() -> Vec<std::path::PathBuf> {
+    let mut paths = Vec::new();
+    if let Some(base) = std::env::var_os("LOCALAPPDATA") {
+        paths.push(std::path::PathBuf::from(base).join("StickStudio").join("user_profile.json"));
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        paths.push(exe.with_file_name("user_profile.json"));
+    }
+    paths
+}
+
 impl UserProfile {
     pub fn load() -> Self {
-        if let Ok(exe) = std::env::current_exe() {
-            if let Ok(data) = std::fs::read_to_string(exe.with_file_name("user_profile.json")) {
+        for path in profile_paths() {
+            if let Ok(data) = std::fs::read_to_string(path) {
                 if let Ok(parsed) = serde_json::from_str(&data) { return parsed; }
             }
         }
@@ -144,9 +155,12 @@ impl UserProfile {
     }
 
     pub fn save(&self) {
-        if let Ok(exe) = std::env::current_exe() {
-            if let Ok(json) = serde_json::to_string_pretty(self) {
-                let _ = std::fs::write(exe.with_file_name("user_profile.json"), json);
+        if let Ok(json) = serde_json::to_string_pretty(self) {
+            for path in profile_paths() {
+                if let Some(parent) = path.parent() {
+                    if std::fs::create_dir_all(parent).is_err() { continue; }
+                }
+                if std::fs::write(path, &json).is_ok() { break; }
             }
         }
     }
