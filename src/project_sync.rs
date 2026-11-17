@@ -137,8 +137,8 @@ pub fn apply_edits(project: &mut AniProject, ops: &[ProjectEdit]) -> Result<(), 
     if updated.layers.is_empty() || updated.layers.len() > 256 ||
         updated.width == 0 || updated.height == 0 ||
         updated.width > 16_384 || updated.height > 16_384 ||
-        updated.total_frames == 0 || updated.total_frames > 10_000 ||
-        updated.layers.iter().any(|l| l.keyframes.keys().any(|f| *f == 0 || *f > 10_000)) {
+        updated.total_frames == 0 || updated.total_frames > 20_000 ||
+        updated.layers.iter().any(|l| l.keyframes.keys().any(|f| *f == 0 || *f > 20_000)) {
         return Err("Invalid project dimensions, layers or frames".into());
     }
     *project = updated;
