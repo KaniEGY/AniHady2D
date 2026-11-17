@@ -651,6 +651,12 @@ impl AppConfig {
                     // Perspective overlays are tools, not saved project content.
                     // Never silently re-enable guides on the next launch.
                     parsed.perspective_mode = 0;
+                    // Existing installations may persist an empty OAuth ID,
+                    // overriding a newly configured public Desktop client ID
+                    // embedded in updated official releases.
+                    if parsed.cloud_google_client_id.trim().is_empty() {
+                        parsed.cloud_google_client_id = default_google_client_id();
+                    }
                     return parsed;
                 }
             }
@@ -3903,10 +3909,13 @@ impl eframe::App for StickApp {
                         ui.label(tr(lang,
                             "Connect through Google's official browser login. Stick never asks for your Google password.",
                             "سجّل دخولك من متصفح جوجل الرسمي. Stick مش بيطلب كلمة المرور."));
-                        if self.config.cloud_google_client_id.is_empty() {
+                        let oauth_ready = cloud_sync::oauth_client_is_configured(
+                            self.config.cloud_google_client_id.trim());
+                        if !oauth_ready {
                             ui.colored_label(egui::Color32::from_rgb(255,194,88),
-                                tr(lang,"Google login needs the app's OAuth Desktop Client ID from the developer.",
-                                    "تسجيل الدخول محتاج Google OAuth Desktop Client ID الخاص بالتطبيق من المطوّر."));
+                                tr(lang,
+                                    "Google login is not configured yet. The developer must create a Desktop OAuth client, enable Google Drive API, and set STICK_GOOGLE_CLIENT_ID in GitHub Actions. You can enter the public Desktop Client ID below.",
+                                    "تسجيل جوجل لسه محتاج إعداد من المطوّر: إنشاء OAuth Desktop، وتفعيل Google Drive API، وإضافة STICK_GOOGLE_CLIENT_ID في GitHub Actions. ممكن تحط الـ Client ID العام في الخانة تحت."));
                         }
                         ui.collapsing(tr(lang,"Developer OAuth setup","إعداد المطوّر لجوجل"),|ui|{
                             if ui.add(egui::TextEdit::singleline(&mut self.config.cloud_google_client_id)
@@ -3969,8 +3978,12 @@ impl eframe::App for StickApp {
                                     Err(err)=>self.cloud_message=err
                                 }
                             }
-                        } else if ui.add_enabled(self.cloud_job.is_none(),
-                            egui::Button::new(tr(lang,"Sign in with Google","تسجيل الدخول باستخدام جوجل"))).clicked(){
+                        } else if ui.add_enabled(self.cloud_job.is_none() && oauth_ready,
+                            egui::Button::new(tr(lang,"Sign in with Google","تسجيل الدخول باستخدام جوجل")))
+                                .on_hover_text(tr(lang,
+                                    "Requires a valid Google Desktop OAuth Client ID; no passwords are collected.",
+                                    "لازم Google OAuth Client ID سليم من نوع Desktop؛ مش بنطلب كلمة المرور."))
+                                .clicked(){
                             let client=self.config.cloud_google_client_id.trim().to_string();
                             self.cloud_job=Some(cloud_sync::spawn_job(move||{
                                 cloud_sync::sign_in(&client).map(cloud_sync::Event::SignedIn)
