@@ -22,7 +22,7 @@ const DISCOVER_REQUEST: &[u8] = b"STICK_STUDIO_LAN_DISCOVER_V1";
 const PROTOCOL: u16 = 3;
 const MAX_PACKET: usize = 8 * 1024 * 1024;
 const MAX_MEMBERS: usize = 12;
-const MAX_FRAME: usize = 10_000;
+const MAX_FRAME: usize = 20_000;
 
 #[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Debug)]
 pub enum OnlineMode { Drawing, Animation }
@@ -469,7 +469,9 @@ impl OnlineSession {
     pub fn sync_local_changes(&self, project: &AniProject) -> Result<(), String> {
         let mut baseline = self.baseline.lock().map_err(|_| "Project sync lock poisoned")?;
         let Some(known) = baseline.as_ref() else { return Ok(()); };
-        let edits = project_sync::diff_projects(known, project)?;
+        // Never transmit host/guest filesystem paths through incremental edits.
+        let edits = project_sync::diff_projects(
+            &public_project(known.clone()), &public_project(project.clone()))?;
         if edits.is_empty() { return Ok(()); }
         let packet = Packet::Edits { edits: edits.clone() };
         let encoded = serde_json::to_vec(&packet).map_err(|e| e.to_string())?;
