@@ -3172,6 +3172,34 @@ impl eframe::App for StickApp {
             });
         }
 
+        // Online status appears above the editor independently of customizable toolbars.
+        if let Some(session) = self.online_session.as_ref() {
+            let title = session.title.clone();
+            let address = session.address.clone();
+            let host = session.is_host;
+            let mut leave = false;
+            let mut resync = false;
+            egui::TopBottomPanel::top("online_room_status").show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    ui.colored_label(egui::Color32::from_rgb(60, 210, 160), tr(lang, "ONLINE", "أونلاين"));
+                    ui.label(format!("{}  •  {} online", title, self.online_members));
+                    if host {
+                        ui.label(format!("LAN {}", address));
+                        if ui.small_button(tr(lang, "Sync full project", "مزامنة المشروع بالكامل")).clicked() { resync = true; }
+                    }
+                    if ui.small_button(tr(lang, "Leave Room", "مغادرة الغرفة")).clicked() { leave = true; }
+                });
+            });
+            if resync {
+                if let Some(session) = self.online_session.as_ref() {
+                    session.resync_from_host(self.project.clone());
+                }
+            }
+            if leave {
+                if let Some(session) = self.online_session.take() { session.close(); }
+                self.workspace_mode = WorkspaceMode::Launcher;
+            }
+        }
         // الشريط العلوي
         if self.config.show_top_bar {
         egui::TopBottomPanel::top("top_bar").show(ctx, |ui| {
