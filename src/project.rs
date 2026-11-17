@@ -368,6 +368,9 @@ pub struct Layer {
     pub locked: bool,
     #[serde(default)]
     pub is_guide: bool,
+    /// Whether a real stroke has already earned this layer's one-time credit.
+    #[serde(default)]
+    pub xp_first_paint_rewarded: bool,
     #[serde(default = "default_pressure")]
     pub opacity: f32,
     #[serde(default)]
@@ -464,6 +467,9 @@ pub struct AniProject {
     pub library_symbols: HashMap<String, Symbol>,
     #[serde(default)]
     pub onion_skin: OnionSkinSettings,
+    /// Saved frame numbers already credited for profile XP.
+    #[serde(default)]
+    pub xp_credited_frames: Vec<usize>,
 }
 
 fn default_schema() -> u32 { PROJECT_SCHEMA_VERSION }
@@ -486,12 +492,14 @@ impl Default for AniProject {
                 visible: true,
                 locked: false,
                 is_guide: false,
+                xp_first_paint_rewarded: false,
                 opacity: 1.0,
                 keyframes,
             }],
             audio_tracks: Vec::new(),
             library_symbols: HashMap::new(),
             onion_skin: OnionSkinSettings::default(),
+            xp_credited_frames: Vec::new(),
         }
     }
 }
