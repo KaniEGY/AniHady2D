@@ -89,6 +89,47 @@ pub fn check_online(installed: &str) -> Result<Option<ReleaseInfo>, String> {
     parse_latest_release(&json, installed)
 }
 
+#[derive(Clone, Debug)]
+pub struct ArchivedRelease {
+    pub info: ReleaseInfo,
+    /// ISO-8601 publication time from GitHub's official Releases API.
+    pub published_at: String,
+}
+
+/// The GitHub Releases API is not always ordered by *publication date*.
+/// Only offer verified official older versions, not beta tags or draft builds.
+pub fn parse_rollback_history(json: &Value, installed: &str) -> Result<Vec<ArchivedRelease>, String> {
+    let releases = json.as_array().ok_or("GitHub returned an invalid releases list.")?;
+    let current = version_parts(installed)?;
+    let mut candidates = Vec::<ArchivedRelease>::new();
+    for release in releases {
+        if release.get("draft").and_then(Value::as_bool).unwrap_or(false)
+            || release.get("prerelease").and_then(Value::as_bool).unwrap_or(false) { continue; }
+        let Some(tag) = release.get("tag_name").and_then(Value::as_str) else { continue; };
+        let Ok(version) = version_parts(tag) else { continue; };
+        if version.cmp(&current) != Ordering::Less { continue; }
+        let Ok(Some(info)) = parse_latest_release(release, "0.0.0") else { continue; };
+        let Some(published_at) = release.get("published_at").and_then(Value::as_str) else { continue; };
+        if published_at.len() < 10 { continue; }
+        candidates.push(ArchivedRelease { info, published_at: published_at.to_owned() });
+    }
+    candidates.sort_by(|a, b| b.published_at.cmp(&a.published_at));
+    candidates.dedup_by(|a, b| a.info.version == b.info.version);
+    candidates.truncate(5);
+    Ok(candidates)
+}
+
+pub fn fetch_rollback_history(installed: &str) -> Result<Vec<ArchivedRelease>, String> {
+    let response = ureq::AgentBuilder::new()
+        .timeout(Duration::from_secs(25)).build()
+        .get("https://api.github.com/repos/KaniEGY/Stick/releases?per_page=100")
+        .set("User-Agent", "Stick-Studio-Updater")
+        .set("Accept", "application/vnd.github+json")
+        .call().map_err(|e| format!("Couldn't reach GitHub Releases: {e}"))?;
+    let json: Value = response.into_json().map_err(|e| format!("Invalid GitHub response: {e}"))?;
+    parse_rollback_history(&json, installed)
+}
+
 fn verify_pe_file(bytes: &[u8]) -> bool {
     if bytes.len() < 0x40 || &bytes[0..2] != b"MZ" { return false; }
     let offset = u32::from_le_bytes([bytes[0x3c], bytes[0x3d], bytes[0x3e], bytes[0x3f]]) as usize;
@@ -273,6 +314,31 @@ mod tests {
         let mut r=fixture("v4.1.0.73",&"c".repeat(64));
         r["assets"][0]["digest"] = Value::Null;
         assert!(parse_latest_release(&r,"4.1.0.72").is_err());
+    }
+    #[test] fn rollback_history_is_by_publication_and_excludes_current_or_newer() {
+        let mut latest = fixture("v4.1.0.140", &"e".repeat(64));
+        latest["published_at"] = Value::String("2026-11-17T13:00:00Z".into());
+        let mut older = fixture("v4.1.0.129", &"e".repeat(64));
+        older["published_at"] = Value::String("2026-11-17T11:00:00Z".into());
+        let mut previous = fixture("v4.1.0.128", &"e".repeat(64));
+        previous["published_at"] = Value::String("2026-11-17T10:00:00Z".into());
+        let mut old = fixture("v4.1.0.90", &"e".repeat(64));
+        old["published_at"] = Value::String("2026-11-16T10:00:00Z".into());
+        let items = serde_json::json!([old, latest, older, previous]);
+        let result = parse_rollback_history(&items, "4.1.0.130").unwrap();
+        assert_eq!(result.len(), 3);
+        assert_eq!(result[0].info.version, "4.1.0.129");
+        assert_eq!(result[1].info.version, "4.1.0.128");
+        assert_eq!(result[2].info.version, "4.1.0.90");
+    }
+    #[test] fn rollback_history_skips_unsigned_and_prerelease_assets() {
+        let mut unsigned = fixture("v4.1.0.127", &"a".repeat(64));
+        unsigned["published_at"] = Value::String("2026-11-17T09:00:00Z".into());
+        unsigned["assets"][0]["digest"] = Value::Null;
+        let mut beta = fixture("v4.1.0.126", &"a".repeat(64));
+        beta["published_at"] = Value::String("2026-11-17T08:00:00Z".into());
+        beta["prerelease"] = Value::Bool(true);
+        assert!(parse_rollback_history(&serde_json::json!([unsigned, beta]),"4.1.0.130").unwrap().is_empty());
     }
     #[test] fn reject_html_disguised_as_executable() {
         assert!(!verify_pe_file(b"<html>hello</html>"));
