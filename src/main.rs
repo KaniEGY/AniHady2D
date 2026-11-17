@@ -745,7 +745,8 @@ fn draw_tool_ui_icon(painter: &egui::Painter, rect: egui::Rect, tool: ActiveTool
     let pale = egui::Color32::from_rgb(234, 245, 255);
     let deep = egui::Color32::from_rgb(39, 43, 62);
     let line = egui::Stroke::new(2.2, primary);
-    let p = |x:f32,y:f32| c+egui::vec2(x,y);
+    let icon_scale=(rect.width()/26.0).clamp(0.6,2.0);
+    let p = |x:f32,y:f32| c+egui::vec2(x*icon_scale,y*icon_scale);
     match tool {
         ActiveToolUI::SelectNormal => {
             painter.add(egui::Shape::convex_polygon(
