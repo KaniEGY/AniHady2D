@@ -1372,6 +1372,11 @@ impl StickApp {
                             self.online_message.clear();
                             self.refresh_online_rooms();
                         }
+                        ui.add_space(25.0);
+                        ui.label(egui::RichText::new(tr(lang,
+                            "Hosting uses YOUR PC as the room server; keep Stick running and allow private-network access in Windows Firewall. Joining uses another participant's computer.",
+                            "مهم: لو عملت إنشاء غرفة، جهازك نفسه هيبقى سيرفر الغرفة. لازم Stick يفضل شغال وتسمح له في جدار حماية الشبكة الخاصة. لو اخترت انضمام، هتتصل بجهاز صاحب الغرفة."))
+                            .color(egui::Color32::from_rgb(238, 192, 110)));
                     }
                     OnlinePage::CreateRoom => {
                         ui.heading(tr(lang, "Host a room", "إنشاء غرفة جديدة"));
