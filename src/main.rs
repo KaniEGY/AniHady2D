@@ -5032,7 +5032,8 @@ impl eframe::App for StickApp {
                             }
                         }
                         ActiveToolUI::Eyedropper if pointer_pressed => {
-                            let picked = self.project.layers.iter()
+                            // Visible topmost layer must take precedence.
+                            let picked = self.project.layers.iter().rev()
                                 .filter(|layer| layer.visible && !layer.is_guide)
                                 .find_map(|layer| {
                                     let evaluated = self.project.evaluate_layer_at_frame(
@@ -5679,7 +5680,16 @@ impl eframe::App for StickApp {
             } else if show_tool_icon {
                 if let Some(p) = pointer_pos {
                     let icon_size=(26.0*self.config.tool_icon_scale.clamp(0.6,2.0)).max(16.0);
-                    let rect = egui::Rect::from_min_size(p + egui::vec2(8.0, 7.0),
+                    // Eyedropper used to render its nib ~30px BELOW the real
+                    // mouse hotspot while hiding the system cursor. Align the
+                    // nib (icon local -10,+10) exactly with pointer_pos.
+                    let icon_center = if self.active_tool_ui == ActiveToolUI::Eyedropper {
+                        let s=icon_size/26.0;
+                        p + egui::vec2(10.0*s,-10.0*s)
+                    } else {
+                        p + egui::vec2(8.0+icon_size*0.5,7.0+icon_size*0.5)
+                    };
+                    let rect = egui::Rect::from_center_size(icon_center,
                         egui::vec2(icon_size, icon_size));
                     let tool_color = self.online_participants.iter()
                         .find(|participant| self.online_session.is_some()
