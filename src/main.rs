@@ -1033,6 +1033,7 @@ struct StickApp {
     sculpt_strength: f32,
     transform_drag_anchor: Option<egui::Pos2>,
     transform_rotate_pivot: Option<egui::Pos2>,
+    transform_axis: Option<char>,
     lasso_dragging_selection: bool,
     selected_text_item_index: Option<usize>,
     selection_rect_start: Option<egui::Pos2>,
@@ -1173,6 +1174,7 @@ impl StickApp {
             sculpt_strength: 0.65,
             transform_drag_anchor: None,
             transform_rotate_pivot: None,
+            transform_axis: None,
             lasso_dragging_selection: false,
             selected_text_item_index: None,
             selection_rect_start: None,
@@ -4990,9 +4992,16 @@ impl eframe::App for StickApp {
                                 let resize_anchor = if self.active_tool_ui == ActiveToolUI::FreeTransform {
                                     bounds.and_then(|rect| transform_handles::resize_anchor(rect, stage_pos, scale))
                                 } else { None };
+                                let move_axis = bounds.and_then(|rect|
+                                    transform_handles::translation_axis(rect, stage_pos, scale));
                                 let reuse_selection = bounds.is_some_and(|rect| rect.contains(stage_pos))
                                     && (!self.selected_stroke_indices.is_empty() || self.selected_text_item_index.is_some());
-                                if let Some(pivot) = rotate_pivot {
+                                if let Some(axis)=move_axis {
+                                    self.save_undo_state();
+                                    self.transform_axis=Some(axis);
+                                    self.transform_drag_anchor=None;
+                                    self.transform_rotate_pivot=None;
+                                } else if let Some(pivot) = rotate_pivot {
                                     self.save_undo_state();
                                     self.transform_rotate_pivot = Some(pivot);
                                     self.transform_drag_anchor = None;
@@ -5001,10 +5010,12 @@ impl eframe::App for StickApp {
                                     self.transform_drag_anchor = Some(anchor);
                                     self.transform_rotate_pivot = None;
                                 } else if reuse_selection {
+                                    self.transform_axis=None;
                                     self.save_undo_state();
                                     self.transform_drag_anchor = None;
                                     self.transform_rotate_pivot = None;
                                 } else {
+                                self.transform_axis=None;
                                 self.transform_drag_anchor = None;
                                 self.transform_rotate_pivot = None;
                                 self.selected_stroke_indices.clear();
@@ -5033,7 +5044,12 @@ impl eframe::App for StickApp {
                                 }
                                 } // finished regular selection; otherwise grabbed transform handle
                             } else if pointer_down {
-                                if let Some(pivot) = self.transform_rotate_pivot {
+                                if let Some(axis)=self.transform_axis {
+                                    let movement=if axis=='x'{
+                                        egui::vec2(delta.x,0.0)
+                                    }else{egui::vec2(0.0,delta.y)};
+                                    self.move_selected_items(movement);
+                                } else if let Some(pivot) = self.transform_rotate_pivot {
                                     if let Some(previous) = self.last_pointer_pos {
                                         let prev = to_stage(previous) - pivot;
                                         let curr = stage_pos - pivot;
@@ -5108,6 +5124,7 @@ impl eframe::App for StickApp {
                 }
                 self.transform_drag_anchor = None;
                 self.transform_rotate_pivot = None;
+                self.transform_axis = None;
                 self.lasso_dragging_selection = false;
                 if let (Some(start), Some(end)) = (
                     self.selection_rect_start.take(), self.selection_rect_current.take()
@@ -5299,6 +5316,22 @@ impl eframe::App for StickApp {
                     painter.rect_stroke(screen_bounds, 0.0, egui::Stroke::new(
                         1.6, egui::Color32::from_rgb(54, 194, 255)
                     ));
+                    // Two axis arrows remain visible after selecting artwork.
+                    // Drag red for X only, cyan for Y only; corner squares and
+                    // rotation remain available through Free Transform.
+                    let origin=to_screen(bounds.center());
+                    for (end,col,label) in [
+                        (bounds.center()+egui::vec2(52.0/scale,0.0),
+                            egui::Color32::from_rgb(244,78,86),"X"),
+                        (bounds.center()+egui::vec2(0.0,-52.0/scale),
+                            egui::Color32::from_rgb(60,192,244),"Y")
+                    ] {
+                        let tip=to_screen(end);
+                        painter.line_segment([origin,tip],egui::Stroke::new(3.0,col));
+                        painter.circle_filled(tip,10.0,col);
+                        painter.text(tip,egui::Align2::CENTER_CENTER,label,
+                            egui::FontId::proportional(11.0),egui::Color32::BLACK);
+                    }
                     if self.active_tool_ui == ActiveToolUI::FreeTransform {
                         let top = to_screen(bounds.center_top());
                         let handle = to_screen(bounds.center_top()
