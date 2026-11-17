@@ -4339,28 +4339,41 @@ impl eframe::App for StickApp {
                             else if pointer_down { self.shape_drag_current = Some(stage_pos); }
                         }
                         ActiveToolUI::Bucket if pointer_pressed => {
-                            // Fill a single closed stroke or a contour formed
-                            // by multiple connected strokes on the active layer.
-                            // Raster-pixel flood fill is still a separate feature.
-                            let can_fill = self.project.layers.get(self.active_layer_idx).is_some_and(|l| {
-                                let evaluated = self.project.evaluate_layer_at_frame(l, self.current_frame);
-                                fill_tools::can_fill_contour(&evaluated.strokes, stage_pos.x, stage_pos.y)
-                            });
-                            if can_fill {
+                            // Existing exact vector-contour fill takes priority. If the
+                            // region is drawn using many brush strokes or intersections,
+                            // use a bounded raster wall mask + traced vector region.
+                            let (can_fill, fallback) = self.project.layers.get(self.active_layer_idx)
+                                .map(|l| {
+                                    let evaluated = self.project.evaluate_layer_at_frame(l, self.current_frame);
+                                    let direct = fill_tools::can_fill_contour(
+                                        &evaluated.strokes, stage_pos.x, stage_pos.y);
+                                    let polygon = if direct { None } else {
+                                        fill_tools::flood_fill_polygon(
+                                            &evaluated.strokes, (stage_pos.x, stage_pos.y),
+                                            (self.project.width as f32, self.project.height as f32), 1.4)
+                                    };
+                                    (direct, polygon)
+                                }).unwrap_or((false, None));
+                            if can_fill || fallback.is_some() {
                                 self.save_undo_state();
                                 self.ensure_editable_keyframe();
                                 if let Some(l) = self.project.layers.get_mut(self.active_layer_idx) {
                                     if let Some(f) = l.keyframes.get_mut(&self.current_frame) {
-                                        if fill_tools::apply_contour_fill(&mut f.strokes,
-                                            stage_pos.x, stage_pos.y, self.brush_color) {
+                                        if (can_fill && fill_tools::apply_contour_fill(
+                                            &mut f.strokes, stage_pos.x, stage_pos.y, self.brush_color))
+                                            || fallback.map(|points| {
+                                                f.strokes.insert(0, fill_tools::polygon_fill_stroke(
+                                                    points, self.brush_color));
+                                                true
+                                            }).unwrap_or(false) {
                                             self.has_unsaved_changes = true;
                                         }
                                     }
                                 }
                             } else {
                                 self.status_message = tr(lang,
-                                    "Fill: click inside a closed contour. Multiple joined strokes are supported.",
-                                    "التعبئة: اضغط جوّه شكل مقفول؛ ينفع يكون معمول من أكتر من خط متوصل.");
+                                    "Fill requires a closed region. Close small gaps between lines and retry.",
+                                    "التعبئة محتاجة مساحة مقفولة؛ اقفل الفجوات الصغيرة بين الخطوط وجرّب تاني.");
                             }
                         }
                         ActiveToolUI::EraserRed | ActiveToolUI::EraserGreen if pointer_down => {
