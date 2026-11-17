@@ -2779,7 +2779,7 @@ impl eframe::App for StickApp {
             now, ctrl_z, ctrl_y, ctrl_s, ctrl_shift_s, ctrl_c, ctrl_v, ctrl_k, shift_f5, del_pressed, f10_pressed,
             space_down, ctrl_down, alt_down, zoom_in_nav, zoom_out_nav, pan_right_nav, pan_left_nav,
             scroll_y, close_req, pointer_down, pointer_pressed, pointer_released, pointer_pos,
-            sc_select, sc_lasso, sc_free_tr, sc_vec_sel, sc_pen, sc_brush, sc_eraser, sc_eraser_partial,
+            sc_select, sc_lasso, sc_free_tr, sc_vec_sel, sc_sculpt, sc_pen, sc_brush, sc_eraser, sc_eraser_partial,
             sc_bucket, sc_eyedropper, sc_text, sc_shape, sc_hand, sc_del_frame, sc_f5, sc_f6, sc_f7, sc_f8,
             sc_play, sc_prev, sc_next, sc_smaller, sc_larger, sc_reset_canvas, pressed_key_name,
         ) = ctx.input(|i| {
@@ -2820,6 +2820,7 @@ impl eframe::App for StickApp {
                 is_shortcut_pressed(i, &self.config.tool_lasso),
                 is_shortcut_pressed(i, &self.config.tool_free_transform),
                 is_shortcut_pressed(i, &self.config.tool_vector_select),
+                is_shortcut_pressed(i, &self.config.tool_sculpt),
                 is_shortcut_pressed(i, &self.config.tool_pen),
                 is_shortcut_pressed(i, &self.config.tool_brush),
                 is_shortcut_pressed(i, &self.config.tool_eraser),
@@ -2862,7 +2863,8 @@ impl eframe::App for StickApp {
                 1 => self.config.tool_lasso = k_name,
                 2 => self.config.tool_free_transform = k_name,
                 3 => self.config.tool_vector_select = k_name,
-                4 => self.config.tool_pen = k_name,
+                4 => self.config.tool_sculpt = k_name,
+                13 => self.config.tool_pen = k_name,
                 5 => self.config.tool_brush = k_name,
                 6 => self.config.tool_eraser = k_name,
                 7 => self.config.tool_eraser_partial = k_name,
@@ -2918,6 +2920,7 @@ impl eframe::App for StickApp {
             if sc_lasso { self.active_tool_ui = ActiveToolUI::SelectLasso; }
             if sc_free_tr { self.active_tool_ui = ActiveToolUI::FreeTransform; }
             if sc_vec_sel { self.active_tool_ui = ActiveToolUI::VectorDirectSelect; }
+            if sc_sculpt { self.active_tool_ui = ActiveToolUI::Sculpt; }
             if sc_pen { self.active_tool_ui = ActiveToolUI::VectorPen; }
             if sc_brush { self.active_tool_ui = ActiveToolUI::Brush; }
             if sc_eraser { self.active_tool_ui = ActiveToolUI::EraserRed; }
@@ -3810,6 +3813,35 @@ impl eframe::App for StickApp {
                             ui.strong(tr(lang, "Quick tool options", "اختيارات الأداة السريعة"));
                             ui.separator();
                             match tool {
+                                ActiveToolUI::Sculpt => {
+                                    ui.add(egui::Slider::new(&mut self.sculpt_radius,8.0..=360.0)
+                                        .text(tr(lang,"Radius","حجم الصباع")));
+                                    ui.add(egui::Slider::new(&mut self.sculpt_strength,0.05..=1.0)
+                                        .text(tr(lang,"Strength","القوة")));
+                                }
+                                ActiveToolUI::VectorDirectSelect | ActiveToolUI::VectorPen => {
+                                    ui.label(tr(lang,"Editable Vector Nodes","نقاط الفيكتور القابلة للتعديل"));
+                                    ui.add(egui::Slider::new(&mut self.vector_tolerance,0.4..=8.0)
+                                        .text(tr(lang,"Simplify amount","تقليل النقط")));
+                                    if ui.button(tr(lang,"Simplify selected strokes","قلل نقاط الخطوط المحددة")).clicked(){
+                                        self.save_undo_state();
+                                        self.ensure_editable_keyframe();
+                                        if let Some(layer)=self.project.layers.get_mut(self.active_layer_idx){
+                                            if let Some(frame)=layer.keyframes.get_mut(&self.current_frame){
+                                                for (idx,stroke) in frame.strokes.iter_mut().enumerate(){
+                                                    if stroke.is_vector && (self.selected_stroke_indices.is_empty()
+                                                        || self.selected_stroke_indices.contains(&idx)){
+                                                        stroke.simplify_vector_nodes(self.vector_tolerance);
+                                                        self.has_unsaved_changes=true;
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        self.selected_vector_nodes.clear();
+                                        self.selected_vector_node=None;
+                                        ui.close_menu();
+                                    }
+                                }
                                 ActiveToolUI::ShapeLine => {
                                     for (kind, en, ar) in [
                                         (GeometricShapeKind::StraightLine, "Line", "خط"),
@@ -3842,8 +3874,7 @@ impl eframe::App for StickApp {
                                         }
                                     }
                                 }
-                                ActiveToolUI::EraserRed | ActiveToolUI::EraserGreen
-                                | ActiveToolUI::VectorPen => {
+                                ActiveToolUI::EraserRed | ActiveToolUI::EraserGreen => {
                                     ui.add(egui::Slider::new(&mut self.brush_size, 1.0..=120.0)
                                         .text(tr(lang, "Size", "الحجم")));
                                 }
@@ -4814,6 +4845,29 @@ impl eframe::App for StickApp {
                                 });
                             if let Some(color) = picked {
                                 self.brush_color = color;
+                            }
+                        }
+                        ActiveToolUI::Sculpt if pointer_down => {
+                            if pointer_pressed { self.save_undo_state(); }
+                            if !pointer_pressed && !self.is_active_layer_locked() {
+                                if let Some(previous)=self.last_pointer_pos {
+                                    let previous=to_stage(previous);
+                                    let movement=stage_pos-previous;
+                                    if movement.length_sq()>0.00001 {
+                                        self.ensure_editable_keyframe();
+                                        if let Some(layer)=self.project.layers.get_mut(self.active_layer_idx){
+                                            if let Some(frame)=layer.keyframes.get_mut(&self.current_frame){
+                                                if sculpt_tools::sculpt(
+                                                    &mut frame.strokes,
+                                                    (previous.x,previous.y),
+                                                    (movement.x,movement.y),
+                                                    self.sculpt_radius,self.sculpt_strength){
+                                                    self.has_unsaved_changes=true;
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
                             }
                         }
                         ActiveToolUI::VectorPen if pointer_down => {
