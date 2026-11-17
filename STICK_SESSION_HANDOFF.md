@@ -82,3 +82,14 @@
 - QA: PR Windows `cargo test` and `cargo build --release` via Actions; at time of writing, newest SHA result **not yet confirmed**. Two-PC GUI acceptance **not performed**. Do not claim this as proven in production until verified.
 - Known limitations: simultaneous edits to identical array positions can conflict; external media bytes not transferred; no encryption/global Internet room discovery; no Windows executable generated locally (GitHub Actions builds it).
 - Next: check latest PR Windows CI, fix any errors, merge only if green, verify main release, and test two-PC erasing/layer/frame/bucket behavior and existing project save/open.
+
+
+## 17 Nov 2026 — Internet friends + transform handles
+- Branch: `feature/tailnet-friends-and-transform-handles-20261117`, starting main SHA `e30433183824d7e1428665b160dd91eee7b133e5`.
+- `src/remote_access.rs`: optional Tailscale CLI status JSON parsing, 100.64/10 host address discovery and bounded active peer enumeration with unit tests. Tailscale is separately installed; no API keys, accounts or firewall modifications in Stick.
+- `src/collab.rs`: send existing UDP discovery request as unicast to visible Tailscale peers (up to 64), keep LAN broadcast and direct IP fallback. Better TCP refused/timeout help text.
+- `src/main.rs`: show Tailscale readiness in Online lobby, copy friend-host IP, join by 100.x address, show discovered friend rooms, and explain that LAN 192.168.x is not public.
+- `src/transform_handles.rs` + `src/main.rs`: all four corner resize handles with opposite anchors, constant-screen-pixel hit areas (22px radius), larger 21px rotation target and more visible handles. Unit tests added for all corners and zoom.
+- `STICK_ONLINE_GUIDE.md`: complete Tailscale guide and troubleshooting, with manual two-PC QA checklist. This does not implement global room code discovery or built-in VPN/relay services.
+- User wants every successfully tested version published by default through GitHub Releases and Check for Updates. DO NOT publish only if user expressly says not to; keep earlier release rollback choices and don't publish failed CI.
+- CI and runtime result: to be filled from actual Windows workflow results. Windows two-PC cross-ISP GUI test is not performed here.
