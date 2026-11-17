@@ -1399,9 +1399,12 @@ impl StickApp {
                         ui.heading(tr(lang, "Host a room", "إنشاء غرفة جديدة"));
                         ui.add_space(12.0);
                         ui.label(tr(lang,
-                            "Your computer becomes the HOST/SERVER for this room. Keep Stick open; guests connect directly to this PC over LAN.",
-                            "جهازك هيكون الهوست وسيرفر الغرفة. لازم البرنامج يفضل مفتوح، وباقي اللاعبين هيتصلوا بجهازك مباشرة عبر الشبكة المحلية."));
+                            "Your PC becomes the host/server. Keep Stick open; friends can connect over LAN or via Tailscale from other networks.",
+                            "جهازك هيبقى الهوست وسيرفر الغرفة. خليك فاتح Stick، وأصحابك يقدروا يدخلوا من نفس النت أو من أي نت تاني باستخدام Tailscale."));
                         ui.add_space(8.0);
+                        if ui.small_button(tr(lang, "Refresh Tailscale status", "تحديث حالة Tailscale")).clicked() {
+                            self.refresh_online_rooms();
+                        }
                         if let Some(info) = &self.online_remote_info {
                             if let Some(ip) = info.address {
                                 ui.colored_label(egui::Color32::LIGHT_GREEN,
