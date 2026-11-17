@@ -264,6 +264,9 @@ fn host_peer(mut stream: TcpStream, host: Arc<HostShared>) -> io::Result<()> {
     let id = host.peer_ids.fetch_add(1, Ordering::Relaxed);
     let (out_tx, out_rx) = mpsc::channel();
     {
+        // Admission must share the edit ordering gate: Welcome cannot
+        // contain an edit which is then redundantly replayed to the new peer.
+        let _order = host.edit_order.lock().map_err(|_| io::Error::other("Edit gate poisoned"))?;
         let mut peers = host.peers.lock().map_err(|_| io::Error::other("Peer registry poisoned"))?;
         if peers.len() + 1 >= host.limit {
             packet_write(&mut stream, &Packet::Rejected { reason: "Room is full".into() })?;
