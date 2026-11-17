@@ -900,7 +900,9 @@ fn build_geometric_stroke(kind: GeometricShapeKind, p0: egui::Pos2, p1: egui::Po
         GeometricShapeKind::Square => {
             let (dx, dy) = (p1.x - p0.x, p1.y - p0.y);
             let side = dx.abs().max(dy.abs());
-            let (sx, sy) = (p0.x + side * dx.signum(), p0.y + side * dy.signum());
+            let sx_dir = if dx < 0.0 { -1.0 } else { 1.0 };
+            let sy_dir = if dy < 0.0 { -1.0 } else { 1.0 };
+            let (sx, sy) = (p0.x + side * sx_dir, p0.y + side * sy_dir);
             for c in [egui::pos2(p0.x, p0.y), egui::pos2(sx, p0.y), egui::pos2(sx, sy), egui::pos2(p0.x, sy), egui::pos2(p0.x, p0.y)] {
                 pts.push(StrokePoint { x: c.x, y: c.y, pressure: 1.0 });
             }
@@ -1008,6 +1010,7 @@ struct StickApp {
     stage_bg_color: [u8; 4],
     brush_size: f32,
     bucket_gap_close: f32,
+    bucket_reference_all_layers: bool,
     brush_tip_shape: BrushTipShape,
     zoom_level: f32,
     pan_offset: egui::Vec2,
@@ -1140,6 +1143,7 @@ impl StickApp {
             stage_bg_color: [255, 255, 255, 255],
             brush_size: 7.0,
             bucket_gap_close: 3.0,
+            bucket_reference_all_layers: false,
             brush_tip_shape: BrushTipShape::Round,
             zoom_level: 0.75,
             pan_offset: egui::Vec2::ZERO,
@@ -2498,6 +2502,8 @@ impl StickApp {
                 ui.color_edit_button_srgba_unmultiplied(&mut self.brush_color);
                 ui.add(egui::Slider::new(&mut self.bucket_gap_close, 0.0..=12.0)
                     .text(tr(lang, "Close small gaps", "قفل الفجوات الصغيرة")));
+                ui.checkbox(&mut self.bucket_reference_all_layers,
+                    tr(lang, "Reference all visible layers", "استخدم حدود كل الليرات الظاهرة"));
                 ui.small(tr(lang,
                     "Fill follows the visible enclosed area and grows slightly under outlines. Lower gap tolerance if adjacent regions merge.",
                     "الدلو بيلون المنطقة المقفولة ويمد اللون تحت الخط عشان ميعملش حواف بيضا. قلل قفل الفجوات لو منطقتين اتصلوا ببعض."));
@@ -4626,19 +4632,28 @@ impl eframe::App for StickApp {
                             // Existing exact vector-contour fill takes priority. If the
                             // region is drawn using many brush strokes or intersections,
                             // use a bounded raster wall mask + traced vector region.
-                            let (can_fill, fallback) = self.project.layers.get(self.active_layer_idx)
-                                .map(|l| {
-                                    let evaluated = self.project.evaluate_layer_at_frame(l, self.current_frame);
-                                    // The enclosed pixel region takes precedence over a
-                                    // closed outer shape when there are interior dividers.
-                                    let polygon = fill_tools::flood_fill_polygon(
-                                        &evaluated.strokes, (stage_pos.x, stage_pos.y),
-                                        (self.project.width as f32, self.project.height as f32),
-                                        self.bucket_gap_close);
-                                    let direct = polygon.is_none() && fill_tools::can_fill_contour(
-                                        &evaluated.strokes, stage_pos.x, stage_pos.y);
-                                    (direct, polygon)
-                                }).unwrap_or((false, None));
+                            // Optionally fill an active color layer using the combined
+                            // visible outlines, as in modern 2D painting workflows.
+                            let reference_strokes: Vec<Stroke> = if self.bucket_reference_all_layers {
+                                self.project.layers.iter()
+                                    .filter(|layer| layer.visible && !layer.is_guide)
+                                    .flat_map(|layer|
+                                        self.project.evaluate_layer_at_frame(layer, self.current_frame).strokes)
+                                    .collect()
+                            } else {
+                                self.project.layers.get(self.active_layer_idx)
+                                    .map(|layer|
+                                        self.project.evaluate_layer_at_frame(layer, self.current_frame).strokes)
+                                    .unwrap_or_default()
+                            };
+                            let fallback = fill_tools::flood_fill_polygon(
+                                &reference_strokes, (stage_pos.x, stage_pos.y),
+                                (self.project.width as f32, self.project.height as f32),
+                                self.bucket_gap_close);
+                            let can_fill = !self.bucket_reference_all_layers
+                                && fallback.is_none()
+                                && fill_tools::can_fill_contour(
+                                    &reference_strokes, stage_pos.x, stage_pos.y);
                             if can_fill || fallback.is_some() {
                                 self.save_undo_state();
                                 self.ensure_editable_keyframe();
@@ -4686,12 +4701,16 @@ impl eframe::App for StickApp {
                             }
                         }
                         ActiveToolUI::Eyedropper if pointer_pressed => {
-                            if let Some(l) = self.project.layers.get(self.active_layer_idx) {
-                                let f = self.project.evaluate_layer_at_frame(l, self.current_frame);
-                                if let Some(color) = selection_tools::pick_color(
-                                    &f.strokes, stage_pos, (5.0 / scale).max(1.0)) {
-                                    self.brush_color = color;
-                                }
+                            let picked = self.project.layers.iter()
+                                .filter(|layer| layer.visible && !layer.is_guide)
+                                .find_map(|layer| {
+                                    let evaluated = self.project.evaluate_layer_at_frame(
+                                        layer, self.current_frame);
+                                    selection_tools::pick_color(
+                                        &evaluated.strokes, stage_pos, (5.0 / scale).max(1.0))
+                                });
+                            if let Some(color) = picked {
+                                self.brush_color = color;
                             }
                         }
                         ActiveToolUI::VectorPen if pointer_down => {
@@ -4790,7 +4809,6 @@ impl eframe::App for StickApp {
                                         .find(|(_, text)| selection_tools::text_bounds(text).contains(stage_pos))
                                         .map(|(index, _)| index);
                                     if self.selected_text_item_index.is_none() {
-                                        let hit = egui::Rect::from_center_size(stage_pos, egui::vec2(12.0, 12.0));
                                         if let Some((index, _)) = frame.strokes.iter().enumerate().rev()
                                             .find(|(_, stroke)| selection_tools::stroke_hit_test(
                                                 stroke, stage_pos, (6.0 / scale).max(1.0))) {
