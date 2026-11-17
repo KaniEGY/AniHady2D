@@ -2640,11 +2640,86 @@ impl eframe::App for StickApp {
                                     self.active_layer_idx = l_idx;
                                     self.current_frame = f;
                                 }
+                                let is_locked = layer.locked;
+                                let can_delete_global = self.timeline_length > 1
+                                    && self.project.layers.iter().all(|l| !l.locked);
+                                cresp.context_menu(|ui| {
+                                    ui.strong(format!("{} — {}", layer.name, f));
+                                    ui.separator();
+                                    if ui.button(tr(lang, "Copy Frame", "انسخ الفريم")).clicked() {
+                                        frame_menu_action = Some((l_idx, f, timeline_ops::FrameAction::Copy));
+                                        ui.close_menu();
+                                    }
+                                    if ui.add_enabled(!is_locked && self.clipboard_frame.is_some(),
+                                        egui::Button::new(tr(lang, "Paste Frame", "الصق الفريم"))).clicked() {
+                                        frame_menu_action = Some((l_idx, f, timeline_ops::FrameAction::Paste));
+                                        ui.close_menu();
+                                    }
+                                    ui.separator();
+                                    if ui.add_enabled(!is_locked, egui::Button::new(
+                                        tr(lang, "Create Keyframe", "اعمل كي فريم"))).clicked() {
+                                        frame_menu_action = Some((l_idx, f, timeline_ops::FrameAction::Keyframe));
+                                        ui.close_menu();
+                                    }
+                                    if ui.add_enabled(!is_locked, egui::Button::new(
+                                        tr(lang, "Blank Keyframe", "كي فريم فاضي"))).clicked() {
+                                        frame_menu_action = Some((l_idx, f, timeline_ops::FrameAction::BlankKeyframe));
+                                        ui.close_menu();
+                                    }
+                                    if ui.add_enabled(!is_locked, egui::Button::new(
+                                        tr(lang, "Clear Frame", "امسح محتوى الفريم"))).clicked() {
+                                        frame_menu_action = Some((l_idx, f, timeline_ops::FrameAction::Clear));
+                                        ui.close_menu();
+                                    }
+                                    if ui.add_enabled(!is_locked && layer.keyframes.contains_key(&f),
+                                        egui::Button::new(tr(lang, "Delete Keyframe", "احذف الكي فريم"))).clicked() {
+                                        frame_menu_action = Some((l_idx, f, timeline_ops::FrameAction::DeleteKeyframe));
+                                        ui.close_menu();
+                                    }
+                                    if ui.add_enabled(can_delete_global, egui::Button::new(
+                                        tr(lang, "Delete Time (all layers)", "احذف زمن الفريم من كل الليرز"))).clicked() {
+                                        frame_menu_action = Some((l_idx, f, timeline_ops::FrameAction::DeleteFrame));
+                                        ui.close_menu();
+                                    }
+                                    if !can_delete_global {
+                                        ui.small(tr(lang, "Unlock layers before deleting time.", "افتح قفل الليرز عشان تحذف الزمن."));
+                                    }
+                                });
                             }
                         });
                     }
                 });
             });
+        }
+
+        if let Some((layer_index, frame_index, action)) = frame_menu_action {
+            match action {
+                timeline_ops::FrameAction::Copy => self.copy_frame(layer_index, frame_index),
+                timeline_ops::FrameAction::Paste => {
+                    if self.project.layers.get(layer_index).is_some_and(|layer| !layer.locked) {
+                        self.paste_frame(layer_index, frame_index);
+                    }
+                }
+                edit => {
+                    // Save a single undo snapshot; only one frame command
+                    // executes per context-menu selection.
+                    self.save_undo_state();
+                    match timeline_ops::apply_frame_edit(&mut self.project, layer_index, frame_index, edit) {
+                        Ok(()) => {
+                            self.timeline_length = self.project.total_frames;
+                            self.current_frame = frame_index.min(self.timeline_length);
+                            self.active_layer_idx = layer_index.min(self.project.layers.len().saturating_sub(1));
+                            self.loop_end_frame = self.loop_end_frame.min(self.timeline_length).max(1);
+                            self.loop_start_frame = self.loop_start_frame.min(self.loop_end_frame).max(1);
+                            self.has_unsaved_changes = true;
+                        }
+                        Err(reason) => {
+                            self.undo_stack.pop();
+                            self.status_message = reason.to_string();
+                        }
+                    }
+                }
+            }
         }
 
         self.preload_frame_textures(ctx);
