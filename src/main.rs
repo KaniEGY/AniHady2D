@@ -38,7 +38,9 @@ use unicode_bidi::BidiInfo;
 
 const FALLBACK_VERSION: &str = "4.1.0";
 const GITHUB_REPO: &str = "KaniEGY/Stick";
-const YOUTUBE_CHANNEL_URL: &str = "https://www.youtube.com/@%D8%A7%D8%A8%D9%84%D9%83%D8%A7%D8%B4-%D8%A7%D9%86%D9%85%D9%8A%D8%B4%D9%86/videos";
+const YOUTUBE_CHANNEL_URL: &str = "https://www.youtube.com/@%D8%A7%D8%A8%D9%84%D9%83%D8%A7%D8%B4-%D8%A7%D9%86%D9%85%D9%8A%D8%B4%D9%86";
+const INSTAGRAM_URL: &str = "https://www.instagram.com/ablikash?exln=NmFtNWZidnBvb3k1";
+const SUPPORT_URL: &str = "https://ipn.eg/S/imhady/instapay/0tZZ7c";
 
 #[derive(Clone, Copy, PartialEq)]
 enum WorkspaceMode {
@@ -780,6 +782,7 @@ struct StickApp {
     show_project_details: bool,
     timeline_length: usize,
     timeline_cell_width: f32,
+    show_timeline_settings: bool,
     loop_enabled: bool,
     loop_start_frame: usize,
     loop_end_frame: usize,
@@ -797,6 +800,9 @@ struct StickApp {
     selected_shape_kind: GeometricShapeKind,
     shape_fill_enabled: bool,
     pending_delete_layer: Option<usize>,
+    layer_rename_index: Option<usize>,
+    layer_rename_buffer: String,
+    layer_clipboard: Option<Layer>,
     symmetry_mode: SymmetryMode,
     stabilizer_strength: f32,
     stabilized_cursor: Option<egui::Pos2>,
@@ -840,6 +846,7 @@ struct StickApp {
     show_settings_dialog: bool,
     show_shortcuts_dialog: bool,
     show_credits_dialog: bool,
+    show_support_dialog: bool,
     settings_tab: usize,
     listening_shortcut_idx: Option<usize>,
     config: AppConfig,
@@ -880,7 +887,8 @@ impl StickApp {
             show_recovery_dialog: false,
             show_project_details: false,
             timeline_length: 1,
-            timeline_cell_width: 24.0,
+            timeline_cell_width: 30.0,
+            show_timeline_settings: false,
             loop_enabled: false,
             loop_start_frame: 1,
             loop_end_frame: 12,
@@ -898,6 +906,9 @@ impl StickApp {
             selected_shape_kind: GeometricShapeKind::StraightLine,
             shape_fill_enabled: false,
             pending_delete_layer: None,
+            layer_rename_index: None,
+            layer_rename_buffer: String::new(),
+            layer_clipboard: None,
             symmetry_mode: SymmetryMode::Off,
             stabilizer_strength: 0.30,
             stabilized_cursor: None,
@@ -941,6 +952,7 @@ impl StickApp {
             show_settings_dialog: false,
             show_shortcuts_dialog: false,
             show_credits_dialog: false,
+            show_support_dialog: false,
             settings_tab: 0,
             listening_shortcut_idx: None,
             config: AppConfig::load(),
@@ -2376,11 +2388,29 @@ impl eframe::App for StickApp {
         }
 
         if self.show_credits_dialog {
-            egui::Window::new("Stick").collapsible(false).resizable(false).anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0]).show(ctx, |ui| {
-                ui.heading("Made by Hady");
-                ui.hyperlink_to("YouTube Channel", YOUTUBE_CHANNEL_URL);
-                if ui.button("Close").clicked() { self.show_credits_dialog = false; }
+            egui::Window::new(tr(lang, "About Stick's Creator", "عن صاحب Stick"))
+                .collapsible(false).resizable(false).default_width(340.0)
+                .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0]).show(ctx, |ui| {
+                ui.heading(tr(lang, "Stick Studio — made by Hady", "Stick Studio — من تطوير هادي"));
+                ui.separator();
+                ui.hyperlink_to(tr(lang, "YouTube Channel", "قناة يوتيوب"), YOUTUBE_CHANNEL_URL);
+                ui.hyperlink_to(tr(lang, "Instagram", "إنستجرام"), INSTAGRAM_URL);
+                if ui.button(tr(lang, "Close", "إغلاق")).clicked() { self.show_credits_dialog = false; }
             });
+        }
+        if self.show_support_dialog {
+            egui::Window::new(tr(lang, "Support Stick Studio", "ادعم Stick Studio"))
+                .collapsible(false).resizable(false).default_width(450.0)
+                .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0]).show(ctx, |ui| {
+                    ui.heading(tr(lang, "💛 Optional support", "💛 الدعم اختياري"));
+                    ui.separator();
+                    ui.label(tr(lang,
+                        "This is my InstaPay support link. I like money, but you really don't have to send anything! Whether you support me or not, I'll keep building and updating the app depending on my mood. 😔",
+                        "ده رابط الدعم المادي عن طريق إنستا باي. أنا راجل مادي بس بقولك مش لازم تبعت حاجة، لأن سواء دعمتني أو لأ البرنامج هيتطور وهيتحدث على حسب نفسيتي 😔"));
+                    ui.add_space(12.0);
+                    ui.hyperlink_to(tr(lang, "Open InstaPay support link", "افتح رابط الدعم على إنستا باي"), SUPPORT_URL);
+                    if ui.button(tr(lang, "Close", "إغلاق")).clicked() { self.show_support_dialog = false; }
+                });
         }
 
         self.render_update_dialog(ctx, lang);
@@ -2431,6 +2461,11 @@ impl eframe::App for StickApp {
                 draw_red_heart_icon(ui.painter(), h_rect, h_resp.hovered());
                 if h_resp.clicked() { self.show_credits_dialog = true; }
                 ui.colored_label(egui::Color32::from_rgb(255, 215, 25), "Stick");
+                ui.separator();
+                if ui.add(egui::Button::new(egui::RichText::new("💛").size(18.0))
+                    .frame(false)).on_hover_text(tr(lang, "Support the creator (optional)", "دعم صاحب البرنامج (اختياري)")).clicked() {
+                    self.show_support_dialog = true;
+                }
                 ui.separator();
                 let m_lbl = if self.workspace_mode == WorkspaceMode::DrawingOnly { tr(lang, "Switch to Animation", "التبديل للأنيميشن") } else { tr(lang, "Switch to Drawing", "التبديل للرسم") };
                 if ui.button(m_lbl).clicked() {
@@ -2532,7 +2567,7 @@ impl eframe::App for StickApp {
                         let shortcut_hint = format!("{}: {}", tr(lang, "Shortcut", "الاختصار"), key);
                         if response.on_hover_text(format!("{} — {}", name, shortcut_hint)).clicked() {
                             self.active_tool_ui = tool;
-                            self.play_sfx(SfxType::UiClick);
+                            self.play_sfx(SfxType::ToolSelect(tool as u8));
                         }
                         ui.add_space(3.0);
                     }
