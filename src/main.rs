@@ -253,6 +253,30 @@ fn tr(lang: AppLang, en: &str, ar: &str) -> String {
     }
 }
 
+// Arabic text is manually split into short, independent lines before shaping.
+// fix_ar() reorders each *entire* logical line, so letting egui wrap one
+// long pre-shaped paragraph would visually scramble the sentence order.
+const SUPPORT_MESSAGE_LINES: [(&str, &str); 7] = [
+    ("Yes, I'm broke, poor, and barely have enough to eat...",
+     "أنا صحيح كحيان وفقير وجربوع ومش لاقي آكل،"),
+    ("But you absolutely don't have to send me money!",
+     "ولكن إنت مش لازم تبعت فلوس خالص!"),
+    ("As I said, I'll keep working on the program",
+     "زي ما بقولك، تطوير البرنامج هيفضل شغال"),
+    ("from time to time as long as people enjoy it.",
+     "من فترة للتانية طول ما الناس عاجبها البرنامج."),
+    ("This support section is entirely optional.",
+     "وجزء الدعم ده اختياري تمامًا،"),
+    ("It's only for anyone who likes the program",
+     "وللي عجبه البرنامج وشايف إني أستحق مكافأة،"),
+    ("and thinks I deserve a little reward. That's all!",
+     "ممكن يدعمني لو حابب. وبس!"),
+];
+
+fn support_message_lines(lang: AppLang) -> Vec<String> {
+    SUPPORT_MESSAGE_LINES.iter().map(|(en, ar)| tr(lang, en, ar)).collect()
+}
+
 // Notification strings are shaped once in the notice window itself.
 // Using tr() here would reshape Arabic twice and scramble its word order.
 fn tr_notice(lang: AppLang, en: &str, ar: &str) -> String {
@@ -4038,10 +4062,29 @@ impl eframe::App for StickApp {
                         .rounding(9.0)
                         .inner_margin(egui::Margin::same(14.0))
                         .show(ui, |ui| {
-                            ui.label(egui::RichText::new(tr(lang,
-                                "I'm broke, poor, and barely getting by... but you really don't have to send any money 🙂. As I said, development will continue from time to time as long as people enjoy Stick. Support is only for anyone who likes the program and thinks I deserve a little reward 🥳. That's all!",
-                                "انا صحيح كحيان و فقير و جربوع ومش لاقي اكل ولكن .... انت مش لازم تبعت فلوس 🙂يب زي ما بقولك تطوير البرنامج هيفضل شغال من فترة للتانيه طول ما الناس عجبها البرنامج ولكن جزء الدعم ده لو حد عجبه البرنامج وشايف اني استحق مكافئه🥳 وبس"
-                            )).size(15.0).color(egui::Color32::from_rgb(238, 237, 245)));
+                            for (index, line) in support_message_lines(lang).into_iter().enumerate() {
+                                // Render short pre-shaped Arabic lines separately so
+                                // egui doesn't re-wrap/reorder one long RTL paragraph.
+                                if lang == AppLang::Arabic {
+                                    ui.with_layout(
+                                        egui::Layout::right_to_left(egui::Align::Center),
+                                        |ui| {
+                                            ui.label(egui::RichText::new(line)
+                                                .size(15.0)
+                                                .color(egui::Color32::from_rgb(238, 237, 245)));
+                                        },
+                                    );
+                                } else {
+                                    ui.label(egui::RichText::new(line)
+                                        .size(15.0)
+                                        .color(egui::Color32::from_rgb(238, 237, 245)));
+                                }
+                                if index == 3 { ui.add_space(8.0); }
+                            }
+                            ui.add_space(6.0);
+                            ui.vertical_centered(|ui| {
+                                ui.label(egui::RichText::new("🙂  🥳").size(19.0));
+                            });
                         });
                     ui.add_space(14.0);
                     ui.horizontal(|ui| {
@@ -6185,6 +6228,19 @@ mod tool_discovery_tests {
         let joined = fix_ar("مرحبا يا فنان\nمرحبا يا مبدع");
         assert_eq!(joined.split('\n').count(), 2);
         assert!(joined.chars().any(|c| ('\u{FB50}'..='\u{FEFF}').contains(&c)));
+    }
+
+    #[test]
+    fn support_copy_keeps_arabic_lines_short_and_separate() {
+        assert_eq!(support_message_lines(AppLang::Arabic).len(), 7);
+        for (en, ar) in SUPPORT_MESSAGE_LINES {
+            assert!(!en.is_empty() && !ar.is_empty());
+            assert!(!ar.contains('\n'));
+            // Prevent the previous one-paragraph RTL wrapping regression.
+            assert!(ar.chars().count() <= 48, "Arabic copy line too long: {ar}");
+        }
+        let rendered = support_message_lines(AppLang::Arabic);
+        assert!(rendered.iter().all(|line| !line.is_empty()));
     }
 
     #[test]
