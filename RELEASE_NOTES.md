@@ -14,15 +14,19 @@
 - **Known boundaries:** bucket fill operates on recognized closed stroke contours (now with improved near-closure tolerance), not arbitrary raster flood fill. Imported artwork/text still needs further parity tests for every transform. No Krita GPL code is copied into Stick.
 
 ### What's new
+- **Online sync v3:** automatic host-relayed updates to strokes, erasing, bucket fill, layers, visibility, frame/keyframe edits, text and transforms. Creating a room explicitly makes your PC its TCP host/server. Existing LAN discovery, eight-digit codes and optional passwords remain.
+- **Bucket fix:** fills a bounded region separated by internal lines (for example, either half of a bisected circle), rather than automatically filling the whole outer shape.
+- **Timeline:** deleting frame 1 preserves artwork held on the old frame 2; text and symbol instance frames appear as occupied in the timeline.
+- **Remaining limits:** overlapping simultaneous edits to the same array position can conflict, assets are not transferred, and two-PC Windows UI acceptance is still necessary. Use host resync if divergent.
 - Bright two-tone vector icons for all 13 drawing tools and matching pointer icons; original short, musical game-style UI sound synthesis replaces one-note sine beeps.
 - Paint Bucket: bounded raster mask + flood-region vector reconstruction for shapes enclosed by multiple freehand brush strokes; preserves prior direct vector contour filling. Complex cases still have limits.
-- Online LAN preview: host the current project, find rooms on the local network, share a copyable 8-digit room code, enter code on LAN or direct IP, and see unique-color participants with names and self-reported levels in the right Layers dock. This is NOT an Internet-wide room directory or verified Google account system. Existing multi-user stroke sync remains a beta; other operations are not fully synced.
+- Online LAN preview: host the current project, find rooms on the local network, share a copyable 8-digit room code, enter code on LAN or direct IP, and see unique-color participants with names and self-reported levels in the right Layers dock. This is NOT an Internet-wide room directory or verified Google account system. Document-level edits now synchronize in protocol v3, subject to simultaneous-edit conflicts and real-PC QA.
 - Perspective settings: non-destructive overlay square grid, parallel lines, or single-point perspective with adjustable spacing, color, line thickness, opacity and vanishing point.
 - Persisted timeline panel height and adjustable dock separator (drag between Properties and Layers). Colors and Symmetry inspectors collapse to free space.
 - Rollback list now shows the immediate previous release separately from FIVE older releases without duplicating it.
 - **Version Backup / النسخة الاحتياطية:** open Settings → Previous Versions to return to the preceding official release or choose from the five latest eligible older GitHub builds, each showing its publication date. All downloads use the existing SHA-256-verified installer flow and require confirmation; unsaved projects block restart.
 - **Layers dock refresh:** wider resizable Krita-inspired sidebar with live stroke thumbnails, quick layer-name search, colored selection, stroke/frame metadata, guide-layer context action, and existing visibility, lock, rename, duplicate, delete, move, opacity controls. No Krita GPL code imported.
-- **Stick Online beta:** third option under Drawing and Animation. LAN-hosted rooms, optional password, participant limit, LAN discovery and manual direct IPv4 connection. Newly committed strokes synchronize with the host; room-wide timeline/layer edits and Internet-wide discovery are not implemented yet. This preview is not end-to-end encrypted.
+- **Stick Online beta:** third option under Drawing and Animation. LAN-hosted rooms, optional password, participant limit, LAN discovery and manual direct IPv4 connection. Room-wide project edits, including layers and timeline, now flow through the host; Internet-wide discovery is not implemented. This preview is not end-to-end encrypted.
 - Art System: anime-style bilingual artist profile with editable display name, local avatar image and a level/rank progress bar. Progress formulas are not displayed.
 - Customizable workspace, cursor-anchored smooth zoom, transform rotation handle, draggable lasso selections, right-click tool choices and more versatile brush-tip geometry.
 - A centered 10-second LEVEL UP panel shows one of 1,000 unique motivating lines in easy US English or Egyptian Arabic, with one of 100 small procedural sound variations.
@@ -77,6 +81,10 @@
 - **القيود الحالية:** الدلو بيلون المسارات المقفولة اللي بيتعرف عليها، ولسه مش Flood Fill كامل على أي سطح Raster. لم يتم نسخ أكواد Krita الخاضعة لترخيص GPL.
 
 ### إيه الجديد؟
+- **مزامنة الأونلاين v3:** أي تعديل في محتوى المشروع بيتبعت من خلال جهاز الهوست: رسم ومسح ودلو وإضافة أو حذف ليرات وفريمات وتعديل النص والتحويلات. إنشاء غرفة بيحوّل جهازك فعليًا لسيرفر TCP للغرفة، وبيظهر توضيح واضح في الواجهة.
+- **إصلاح الدلو:** الخط اللي بيقسّم الدايرة بيمنع اللون من الانتقال للنصف التاني، مش بيتملى الشكل كله.
+- **تحسين التايم لاين:** حذف أول فريم بيحافظ على الرسم اللي كان ظاهر في الفريم التاني، والفريمات اللي فيها نص أو Symbol بتبان مش فاضية.
+- **حدود الأونلاين:** التعديلات المتزامنة على نفس العنصر ممكن تتعارض، والصور والصوت من ملفات خارجية مش بتتنقل، ولسه مطلوب تجربة فعلية بين جهازين Windows.
 - أيقونات ملونة بتفاصيل أوضح لكل الأدوات الـ13 ومؤشرات الماوس، وأصوات UI جديدة مولّدة داخل البرنامج بدل الصفارات القديمة.
 - تعبئة الدلو: طريقة إضافية بتحدد المساحات المقفولة من عدة خطوط مرسومة بالفرشة، وبترجع المنطقة لحدود فيكتور؛ مع استمرار التعبئة المباشرة للأشكال المغلقة. الحالات المعقدة لسه ليها حدود.
 - أونلاين تجريبي على نفس الشبكة: الهوست بيشارك المشروع الحالي، وكود غرفة من 8 أرقام سهل النسخ، والانضمام بالكود محليًا أو IP، وقائمة بأسماء المشاركين ومستوياتهم اللي بيبلغوا بيها وألوانهم. ده مش دليل غرف عالمي، ولا تسجيل دخول Google معتمد؛ مزامنة الأدوات غير الرسم الجديد لسه مش كاملة.
