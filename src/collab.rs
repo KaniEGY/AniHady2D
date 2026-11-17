@@ -304,6 +304,8 @@ fn host_peer(mut stream: TcpStream, host: Arc<HostShared>) -> io::Result<()> {
         if !host.peers.lock().map(|peers| peers.contains_key(&id)).unwrap_or(false) { break; }
         match packet_read(&mut stream, &host.running) {
             Ok(Packet::Strokes { layer, frame, strokes }) => {
+                // A kicked guest must never sneak in one final queued edit.
+                if !host.peers.lock().map(|p| p.contains_key(&id)).unwrap_or(false) { break; }
                 let accepted = host.project.lock().map(|mut p|
                     apply_strokes(&mut p, layer, frame, strokes.clone())).unwrap_or(false);
                 if accepted {
@@ -312,6 +314,7 @@ fn host_peer(mut stream: TcpStream, host: Arc<HostShared>) -> io::Result<()> {
                 }
             }
             Ok(Packet::Edits { edits }) => {
+                if !host.peers.lock().map(|p| p.contains_key(&id)).unwrap_or(false) { break; }
                 // Acquiring the gate until after relay is essential: otherwise
                 // peer B could broadcast edit #2 ahead of peer A's edit #1.
                 let _order = host.edit_order.lock().map_err(|_| io::Error::other("Edit gate poisoned"))?;
