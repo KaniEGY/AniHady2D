@@ -4058,7 +4058,17 @@ impl eframe::App for StickApp {
                     }
                     for s in &fd.strokes { draw_stroke_pro(&painter, s, None, l_op, scale, 0.0, 0.0, &to_screen); }
                     for txt in &fd.text_items {
-                        painter.text(to_screen(egui::pos2(txt.x, txt.y)), egui::Align2::LEFT_TOP, fix_ar(&txt.content), egui::FontId::proportional(txt.font_size * scale), egui::Color32::from_rgba_unmultiplied(txt.color[0], txt.color[1], txt.color[2], (txt.color[3] as f32 * l_op) as u8));
+                        let tint = egui::Color32::from_rgba_unmultiplied(txt.color[0], txt.color[1],
+                            txt.color[2], (txt.color[3] as f32 * l_op) as u8);
+                        let galley = painter.layout_no_wrap(
+                            fix_ar(&txt.content),
+                            egui::FontId::proportional(txt.font_size * scale),
+                            tint,
+                        );
+                        let text_shape = egui::epaint::TextShape::new(
+                            to_screen(egui::pos2(txt.x, txt.y)), galley, tint,
+                        ).with_angle(self.canvas_rotation_deg.to_radians());
+                        painter.add(egui::Shape::Text(text_shape));
                     }
                 }
             }
