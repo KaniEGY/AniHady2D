@@ -4264,7 +4264,9 @@ impl eframe::App for StickApp {
                                 let is_b = f > self.timeline_length;
                                 let is_kf = !is_b && layer.keyframes.contains_key(&f);
                                 let eff = if is_b { None } else { Self::get_effective_frame_data(layer, f) };
-                                let has_d = eff.map_or(false, |fd| !fd.strokes.is_empty() || !fd.media_items.is_empty());
+                                let has_d = eff.map_or(false, |fd| !fd.strokes.is_empty()
+                                    || !fd.media_items.is_empty() || !fd.text_items.is_empty()
+                                    || !fd.symbol_instances.is_empty());
                                 let tw = eff.map(|fd| fd.tween_mode).unwrap_or(TweenMode::None);
                                 let (cr, cresp) = ui.allocate_exact_size(egui::vec2(cell_w, 34.0), egui::Sense::click());
                                 let cell = self.config.timeline_cell_color;
