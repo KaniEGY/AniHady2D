@@ -2519,23 +2519,28 @@ impl eframe::App for StickApp {
                     self.active_layer_idx = 0;
                     self.has_unsaved_changes = true;
                 }
-                if self.project.layers.len() > 1 && self.active_layer_idx + 1 < self.project.layers.len() {
-                    if ui.small_button("Merge ↓").clicked() {
-                        self.save_undo_state();
-                        let top = self.project.layers.remove(self.active_layer_idx);
-                        if let Some(below) = self.project.layers.get_mut(self.active_layer_idx) {
-                            if let Some(tfd) = top.keyframes.get(&1) { below.keyframes.entry(1).or_default().strokes.extend(tfd.strokes.clone()); }
-                        }
-                        self.has_unsaved_changes = true;
-                    }
+                if ui.small_button(tr(lang, "Duplicate", "نسخ اللير"))
+                    .on_hover_text(tr(lang, "Duplicate selected layer", "اعمل نسخة من اللير")).clicked() {
+                    layer_menu_action = Some((self.active_layer_idx, layer_ops::LayerAction::Duplicate));
+                }
+                if ui.add_enabled(self.active_layer_idx > 0, egui::Button::new("↑"))
+                    .on_hover_text(tr(lang, "Move Layer Up", "حرّك اللير لفوق")).clicked() {
+                    layer_menu_action = Some((self.active_layer_idx, layer_ops::LayerAction::MoveUp));
+                }
+                if ui.add_enabled(self.active_layer_idx + 1 < self.project.layers.len(), egui::Button::new("↓"))
+                    .on_hover_text(tr(lang, "Move Layer Down", "حرّك اللير لتحت")).clicked() {
+                    layer_menu_action = Some((self.active_layer_idx, layer_ops::LayerAction::MoveDown));
                 }
             });
             if let Some(al) = self.project.layers.get_mut(self.active_layer_idx) {
                 ui.horizontal(|ui| {
-                    ui.label("Opacity:");
-                    ui.add(egui::Slider::new(&mut al.opacity, 0.05..=1.0));
+                    ui.label(tr(lang, "Layer Opacity", "شفافية اللير"));
+                    if ui.add(egui::Slider::new(&mut al.opacity, 0.0..=1.0)).changed() {
+                        self.has_unsaved_changes = true;
+                    }
                 });
             }
+            let can_delete_layers = self.project.layers.len() > 1;
             for (idx, layer) in self.project.layers.iter_mut().enumerate() {
                 ui.horizontal(|ui| {
                     if ui.checkbox(&mut layer.visible, "")
@@ -2551,7 +2556,7 @@ impl eframe::App for StickApp {
                         self.active_layer_idx = idx;
                         self.selected_stroke_indices.clear();
                     }
-                    if ui.add_enabled(self.project.layers.len() > 1 && !layer.locked,
+                    if ui.add_enabled(can_delete_layers && !layer.locked,
                         egui::Button::new("×"))
                         .on_hover_text(tr(lang, "Delete Layer", "احذف اللير")).clicked() {
                         self.pending_delete_layer = Some(idx);
@@ -2685,8 +2690,23 @@ impl eframe::App for StickApp {
             let stage_rect = egui::Rect::from_center_size(center, egui::vec2(stage_w, stage_h) * scale);
 
             let is_inside_stage = pointer_pos.map_or(false, |p| stage_rect.contains(p) && canvas_rect.contains(p));
-            let show_dot = is_inside_stage && !any_modal_open && !space_down && !alt_down && self.active_tool_ui != ActiveToolUI::HandCanvas;
-            ctx.set_cursor_icon(if show_dot { egui::CursorIcon::None } else if space_down || self.active_tool_ui == ActiveToolUI::HandCanvas { egui::CursorIcon::Grab } else { egui::CursorIcon::Default });
+            let custom_brush_cursor = matches!(self.active_tool_ui,
+                ActiveToolUI::Brush | ActiveToolUI::VectorPen | ActiveToolUI::EraserRed | ActiveToolUI::EraserGreen);
+            let show_dot = is_inside_stage && !any_modal_open && !space_down && !alt_down && custom_brush_cursor;
+            let tool_cursor = if show_dot {
+                egui::CursorIcon::None
+            } else if space_down || self.active_tool_ui == ActiveToolUI::HandCanvas {
+                egui::CursorIcon::Grab
+            } else {
+                match self.active_tool_ui {
+                    ActiveToolUI::Text => egui::CursorIcon::Text,
+                    ActiveToolUI::Bucket | ActiveToolUI::ShapeLine
+                        | ActiveToolUI::SelectNormal | ActiveToolUI::SelectLasso
+                        | ActiveToolUI::Eyedropper => egui::CursorIcon::Crosshair,
+                    _ => egui::CursorIcon::Default,
+                }
+            };
+            ctx.set_cursor_icon(tool_cursor);
 
             let is_over_canvas = pointer_pos.map_or(false, |p| canvas_rect.contains(p));
             if scroll_y != 0.0 && is_over_canvas && !any_modal_open {
@@ -2833,7 +2853,12 @@ impl eframe::App for StickApp {
                 if let (Some(p0), Some(p1)) = (self.shape_drag_start.take(), self.shape_drag_current.take()) {
                     if p0.distance(p1) > 3.0 {
                         self.save_undo_state();
-                        self.commit_stroke_with_symmetry(build_geometric_stroke(self.selected_shape_kind, p0, p1, self.brush_color, self.brush_size), now_time);
+                        let mut shape = build_geometric_stroke(self.selected_shape_kind, p0, p1, self.brush_color, self.brush_size);
+                        shape.opacity = self.brush_opacity;
+                        if self.shape_fill_enabled && self.selected_shape_kind != GeometricShapeKind::StraightLine {
+                            shape.fill_color = Some(self.brush_color);
+                        }
+                        self.commit_stroke_with_symmetry(shape, now_time);
                     }
                 }
                 if let Some(mut stroke) = self.current_stroke.take() {
@@ -2913,12 +2938,21 @@ impl eframe::App for StickApp {
 
             if let Some(stroke) = &self.current_stroke { draw_stroke_pro(&painter, stroke, None, 1.0, scale, 0.0, 0.0, &to_screen); }
             if let (Some(p0), Some(p1)) = (self.shape_drag_start, self.shape_drag_current) {
-                draw_stroke_pro(&painter, &build_geometric_stroke(self.selected_shape_kind, p0, p1, self.brush_color, self.brush_size), None, 1.0, scale, 0.0, 0.0, &to_screen);
+                let mut shape = build_geometric_stroke(self.selected_shape_kind, p0, p1, self.brush_color, self.brush_size);
+                shape.opacity = self.brush_opacity;
+                if self.shape_fill_enabled && self.selected_shape_kind != GeometricShapeKind::StraightLine {
+                    shape.fill_color = Some(self.brush_color);
+                }
+                draw_stroke_pro(&painter, &shape, None, 1.0, scale, 0.0, 0.0, &to_screen);
             }
             if show_dot {
                 if let Some(p) = pointer_pos {
-                    painter.circle_filled(p, 3.5, egui::Color32::WHITE);
-                    painter.circle_stroke(p, 4.3, egui::Stroke::new(1.2, egui::Color32::BLACK));
+                    let radius = (self.brush_size * self.zoom_level * 0.5).clamp(2.5, 125.0);
+                    let erasing = matches!(self.active_tool_ui, ActiveToolUI::EraserRed | ActiveToolUI::EraserGreen);
+                    let outline = if erasing { egui::Color32::from_rgb(248, 113, 113) } else { egui::Color32::BLACK };
+                    painter.circle_stroke(p, radius + 1.0, egui::Stroke::new(2.2, egui::Color32::WHITE));
+                    painter.circle_stroke(p, radius, egui::Stroke::new(1.3, outline));
+                    painter.circle_filled(p, 1.7, outline);
                 }
             }
         });
