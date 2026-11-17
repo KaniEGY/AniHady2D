@@ -20,6 +20,7 @@ mod timeline_styles;
 mod profile;
 mod project;
 mod collab;
+mod cloud_sync;
 mod project_sync;
 mod remote_access;
 mod transform_handles;
@@ -458,6 +459,10 @@ struct AppConfig {
     tool_icon_scale: f32,
     #[serde(default)]
     icon_cursor_ring: bool,
+    #[serde(default = "default_google_client_id")]
+    cloud_google_client_id: String,
+    #[serde(default)]
+    cloud_email: String,
     tool_select: String,
     #[serde(default = "default_lasso_key")]
     tool_lasso: String,
@@ -511,6 +516,9 @@ fn default_right_split() -> f32 { 0.45 }
 fn default_grid_size() -> f32 { 40.0 }
 fn default_autosave_mins() -> u64 { 5 }
 fn default_cursor_scale() -> f32 { 1.0 }
+fn default_google_client_id() -> String {
+    option_env!("STICK_GOOGLE_CLIENT_ID").unwrap_or("").to_string()
+}
 fn default_tl_bg() -> [u8; 4] { [28, 29, 34, 255] }
 fn default_tl_cell() -> [u8; 4] { [40, 42, 48, 255] }
 fn default_tl_head() -> [u8; 4] { [225, 55, 55, 255] }
@@ -564,6 +572,8 @@ impl Default for AppConfig {
             brush_cursor_scale: 1.0,
             tool_icon_scale: 1.0,
             icon_cursor_ring: false,
+            cloud_google_client_id: default_google_client_id(),
+            cloud_email: String::new(),
             tool_select: "V".to_string(),
             tool_lasso: "L".to_string(),
             tool_free_transform: "Q".to_string(),
@@ -1108,6 +1118,10 @@ struct StickApp {
     show_update_dialog: bool,
     show_patch_notes_dialog: bool,
     show_settings_dialog: bool,
+    cloud_job: Option<std::sync::mpsc::Receiver<cloud_sync::Event>>,
+    cloud_message: String,
+    cloud_files: Vec<cloud_sync::CloudFile>,
+    cloud_restore_confirmation: Option<cloud_sync::CloudFile>,
     show_shortcuts_dialog: bool,
     show_credits_dialog: bool,
     show_support_dialog: bool,
@@ -1251,6 +1265,10 @@ impl StickApp {
             show_update_dialog: false,
             show_patch_notes_dialog: AppConfig::load().last_seen_patch_version != get_installed_version(),
             show_settings_dialog: false,
+            cloud_job: None,
+            cloud_message: String::new(),
+            cloud_files: Vec::new(),
+            cloud_restore_confirmation: None,
             show_shortcuts_dialog: false,
             show_credits_dialog: false,
             show_support_dialog: false,
@@ -1375,6 +1393,39 @@ impl StickApp {
         }
         if self.online_session.is_some() || self.online_discovery.is_some() {
             ctx.request_repaint_after(Duration::from_millis(160));
+        }
+    }
+
+    fn poll_cloud_job(&mut self) {
+        let event=self.cloud_job.as_ref().and_then(|rx|rx.try_recv().ok());
+        if let Some(event)=event {
+            self.cloud_job=None;
+            match event {
+                cloud_sync::Event::SignedIn(identity)=>{
+                    self.user_profile.cloud_account_id=Some(identity.account_id);
+                    self.user_profile.save();
+                    self.config.cloud_email=identity.email;
+                    self.config.save();
+                    self.cloud_message="Google sign-in successful. You can back up your projects.".into();
+                }
+                cloud_sync::Event::BackedUp(n)=>{
+                    self.cloud_message=format!("Google Drive: backed up {n} items (profile + saved projects).");
+                }
+                cloud_sync::Event::Listed(files)=>{
+                    let count=files.len();
+                    self.cloud_files=files;
+                    self.cloud_message=format!("{count} Google Drive backup item(s) found.");
+                }
+                cloud_sync::Event::RestoredProject(path)=>{
+                    self.open_project_at_path(path.clone());
+                    self.cloud_message=format!("Restored backup as a new local copy: {}",path.display());
+                }
+                cloud_sync::Event::RestoredProfile(profile)=>{
+                    profile.apply(&mut self.user_profile);
+                    self.cloud_message="Cloud profile restored. The artist level and progress have been updated.".into();
+                }
+                cloud_sync::Event::Error(err)=>self.cloud_message=err,
+            }
         }
     }
 
@@ -2673,6 +2724,7 @@ impl eframe::App for StickApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         let lang = self.config.lang;
         self.poll_online_events(ctx);
+        self.poll_cloud_job();
         let now_time = ctx.input(|i| i.time);
         apply_user_theme(ctx, &self.config);
         // The shortcut guide is discoverable even when the toolbar is hidden.
@@ -3308,6 +3360,7 @@ impl eframe::App for StickApp {
                     ui.selectable_value(&mut self.settings_tab, 4, tr(lang, "Personalization", "التخصيص"));
                     ui.selectable_value(&mut self.settings_tab, 5, tr(lang, "Previous Versions", "النسخة الاحتياطية"));
                     ui.selectable_value(&mut self.settings_tab, 6, tr(lang, "Perspective", "المنظور"));
+                    ui.selectable_value(&mut self.settings_tab, 7, tr(lang, "Sign in", "تسجيل دخول"));
                 });
                 ui.separator();
                 match self.settings_tab {
@@ -3636,6 +3689,131 @@ impl eframe::App for StickApp {
                             changed = true;
                         }
                         if changed { self.config.save(); }
+                    }
+                    7 => {
+                        ui.heading(tr(lang,"Google account & Drive backup",
+                            "حساب جوجل والحفظ السحابي"));
+                        ui.label(tr(lang,
+                            "Connect through Google's official browser login. Stick never asks for your Google password.",
+                            "سجّل دخولك من متصفح جوجل الرسمي. Stick مش بيطلب كلمة المرور."));
+                        if self.config.cloud_google_client_id.is_empty() {
+                            ui.colored_label(egui::Color32::from_rgb(255,194,88),
+                                tr(lang,"Google login needs the app's OAuth Desktop Client ID from the developer.",
+                                    "تسجيل الدخول محتاج Google OAuth Desktop Client ID الخاص بالتطبيق من المطوّر."));
+                        }
+                        ui.collapsing(tr(lang,"Developer OAuth setup","إعداد المطوّر لجوجل"),|ui|{
+                            if ui.add(egui::TextEdit::singleline(&mut self.config.cloud_google_client_id)
+                                .desired_width(380.0)
+                                .hint_text("...apps.googleusercontent.com")).changed(){
+                                self.config.save();
+                            }
+                            ui.hyperlink_to(tr(lang,"Google Cloud credentials","Google Cloud OAuth"),
+                                "https://console.cloud.google.com/apis/credentials");
+                            ui.small(tr(lang,"Enable Google Drive API and create Desktop OAuth client. No client secret is needed in Stick.",
+                                "فعّل Google Drive API واعمل OAuth Client من نوع Desktop. مش مطلوب تحفظ Client Secret في Stick."));
+                        });
+                        ui.add_space(8.0);
+                        if let Some(id)=self.user_profile.cloud_account_id.clone(){
+                            ui.colored_label(egui::Color32::LIGHT_GREEN,
+                                format!("{}: {}",tr(lang,"Linked account","الحساب المرتبط"),
+                                    if self.config.cloud_email.is_empty(){"Google"}else{self.config.cloud_email.as_str()}));
+                            ui.small(tr(lang,"Remote backups are private in the app's Drive folder. Sign-in is checked when you run an action.",
+                                "النسخ السحابية خاصة بالتطبيق داخل Google Drive. صلاحية الدخول بتتراجع عند تنفيذ عملية."));
+                            ui.horizontal_wrapped(|ui|{
+                                if ui.add_enabled(self.cloud_job.is_none(),
+                                    egui::Button::new(tr(lang,"Back up level and saved projects",
+                                        "احفظ المستوى والمشاريع المحفوظة سحابيًا"))).clicked(){
+                                    let profile=cloud_sync::CloudProfile::from_user(&self.user_profile);
+                                    let mut paths:Vec<PathBuf>=self.config.recent_projects.iter()
+                                        .map(PathBuf::from).collect();
+                                    if let Some(p)=self.current_project_path.clone(){paths.push(p);}
+                                    paths.sort();paths.dedup();
+                                    let client=self.config.cloud_google_client_id.clone();
+                                    let account=id.clone();
+                                    self.cloud_job=Some(cloud_sync::spawn_job(move||{
+                                        cloud_sync::backup(&client,&account,profile,paths)
+                                            .map(cloud_sync::Event::BackedUp)
+                                    }));
+                                    self.cloud_message=tr(lang,"Uploading backups...","جاري رفع النسخ...").to_owned();
+                                }
+                                if ui.add_enabled(self.cloud_job.is_none(),
+                                    egui::Button::new(tr(lang,"Browse cloud backups","عرض النسخ السحابية"))).clicked(){
+                                    let client=self.config.cloud_google_client_id.clone();
+                                    let account=id.clone();
+                                    self.cloud_job=Some(cloud_sync::spawn_job(move||{
+                                        cloud_sync::list_cloud(&client,&account)
+                                            .map(cloud_sync::Event::Listed)
+                                    }));
+                                    self.cloud_message=tr(lang,"Loading Google Drive backups...","جاري قراءة النسخ...").to_owned();
+                                }
+                            });
+                            ui.add_space(8.0);
+                            if ui.add_enabled(self.cloud_job.is_none(),
+                                egui::Button::new(tr(lang,"Sign out of Google","تسجيل الخروج من جوجل"))).clicked(){
+                                match cloud_sync::sign_out(&id){
+                                    Ok(())=>{
+                                        self.user_profile.cloud_account_id=None;
+                                        self.user_profile.save();
+                                        self.config.cloud_email.clear();
+                                        self.config.save();
+                                        self.cloud_files.clear();
+                                        self.cloud_message=tr(lang,"Google account disconnected on this computer.",
+                                            "تم فصل حساب جوجل عن الجهاز. النسخ الموجودة في Drive لم تُحذف.").to_owned();
+                                    }
+                                    Err(err)=>self.cloud_message=err
+                                }
+                            }
+                        } else if ui.add_enabled(self.cloud_job.is_none(),
+                            egui::Button::new(tr(lang,"Sign in with Google","تسجيل الدخول باستخدام جوجل"))).clicked(){
+                            let client=self.config.cloud_google_client_id.trim().to_string();
+                            self.cloud_job=Some(cloud_sync::spawn_job(move||{
+                                cloud_sync::sign_in(&client).map(cloud_sync::Event::SignedIn)
+                            }));
+                            self.cloud_message=tr(lang,"Complete Google sign-in in your browser...",
+                                "كمّل تسجيل الدخول في متصفح جوجل...").to_string();
+                        }
+                        if self.cloud_job.is_some(){ui.spinner();}
+                        if !self.cloud_message.is_empty(){
+                            ui.label(self.cloud_message.as_str());
+                        }
+                        if !self.cloud_files.is_empty(){
+                            ui.separator();
+                            ui.strong(tr(lang,"Available backups","النسخ السحابية المتاحة"));
+                            egui::ScrollArea::vertical().max_height(215.0).show(ui,|ui|{
+                                for file in self.cloud_files.clone().into_iter().take(100){
+                                    ui.horizontal(|ui|{
+                                        ui.label(format!("{} ({})",file.name,file.modified));
+                                        if ui.add_enabled(self.cloud_job.is_none(),
+                                            egui::Button::new(tr(lang,"Restore copy","استعادة نسخة"))).clicked(){
+                                            self.cloud_restore_confirmation=Some(file);
+                                        }
+                                    });
+                                }
+                            });
+                        }
+                        if let Some(file)=self.cloud_restore_confirmation.clone(){
+                            ui.separator();
+                            ui.colored_label(egui::Color32::from_rgb(255,204,105),
+                                tr(lang,"Restore from Google Drive? The original local project will NOT be overwritten.",
+                                    "تستعيد النسخة دي؟ ملف المشروع المحلي الأصلي مش هيتم استبداله."));
+                            ui.small(file.name.as_str());
+                            ui.horizontal(|ui|{
+                                if ui.button(tr(lang,"Confirm restore","تأكيد الاستعادة")).clicked(){
+                                    if let Some(id)=self.user_profile.cloud_account_id.clone(){
+                                        let client=self.config.cloud_google_client_id.clone();
+                                        self.cloud_job=Some(cloud_sync::spawn_job(move||{
+                                            cloud_sync::restore(&client,&id,file)
+                                        }));
+                                        self.cloud_message=tr(lang,"Restoring cloud copy...",
+                                            "جاري استعادة النسخة السحابية...").to_owned();
+                                    }
+                                    self.cloud_restore_confirmation=None;
+                                }
+                                if ui.button(tr(lang,"Cancel","إلغاء")).clicked(){
+                                    self.cloud_restore_confirmation=None;
+                                }
+                            });
+                        }
                     }
                     _ => {}
                 }
