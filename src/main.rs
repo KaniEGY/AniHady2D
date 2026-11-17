@@ -3157,7 +3157,19 @@ impl eframe::App for StickApp {
             }
             let can_delete_layers = self.project.layers.len() > 1;
             for (idx, layer) in self.project.layers.iter_mut().enumerate() {
+                let selected_row = self.active_layer_idx == idx;
+                egui::Frame::none()
+                    .fill(if selected_row { egui::Color32::from_rgb(34, 65, 90) }
+                        else { egui::Color32::from_rgb(37, 39, 46) })
+                    .rounding(5.0)
+                    .inner_margin(egui::Margin::symmetric(5.0, 4.0))
+                    .show(ui, |ui| {
                 ui.horizontal(|ui| {
+                    let has_art = layer.keyframes.values().any(|frame|
+                        !frame.strokes.is_empty() || !frame.text_items.is_empty() || !frame.media_items.is_empty());
+                    ui.label(egui::RichText::new(if has_art { "◆" } else { "◇" })
+                        .color(if has_art { egui::Color32::from_rgb(105, 218, 207) }
+                               else { egui::Color32::from_gray(115) }).size(15.0));
                     if ui.checkbox(&mut layer.visible, "")
                         .on_hover_text(tr(lang, "Show or hide layer", "أظهر أو اخفي اللير")).changed() {
                         self.has_unsaved_changes = true;
@@ -3200,6 +3212,8 @@ impl eframe::App for StickApp {
                         self.pending_delete_layer = Some(idx);
                     }
                 });
+                });
+                ui.add_space(2.0);
             }
                 }); // scrollable layer dock
         });
