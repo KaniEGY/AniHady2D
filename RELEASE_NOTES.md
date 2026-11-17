@@ -14,6 +14,13 @@
 - **Known boundaries:** bucket fill operates on recognized closed stroke contours (now with improved near-closure tolerance), not arbitrary raster flood fill. Imported artwork/text still needs further parity tests for every transform. No Krita GPL code is copied into Stick.
 
 ### What's new
+- **Online privacy/diagnostics:** LAN/Tailscale discovery and room connections are now **explicit opt-in per session**, never started merely by opening the online lobby. The "Tailscale connected, 0 peers" case explains that the host must share device access or invite collaborators into the same tailnet. Room codes remain discovery-only; a remote friend can use the host 100.x IP if allowed.
+- **Exit hang:** no synchronous audio-drain on application close. Unsaved documents get Save & Exit / Exit without saving / Cancel.
+- **Brush stability:** G-Pen now draws a continuous pressure-aware outline as one translucent geometry rather than a stack of dark, overlapping circles. PNG/video export uses the same outline where possible. Freehand strokes no longer receive destructive fourfold Catmull-Rom oversampling at release.
+- **Vector nodes:** vector pen no longer multiplies stored nodes eightfold; configurable node reduction and right-click advanced options, Shift selection and box selection of multiple nodes with combined dragging.
+- **Sculpt / Finger:** new drag-to-deform tool with adjustable radius and strength, using local point sampling and smooth falloff. New Blender-like X/Y translation arrows appear on selected content, alongside existing scale and rotate handles.
+- **Cursor customization:** Personalization includes brush cursor size, tool icon size and optional circular halo (off by default).
+- **Limitations:** Multi-node edit is an MVP, not full Blender Bezier-handle or Grease Pencil parity. Two-computer remote connectivity depends on Tailscale permissions and still requires physical UI QA.  
 - **Tools reliability sprint (all 13 toolbar tools reviewed):** Bucket now fills enclosed complex/concave freehand loops with proper tessellation, grows color beneath visible outlines to avoid white halos, supports small ink-edge clicks, and exposes adjustable gap closure and optional all-visible-layer reference. Redrawing the same region changes its color on top of older fills.
 - **Erasers:** complete eraser detects long stroke segments even without nearby vertices; partial eraser clips lines at exact intersection points and both erasers sweep over fast pointer paths.
 - **Selection & Eyedropper:** precise geometry hit tests replace overly broad bounding boxes; eyedropper picks actual fill/line colors from the frontmost visible layer.
@@ -88,6 +95,13 @@
 - **القيود الحالية:** الدلو بيلون المسارات المقفولة اللي بيتعرف عليها، ولسه مش Flood Fill كامل على أي سطح Raster. لم يتم نسخ أكواد Krita الخاضعة لترخيص GPL.
 
 ### إيه الجديد؟
+- **خصوصية الأونلاين:** مفيش بحث عن غرف أو اتصال غير لما المستخدم يختار تشغيل الأونلاين بنفسه. لو Tailscale متصل لكن 0 جهاز ظاهر، البرنامج بيوضح خطوة مشاركة جهاز الهوست أو دعوة أصحابك للشبكة.
+- **إصلاح الخروج:** إلغاء انتظار مؤثر الصوت عند قفل البرنامج، مع خيارات احفظ واخرج / خروج بدون حفظ / إلغاء.
+- **فرشة G-Pen:** الضربة بقت خط متصل بحساب ضغط القلم بدل دوائر شفافة بتتراكب وتتسبب في البقع السودا. والتصدير يستخدم نفس شكل الضربة. وقفنا التنعيم اللي كان بيخلق نقط زيادة وبيشوّه بعض الزوايا.
+- **الفيكتور:** عدد نقاط أقل في الرسم الجديد، تحكم في نسبة تقليلها من كلك يمين، وتحديد Shift أو مربع تحديد لنقل نقاط متعددة.
+- **أداة النحت / الصباع:** حركة مرنة لجزء من الخط بالحجم والقوة اللي تختارهم؛ وأسهم X/Y جديدة لتحريك العنصر المحدد أفقيًا أو رأسيًا زي واجهات 3D.
+- **التخصيص:** تكبير/تصغير مؤشر الفرشة وأيقونة الأداة بجوار الماوس، وإمكانية إخفاء أو إظهار الدائرة المحيطة (مقفولة افتراضيًا).
+- **ملاحظة:** ما زال مطلوب اختبار عملي على جهازين Windows، والفيكتور مش نسخة كاملة من Bézier/Grease Pencil في Blender.
 - **تحديث تطوير أدوات الرسم:** راجعنا الأدوات الـ13؛ أصلحنا الدلو مع الحلقات والخطوط المتقاطعة والأشكال المقعّرة، وخفّفنا الفراغات البيضا بين التلوين وحدود الخط. اتضاف قفل فجوات قابل للتعديل وخيار استخدام حدود كل الليرات الظاهرة.
 - **الممحاة الكاملة والجزئية:** بقوا بيحسبوا تقاطع الممحاة مع الخط نفسه وبيمسحوا أثناء الحركة السريعة، حتى لو مفيش نقاط خط تحت المؤشر بالضبط.
 - **التحديد والقطارة:** الضغط على الخطوط بقى أدق، والقطارة بتجيب ألوان الخط أو التعبئة من أعلى لاير ظاهر.
