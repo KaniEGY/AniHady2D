@@ -1244,16 +1244,12 @@ impl StickApp {
                     self.play_sfx(SfxType::NewFrame);
 
                     if outcome.report.was_migrated {
-                        // لا نكتب فوق الملف القديم تلقائياً؛ ننشئ نسخة محدثة مستقلة أو نترك المستخدم يختار مكان الحفظ
-                        let migrated_path = p.with_file_name(format!(
-                            "{}_v{}.stick",
-                            p.file_stem().and_then(|s| s.to_str()).unwrap_or("project"),
-                            PROJECT_SCHEMA_VERSION
-                        ));
-                        self.current_project_path = Some(migrated_path);
+                        // لا نعيّن مسار حفظ آلياً: قد يوجد بالفعل مشروع مُحوّل بالاسم المتوقع.
+                        // Ctrl+S سيفتح Save As لحماية الملف الأصلي وأي نسخة مُحوّلة سابقة.
+                        self.current_project_path = None;
                         self.has_unsaved_changes = true;
                         let mut msg = format!(
-                            "تم إنشاء هذا المشروع بإصدار قديم من Stick ({}).\nتم فتح نسخة متوافقة مع الإصدار الحالي (Schema v{}) مع الاحتفاظ بالملف الأصلي سليماً دون تعديل.",
+                            "تم إنشاء هذا المشروع بإصدار قديم من Stick ({}).\nتم فتح نسخة متوافقة مع الإصدار الحالي (Schema v{}) مع الاحتفاظ بالملف الأصلي سليماً دون تعديل.\nعند الضغط على حفظ سيُطلب منك اختيار اسم ومسار للنسخة الجديدة (Save As) حتى لا نستبدل مشروعاً آخر.",
                             outcome.report.source_format_label, outcome.report.new_schema
                         );
                         if let Some(bak) = outcome.legacy_backup_path {
