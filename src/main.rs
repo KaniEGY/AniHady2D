@@ -1466,7 +1466,12 @@ impl StickApp {
     fn leave_online_session(&mut self) {
         if let Some(session) = self.online_session.take() {
             if session.is_host {
-                match session.handoff_before_leave(&self.project) {
+                // Flush this editor's pending local changes before choosing the
+                // authoritative document snapshot that the successor inherits.
+                if let Err(err) = session.sync_local_changes(&self.project) {
+                    self.online_message = format!("Could not flush edits before handoff: {err}");
+                }
+                match session.handoff_before_leave() {
                     Ok(true) => self.online_message =
                         "Room ownership offered to the earliest connected guest.".into(),
                     Ok(false) => {}
