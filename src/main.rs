@@ -1641,6 +1641,17 @@ impl eframe::App for StickApp {
                     });
                 });
             });
+            // Show version notes on the first run after an update, even
+            // before the user chooses Drawing or Animation workspace.
+            let mut launcher_ack = false;
+            changelog::render_whats_new_modal(
+                ctx, lang, &self.installed_version,
+                &mut self.show_patch_notes_dialog, &mut launcher_ack,
+            );
+            if launcher_ack {
+                self.config.last_seen_patch_version = self.installed_version.clone();
+                self.config.save();
+            }
             return;
         }
 
@@ -1648,6 +1659,7 @@ impl eframe::App for StickApp {
         changelog::render_whats_new_modal(
             ctx,
             lang,
+            &self.installed_version,
             &mut self.show_patch_notes_dialog,
             &mut patch_acknowledged,
         );
