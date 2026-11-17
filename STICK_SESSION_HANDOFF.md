@@ -123,3 +123,13 @@
 - `src/timeline_styles.rs`: optional exposure-sheet rendering with frame/timecode ruler, held strips, keyframe diamonds, playhead and tween colors, tests.
 - `src/main.rs`: persisted config `timeline_style` (default 0=OLD), `timeline_new_cell_width` (default 64), `timeline_new_row_height` (default 50), `timeline_show_timecodes` (default true). OLD preserves its prior width/row/layout. NEW shares frame/project operations; controls exposed in timeline gear. `show_feedback_dialog`: main launcher feedback link opens a closable popup with exact user-supplied Instagram URL and GitHub Issues.
 - Validated source archive only. Windows unit tests / UI visual testing still needed before making runtime claims.
+
+
+## 17 Nov 2026 — Google account backup, two-point perspective, picker and join UI
+- Branch: `feat/drive-sync-2point-picker-online-20261117`, based on main `c871afecb18a991d6e1113d37adabf5194c73d63`. PR #30.
+- `src/cloud_sync.rs`: Desktop OAuth PKCE via loopback browser; scope `openid email drive.appdata`, refresh in Windows Credential Manager using keyring; Drive appDataFolder backup/list/download. CloudProfile is strictly sanitized (no tokens/local paths), project files backed up from saved recent list only. Restore creates separate local copies and needs explicit user confirmation. Optional async auto-backup after local Save. OAuth Desktop client must be configured using GitHub Actions variable `STICK_GOOGLE_CLIENT_ID`; no credentials are auto-provisioned.
+- `src/main.rs`: added Settings → تسجيل دخول tab with auth, backup/list/restore/signout, clear messages and optional auto-backup. Perspective mode reset to Off in AppConfig::load every launch; new two-point guide with two adjustable horizontal vanishing points and adjustable horizon; fixed eyedropper cursor drawing hotspot at native position; joined-room UI condensed to list/cards + direct IP/password and expandable code and troubleshooting.
+- `src/collab.rs`: added real localhost TCP host↔guest handshake test. This does not prove Tailscale on different networks or traverse CGNAT on its own.
+- `.github/workflows/build.yml`: public `STICK_GOOGLE_CLIENT_ID` variable available to Rust compile. Set this variable after provisioning Google Cloud Desktop OAuth and Drive API/consent screen (see `GOOGLE_DRIVE_SETUP.md`).
+- Note: appDataFolder backup is invisible in standard My Drive. External media assets referenced by project file paths are not included; disclose limitation.
+- Need Windows CI and manual Google OAuth / cross-ISP connectivity test before claiming production integration fully works. Publish user-approved updates by default, preserve old releases; user specifically permits merge before green action, but flag untested paths truthfully.
