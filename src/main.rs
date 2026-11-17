@@ -4688,14 +4688,28 @@ impl eframe::App for StickApp {
                             self.ensure_editable_keyframe();
                             if let Some(l) = self.project.layers.get_mut(self.active_layer_idx) {
                                 if let Some(f) = l.keyframes.get_mut(&self.current_frame) {
-                                    let r = self.brush_size;
-                                    let changed = if self.active_tool_ui == ActiveToolUI::EraserRed {
-                                        eraser_tools::erase_whole(
-                                            &mut f.strokes, (stage_pos.x, stage_pos.y), r)
+                                    let r = self.brush_size.max(2.0);
+                                    let previous = if pointer_pressed {
+                                        stage_pos
                                     } else {
-                                        eraser_tools::erase_partial(
-                                            &mut f.strokes, (stage_pos.x, stage_pos.y), r)
+                                        self.last_pointer_pos.map(&to_stage).unwrap_or(stage_pos)
                                     };
+                                    // Interpolate along quick mouse/tablet drags. The old
+                                    // point-only eraser left gaps between input frames.
+                                    let distance = previous.distance(stage_pos);
+                                    let steps = (distance / (r * 0.5).max(2.0))
+                                        .ceil().clamp(1.0, 80.0) as usize;
+                                    let mut changed = false;
+                                    for step in 0..=steps {
+                                        let sample = previous.lerp(stage_pos, step as f32 / steps as f32);
+                                        changed |= if self.active_tool_ui == ActiveToolUI::EraserRed {
+                                            eraser_tools::erase_whole(
+                                                &mut f.strokes, (sample.x, sample.y), r)
+                                        } else {
+                                            eraser_tools::erase_partial(
+                                                &mut f.strokes, (sample.x, sample.y), r)
+                                        };
+                                    }
                                     if changed { self.has_unsaved_changes = true; }
                                 }
                             }
@@ -4919,6 +4933,21 @@ impl eframe::App for StickApp {
                     }
                 }
                 if let Some(mut stroke) = self.current_stroke.take() {
+                    // Keep the actual pointer-up endpoint so stabilized brush
+                    // strokes don't visibly stop short or leave a tiny loop gap.
+                    if !stroke.is_vector {
+                        if let Some(pointer) = pointer_pos.filter(|p| canvas_rect.contains(*p)) {
+                            let last_stage = to_stage(pointer);
+                            if stroke.points.last().is_some_and(|p|
+                                (p.x-last_stage.x).hypot(p.y-last_stage.y)>0.75) {
+                                let pressure = stroke.points.last()
+                                    .map(|p| p.pressure).unwrap_or(1.0);
+                                stroke.points.push(StrokePoint {
+                                    x: last_stage.x, y: last_stage.y, pressure
+                                });
+                            }
+                        }
+                    }
                     if stroke.is_vector {
                         stroke.simplify_vector_nodes(2.2);
                         stroke.fit_cubic_bezier_spline(8);
@@ -5252,6 +5281,35 @@ mod tool_discovery_tests {
         let mut config = AppConfig::default();
         config.tool_brush = "J".to_string();
         assert_eq!(tool_shortcut(ActiveToolUI::Brush, &config), "J");
+    }
+
+    #[test]
+    fn geometric_tools_generate_finite_closed_shapes() {
+        let from = egui::pos2(20.0, 25.0);
+        let to = egui::pos2(130.0, 145.0);
+        for kind in [
+            GeometricShapeKind::Circle, GeometricShapeKind::Square,
+            GeometricShapeKind::Rectangle, GeometricShapeKind::Triangle,
+            GeometricShapeKind::Pentagon
+        ] {
+            let shape = build_geometric_stroke(kind,from,to,[220,10,10,255],5.0);
+            assert!(shape.points.len()>=4);
+            let first=&shape.points[0];
+            let last=shape.points.last().unwrap();
+            assert!((first.x-last.x).abs() < 0.1 && (first.y-last.y).abs() < 0.1);
+            assert!(shape.points.iter().all(|p|p.x.is_finite()&&p.y.is_finite()));
+            assert!(fill_tools::contour_contains(&shape,75.0,83.0));
+        }
+    }
+
+    #[test]
+    fn squares_have_real_area_even_for_purely_vertical_drag() {
+        let square=build_geometric_stroke(
+            GeometricShapeKind::Square,
+            egui::pos2(50.0,20.0),egui::pos2(50.0,80.0),[0,0,0,255],3.0);
+        let xs: Vec<_>=square.points.iter().map(|p|p.x).collect();
+        assert!(xs.iter().copied().fold(f32::NEG_INFINITY,f32::max)
+            -xs.iter().copied().fold(f32::INFINITY,f32::min)>50.0);
     }
 
     #[test]
