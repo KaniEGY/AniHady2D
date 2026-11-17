@@ -14,6 +14,7 @@ mod layer_ops;
 mod timeline_ops;
 mod profile;
 mod project;
+mod collab;
 
 use arabic_reshaper::arabic_reshape;
 use brushes::{draw_brush_preset_icon, draw_stroke_pro};
@@ -21,6 +22,7 @@ use stylus::TouchPressureTracker;
 use eframe::egui;
 use exporter::{ImageExportFormat, VideoExportFormat};
 use profile::UserProfile;
+use collab::{OnlineMode, OnlineEvent, OnlineSession, RoomListing};
 use project::{
     AniProject, AudioSyncMode, AudioTrack, EasingCurve, FrameData, KritaBrushPreset, Layer, MediaItem, MediaType,
     BrushTipShape, Stroke, StrokePoint, Symbol, SymbolInstance, TextItem, TweenMode, PROJECT_SCHEMA_VERSION,
@@ -48,6 +50,15 @@ enum WorkspaceMode {
     Launcher,
     DrawingOnly,
     AnimationStudio,
+    OnlineLobby,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum OnlinePage {
+    ChooseMode,
+    ChooseAction,
+    CreateRoom,
+    JoinRoom,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -862,6 +873,17 @@ fn build_geometric_stroke(kind: GeometricShapeKind, p0: egui::Pos2, p1: egui::Po
 
 struct StickApp {
     workspace_mode: WorkspaceMode,
+    online_page: OnlinePage,
+    online_mode: OnlineMode,
+    online_room_name: String,
+    online_password: String,
+    online_capacity: usize,
+    online_address: String,
+    online_rooms: Vec<RoomListing>,
+    online_discovery: Option<std::sync::mpsc::Receiver<Vec<RoomListing>>>,
+    online_session: Option<OnlineSession>,
+    online_message: String,
+    online_members: usize,
     install_target_dir: String,
     install_status_text: String,
     project: AniProject,
@@ -977,6 +999,17 @@ impl StickApp {
 
         Self {
             workspace_mode: initial_mode,
+            online_page: OnlinePage::ChooseMode,
+            online_mode: OnlineMode::Drawing,
+            online_room_name: "My Studio".to_owned(),
+            online_password: String::new(),
+            online_capacity: 4,
+            online_address: String::new(),
+            online_rooms: Vec::new(),
+            online_discovery: None,
+            online_session: None,
+            online_message: String::new(),
+            online_members: 1,
             install_target_dir: default_install_path,
             install_status_text: String::new(),
             project: proj,
@@ -1275,9 +1308,13 @@ impl StickApp {
         }
         self.ensure_editable_keyframe();
         if let Some(layer) = self.project.layers.get_mut(self.active_layer_idx) {
+            let outgoing_strokes = strokes_to_add.clone();
             layer.keyframes.entry(self.current_frame).or_default().strokes.extend(strokes_to_add);
             self.has_unsaved_changes = true;
             self.record_frame_drawn_activity(now_time);
+            if let Some(session) = &self.online_session {
+                session.send_strokes(self.active_layer_idx, self.current_frame, outgoing_strokes);
+            }
         }
     }
 
@@ -2029,6 +2066,7 @@ impl StickApp {
 impl eframe::App for StickApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         let lang = self.config.lang;
+        self.poll_online_events(ctx);
         let now_time = ctx.input(|i| i.time);
         apply_user_theme(ctx, &self.config);
         // The shortcut guide is discoverable even when the toolbar is hidden.
@@ -2136,6 +2174,13 @@ impl eframe::App for StickApp {
                             self.workspace_mode = WorkspaceMode::AnimationStudio;
                         }
                     });
+                    ui.add_space(16.0);
+                    if ui.add(egui::Button::new(egui::RichText::new(tr(lang, "ONLINE", "أونلاين")).size(22.0))
+                        .min_size(egui::vec2(440.0, 70.0)).fill(egui::Color32::from_rgb(24, 154, 127))).clicked() {
+                        self.online_page = OnlinePage::ChooseMode;
+                        self.online_message.clear();
+                        self.workspace_mode = WorkspaceMode::OnlineLobby;
+                    }
                 });
                 ui.add_space(16.0);
                 if ui.button(tr(lang, "Check for Updates", "تحديث البرنامج")).clicked() {
@@ -2178,6 +2223,11 @@ impl eframe::App for StickApp {
             // Show the updater before mode selection too, so users do not
             // need to start a drawing project just to install a new build.
             self.render_update_dialog(ctx, lang);
+            return;
+        }
+
+        if self.workspace_mode == WorkspaceMode::OnlineLobby {
+            self.render_online_lobby(ctx);
             return;
         }
 
@@ -2919,7 +2969,7 @@ impl eframe::App for StickApp {
                 ui.separator();
 
                 let m_lbl = if self.workspace_mode == WorkspaceMode::DrawingOnly { tr(lang, "Switch to Animation", "التبديل للأنيميشن") } else { tr(lang, "Switch to Drawing", "التبديل للرسم") };
-                if ui.button(m_lbl).clicked() {
+                if ui.add_enabled(self.online_session.is_none(), egui::Button::new(m_lbl)).clicked() {
                     self.workspace_mode = if self.workspace_mode == WorkspaceMode::DrawingOnly { WorkspaceMode::AnimationStudio } else { WorkspaceMode::DrawingOnly };
                 }
                 ui.separator();
