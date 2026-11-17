@@ -4,12 +4,13 @@
 //! This is not an encrypted Internet service or a global room directory.
 use crate::project::{AniProject, Stroke};
 use crate::project_sync::{self, ProjectEdit};
+use crate::remote_access::{self, TailnetInfo};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::hash::{BuildHasher, Hasher};
 use std::io::{self, Read, Write};
-use std::net::{SocketAddr, TcpListener, TcpStream, UdpSocket};
+use std::net::{Ipv4Addr, SocketAddr, TcpListener, TcpStream, UdpSocket};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
@@ -409,7 +410,19 @@ impl OnlineSession {
         let running_worker = running.clone();
         thread::spawn(move || {
             let result = (|| -> Result<(), String> {
-                let mut stream = TcpStream::connect_timeout(&addr, Duration::from_secs(5)).map_err(|e| format!("Connection failed: {}", e))?;
+                let mut stream = TcpStream::connect_timeout(&addr, Duration::from_secs(5)).map_err(|e| {
+                    let mut message = format!("Connection failed: {}", e);
+                    if matches!(addr.ip(), std::net::IpAddr::V4(ip) if ip.is_private()) {
+                        message.push_str(
+                            ". This is a LAN-only address. For a friend on another network, use the host's 100.x Tailscale IP after connecting both devices through Tailscale."
+                        );
+                    } else {
+                        message.push_str(
+                            ". The host must keep the room open. Check access to TCP 47554, firewall rules, and that both devices can reach one another."
+                        );
+                    }
+                    message
+                })?;
                 stream.set_read_timeout(Some(Duration::from_millis(300))).map_err(|e| e.to_string())?;
                 stream.set_write_timeout(Some(Duration::from_secs(3))).map_err(|e| e.to_string())?;
                 packet_write(&mut stream, &Packet::Hello { name: nickname, level: level.min(1000), protocol: PROTOCOL, mode }).map_err(|e| e.to_string())?;
@@ -523,7 +536,26 @@ impl OnlineSession {
 }
 impl Drop for OnlineSession { fn drop(&mut self) { self.close(); } }
 
+#[derive(Debug, Clone)]
+pub struct RoomSearchResult {
+    pub rooms: Vec<RoomListing>,
+    pub tailnet: TailnetInfo,
+}
+
+/// Discover both local LAN broadcasts and remote Tailscale peers.
+/// Tailscale provides private routing; room discovery uses unicast UDP,
+/// because normal LAN broadcasts are not forwarded across a tailnet.
+pub fn discover_rooms_with_remote() -> RoomSearchResult {
+    let tailnet = remote_access::current_tailnet();
+    let rooms = discover_rooms_from_peers(&tailnet.peers);
+    RoomSearchResult { rooms, tailnet }
+}
+
 pub fn discover_rooms() -> Vec<RoomListing> {
+    discover_rooms_with_remote().rooms
+}
+
+fn discover_rooms_from_peers(peer_ips: &[Ipv4Addr]) -> Vec<RoomListing> {
     let mut rooms = Vec::new();
     let Ok(socket) = UdpSocket::bind("0.0.0.0:0") else { return rooms };
     let _ = socket.set_broadcast(true);
@@ -541,6 +573,11 @@ pub fn discover_rooms() -> Vec<RoomListing> {
         }
     }
     let _ = socket.send_to(DISCOVER_REQUEST, ("127.0.0.1", DISCOVERY_PORT));
+    // Peer-to-peer VPN does not forward local Ethernet broadcasts. Directly
+    // ask each visible friend device if Stick is hosting a room.
+    for &ip in peer_ips.iter().take(64) {
+        let _ = socket.send_to(DISCOVER_REQUEST, (ip, DISCOVERY_PORT));
+    }
     let mut buf = [0u8; 4096];
     loop {
         match socket.recv_from(&mut buf) {
