@@ -412,6 +412,12 @@ struct AppConfig {
     vanishing_x: f32,
     #[serde(default = "default_vanishing_y")]
     vanishing_y: f32,
+    #[serde(default = "default_left_vp_x")]
+    vanishing_left_x: f32,
+    #[serde(default = "default_right_vp_x")]
+    vanishing_right_x: f32,
+    #[serde(default = "default_two_point_y")]
+    vanishing_2point_y: f32,
     #[serde(default = "default_timeline_height")]
     timeline_dock_height: f32,
     #[serde(default)]
@@ -495,6 +501,9 @@ fn default_perspective_color() -> [u8;4] { [58, 154, 227, 255] }
 fn default_perspective_opacity() -> f32 { 0.32 }
 fn default_vanishing_x() -> f32 { 0.5 }
 fn default_vanishing_y() -> f32 { 0.30 }
+fn default_left_vp_x() -> f32 { 0.14 }
+fn default_right_vp_x() -> f32 { 0.86 }
+fn default_two_point_y() -> f32 { 0.36 }
 fn default_timeline_height() -> f32 { 310.0 }
 fn default_new_timeline_row_height() -> f32 { 50.0 }
 fn default_new_timeline_cell_width() -> f32 { 64.0 }
@@ -532,6 +541,9 @@ impl Default for AppConfig {
             perspective_opacity: default_perspective_opacity(),
             vanishing_x: default_vanishing_x(),
             vanishing_y: default_vanishing_y(),
+            vanishing_left_x: default_left_vp_x(),
+            vanishing_right_x: default_right_vp_x(),
+            vanishing_2point_y: default_two_point_y(),
             timeline_dock_height: default_timeline_height(),
             timeline_style: 0,
             timeline_new_cell_width: default_new_timeline_cell_width(),
@@ -598,7 +610,12 @@ impl AppConfig {
     fn load() -> Self {
         for path in local_setting_paths("stick_config.json") {
             if let Ok(data) = std::fs::read_to_string(path) {
-                if let Ok(parsed) = serde_json::from_str(&data) { return parsed; }
+                if let Ok(mut parsed) = serde_json::from_str::<Self>(&data) {
+                    // Perspective overlays are tools, not saved project content.
+                    // Never silently re-enable guides on the next launch.
+                    parsed.perspective_mode = 0;
+                    return parsed;
+                }
             }
         }
         Self::default()
@@ -3575,6 +3592,7 @@ impl eframe::App for StickApp {
                             ui.selectable_value(&mut self.config.perspective_mode, 1, tr(lang, "Square grid", "مربعات"));
                             ui.selectable_value(&mut self.config.perspective_mode, 2, tr(lang, "Parallel lines", "خطوط متساوية"));
                             ui.selectable_value(&mut self.config.perspective_mode, 3, tr(lang, "1-point perspective", "منظور بنقطة تلاشي"));
+                            ui.selectable_value(&mut self.config.perspective_mode, 4, tr(lang, "2-point perspective", "منظور بنقطتين تلاشي"));
                         });
                         ui.separator();
                         let mut changed = false;
@@ -3593,6 +3611,16 @@ impl eframe::App for StickApp {
                                 .text(tr(lang, "Vanishing X", "نقطة التلاشي أفقي"))).changed();
                             changed |= ui.add(egui::Slider::new(&mut self.config.vanishing_y, 0.05..=0.85)
                                 .text(tr(lang, "Vanishing Y", "نقطة التلاشي رأسي"))).changed();
+                        } else if self.config.perspective_mode == 4 {
+                            changed |= ui.add(egui::Slider::new(&mut self.config.vanishing_left_x, 0.02..=0.47)
+                                .text(tr(lang, "Left vanishing point X", "نقطة التلاشي الأولى أفقي"))).changed();
+                            changed |= ui.add(egui::Slider::new(&mut self.config.vanishing_right_x, 0.53..=0.98)
+                                .text(tr(lang, "Right vanishing point X", "نقطة التلاشي الثانية أفقي"))).changed();
+                            changed |= ui.add(egui::Slider::new(&mut self.config.vanishing_2point_y, 0.07..=0.93)
+                                .text(tr(lang, "Horizon height", "ارتفاع خط الأفق"))).changed();
+                            ui.small(tr(lang,
+                                "Adjust both points independently. The guides are never exported.",
+                                "حرّك كل نقطة تلاشي بشكل مستقل. الخطوط إرشادية ومش بتظهر في التصدير."));
                         }
                         if ui.button(tr(lang, "Reset perspective settings", "رجّع إعدادات المنظور الأصلية")).clicked() {
                             self.config.perspective_spacing = default_perspective_spacing();
@@ -3601,6 +3629,10 @@ impl eframe::App for StickApp {
                             self.config.perspective_opacity = default_perspective_opacity();
                             self.config.vanishing_x = default_vanishing_x();
                             self.config.vanishing_y = default_vanishing_y();
+                            self.config.vanishing_left_x = default_left_vp_x();
+                            self.config.vanishing_right_x = default_right_vp_x();
+                            self.config.vanishing_2point_y = default_two_point_y();
+                            self.config.perspective_mode = 0;
                             changed = true;
                         }
                         if changed { self.config.save(); }
@@ -4870,6 +4902,34 @@ impl eframe::App for StickApp {
                                 to_screen(egui::pos2(right, y))], paint);
                         }
                         painter.circle_stroke(to_screen(vp), 4.0, paint);
+                    }
+                    4 => {
+                        // Two independently controlled vanishing points on a
+                        // shared horizon, with fan rays clipped to the paper.
+                        // Guides use the same stage-to-screen transform as the
+                        // artwork and are intentionally excluded from exports.
+                        let horizon = stage_h * self.config.vanishing_2point_y.clamp(0.07, 0.93);
+                        let left = egui::pos2(stage_w * self.config.vanishing_left_x.clamp(0.02,0.47), horizon);
+                        let right = egui::pos2(stage_w * self.config.vanishing_right_x.clamp(0.53,0.98), horizon);
+                        let rays = ((stage_w / step).ceil() as usize).clamp(6,48);
+                        for n in 0..=rays {
+                            let x = stage_w * (n as f32) / (rays as f32);
+                            for vp in [left, right] {
+                                painter.line_segment([to_screen(vp), to_screen(egui::pos2(x,stage_h))], paint);
+                                // A smaller fan above the horizon helps draw
+                                // tall objects using the same two directions.
+                                if n % 2 == 0 {
+                                    painter.line_segment([to_screen(vp),
+                                        to_screen(egui::pos2(x,0.0))], paint);
+                                }
+                            }
+                        }
+                        painter.line_segment([to_screen(egui::pos2(0.0,horizon)),
+                            to_screen(egui::pos2(stage_w,horizon))], paint);
+                        for vp in [left,right] {
+                            painter.circle_filled(to_screen(vp), 4.0, paint.color);
+                            painter.circle_stroke(to_screen(vp), 8.0, paint);
+                        }
                     }
                     _ => {}
                 }
