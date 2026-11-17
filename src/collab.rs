@@ -202,7 +202,7 @@ impl HostShared {
     fn member_count(&self) -> usize { self.peers.lock().map(|p| p.len()+1).unwrap_or(1) }
     fn broadcast(&self, msg: &Packet, exclude: Option<u64>) {
         if let Ok(peers) = self.peers.lock() {
-            for (id, (tx,_)) in peers.iter() {
+            for (id, (tx, _, _)) in peers.iter() {
                 if Some(*id) != exclude { let _ = tx.send(clone_packet(msg)); }
             }
         }
@@ -326,7 +326,7 @@ fn host_peer(mut stream: TcpStream, host: Arc<HostShared>) -> io::Result<()> {
                     let state = host.project.lock().ok().map(|p| public_project(p.clone()));
                     if let Some(state) = state {
                         if let Ok(peers) = host.peers.lock() {
-                            if let Some((tx, _)) = peers.get(&id) {
+                            if let Some((tx, _, _)) = peers.get(&id) {
                                 let _ = tx.send(Packet::Snapshot { project: Box::new(state) });
                             }
                         }
