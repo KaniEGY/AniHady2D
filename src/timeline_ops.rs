@@ -36,7 +36,12 @@ pub fn apply_frame_edit(
         if project.layers.iter().any(|layer| layer.locked) {
             return Err("Unlock all layers before deleting time across the timeline.");
         }
-        for layer in &mut project.layers {
+        // The new first frame must show what the old second frame displayed.
+        // Otherwise deleting frame 1 turns a held drawing into a blank cel.
+        let first_after_delete: Vec<FrameData> = if frame == 1 {
+            project.layers.iter().map(|layer| project.evaluate_layer_at_frame(layer, 2)).collect()
+        } else { Vec::new() };
+        for (layer_index, layer) in project.layers.iter_mut().enumerate() {
             let mut shifted = HashMap::with_capacity(layer.keyframes.len());
             for (&index, data) in &layer.keyframes {
                 if index < frame {
@@ -46,9 +51,8 @@ pub fn apply_frame_edit(
                 }
             }
             if !shifted.contains_key(&1) {
-                // If frame 1 disappears, the next frame starts blank unless
-                // a keyframe moved into frame 1 from the deleted range.
-                shifted.insert(1, FrameData::default());
+                // Preserve the visible exposure when time is deleted at start.
+                shifted.insert(1, first_after_delete.get(layer_index).cloned().unwrap_or_default());
             }
             layer.keyframes = shifted;
         }
@@ -143,6 +147,17 @@ mod tests {
         assert_eq!(p.total_frames, 9);
         assert!(p.layers.iter().all(|l| l.keyframes.contains_key(&4)));
         assert!(p.layers.iter().all(|l| !l.keyframes.contains_key(&5)));
+    }
+
+    #[test]
+    fn deleting_first_frame_preserves_the_second_frames_held_drawing() {
+        let mut p = AniProject::default();
+        p.total_frames = 4;
+        p.layers[0].keyframes.get_mut(&1).unwrap().strokes.push(dab());
+        apply_frame_edit(&mut p, 0, 1, FrameAction::DeleteFrame).unwrap();
+        assert_eq!(p.total_frames, 3);
+        assert_eq!(p.layers[0].keyframes[&1].strokes.len(), 1,
+            "deleting frame 1 should not erase artwork held on old frame 2");
     }
 
     #[test]
