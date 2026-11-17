@@ -31,7 +31,8 @@ fn notes_for_language(markdown: &str, lang: AppLang) -> (Vec<String>, Vec<String
         }
         if !selected { continue; }
         if line.starts_with("### ") {
-            section = if line == "### What's new" || line == "### إيه الجديد؟" {
+            section = if matches!(line, "### What's new" | "### إيه الجديد؟"
+                | "### Artist workspace refresh" | "### تطوير مساحة الفنان") {
                 NoteSection::Features
             } else if line == "### Bugs fixed" || line == "### المشاكل اللي اتصلحت" {
                 NoteSection::Bugfixes

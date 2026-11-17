@@ -39,8 +39,47 @@ pub fn point_in_polygon(point: egui::Pos2, polygon: &[egui::Pos2]) -> bool {
     inside
 }
 
+/// Select geometry crossing the lasso even when all vertices are outside.
+fn segments_intersect(a: egui::Pos2, b: egui::Pos2, c: egui::Pos2, d: egui::Pos2) -> bool {
+    fn orient(a: egui::Pos2, b: egui::Pos2, c: egui::Pos2) -> f32 {
+        (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x)
+    }
+    fn on_segment(a: egui::Pos2, b: egui::Pos2, p: egui::Pos2) -> bool {
+        p.x >= a.x.min(b.x) - 1e-4 && p.x <= a.x.max(b.x) + 1e-4 &&
+        p.y >= a.y.min(b.y) - 1e-4 && p.y <= a.y.max(b.y) + 1e-4
+    }
+    let (ab_c, ab_d, cd_a, cd_b) = (orient(a,b,c),orient(a,b,d),orient(c,d,a),orient(c,d,b));
+    if (ab_c > 0.0 && ab_d < 0.0 || ab_c < 0.0 && ab_d > 0.0) &&
+       (cd_a > 0.0 && cd_b < 0.0 || cd_a < 0.0 && cd_b > 0.0) { return true; }
+    (ab_c.abs() < 1e-4 && on_segment(a,b,c)) ||
+    (ab_d.abs() < 1e-4 && on_segment(a,b,d)) ||
+    (cd_a.abs() < 1e-4 && on_segment(c,d,a)) ||
+    (cd_b.abs() < 1e-4 && on_segment(c,d,b))
+}
+
 pub fn stroke_inside_lasso(stroke: &Stroke, polygon: &[egui::Pos2]) -> bool {
-    stroke.points.iter().any(|p| point_in_polygon(egui::pos2(p.x, p.y), polygon))
+    if polygon.len() < 3 || stroke.points.is_empty() ||
+        stroke.points.iter().any(|p| !p.x.is_finite() || !p.y.is_finite()) { return false; }
+    if stroke.points.iter().any(|p| point_in_polygon(egui::pos2(p.x, p.y), polygon)) { return true; }
+    for segment in stroke.points.windows(2) {
+        let (a, b) = (egui::pos2(segment[0].x, segment[0].y),
+                      egui::pos2(segment[1].x, segment[1].y));
+        for i in 0..polygon.len() {
+            if segments_intersect(a, b, polygon[i], polygon[(i+1)%polygon.len()]) { return true; }
+        }
+    }
+    false
+}
+
+pub fn rotate_points_around(stroke: &mut Stroke, pivot: egui::Pos2, angle_rad: f32) {
+    if !angle_rad.is_finite() { return; }
+    let (sn, cs) = angle_rad.sin_cos();
+    for point in &mut stroke.points {
+        let dx = point.x - pivot.x;
+        let dy = point.y - pivot.y;
+        point.x = pivot.x + dx * cs - dy * sn;
+        point.y = pivot.y + dx * sn + dy * cs;
+    }
 }
 
 /// Return the nearest editable vertex on any vector stroke within a
@@ -65,6 +104,18 @@ pub fn nearest_vector_node(
     nearest
 }
 
+/// Adjust the view offset so the document point under the mouse does not move
+/// when the user zooms. Coordinates are screen-space points.
+pub fn zoom_pan_around_pointer(
+    pan: egui::Vec2, viewport_center: egui::Pos2, pointer: egui::Pos2,
+    old_zoom: f32, new_zoom: f32,
+) -> egui::Vec2 {
+    if !old_zoom.is_finite() || old_zoom <= 0.0 || !new_zoom.is_finite() || new_zoom <= 0.0 {
+        return pan;
+    }
+    pan + (pointer - (viewport_center + pan)) * (1.0 - new_zoom / old_zoom)
+}
+
 /// Geometry-only scaling to keep interactive transform independent of Zoom.
 pub fn scale_points_around(stroke: &mut Stroke, anchor: egui::Pos2, factor: f32) {
     if !factor.is_finite() || factor <= 0.0 { return; }
@@ -87,7 +138,7 @@ mod tests {
             color: [0,0,0,255], fill_color: None,
             base_width: 2.0, is_vector: true,
             brush_preset: KritaBrushPreset::GPenInk,
-            opacity: 1.0, brush_texture_id: None,
+            opacity: 1.0, brush_texture_id: None, tip_shape: crate::project::BrushTipShape::Round,
         }
     }
     #[test]
@@ -119,6 +170,34 @@ mod tests {
         scale_points_around(&mut shape, egui::pos2(10.0, 20.0), 2.0);
         assert_eq!((shape.points[0].x, shape.points[0].y), (10.0, 20.0));
         assert_eq!((shape.points[1].x, shape.points[1].y), (30.0, 60.0));
+    }
+
+    #[test]
+    fn lasso_crossing_line_without_contained_vertices_is_selected() {
+        let tri = [egui::pos2(5.0, 5.0), egui::pos2(25.0, 5.0), egui::pos2(15.0, 25.0)];
+        assert!(stroke_inside_lasso(&stroke(-20.0, 12.0, 50.0, 12.0), &tri));
+        assert!(!stroke_inside_lasso(&stroke(-20.0, 40.0, 50.0, 40.0), &tri));
+    }
+
+    #[test]
+    fn rotation_preserves_distances_and_moves_vertices() {
+        let mut line = stroke(20.0, 10.0, 10.0, 20.0);
+        rotate_points_around(&mut line, egui::pos2(10.0, 10.0), std::f32::consts::FRAC_PI_2);
+        assert!((line.points[0].x - 10.0).abs() < 0.01);
+        assert!((line.points[0].y - 20.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn cursor_anchor_is_unchanged_on_zoom_in_and_out() {
+        let center = egui::pos2(400.0, 300.0);
+        let mouse = egui::pos2(540.0, 450.0);
+        let pan = egui::vec2(10.0, -20.0);
+        let after = zoom_pan_around_pointer(pan, center, mouse, 1.0, 2.0);
+        let old_doc = (mouse - (center + pan)) / 1.0;
+        let new_doc = (mouse - (center + after)) / 2.0;
+        assert!((old_doc - new_doc).length() < 0.001);
+        let back = zoom_pan_around_pointer(after, center, mouse, 2.0, 1.0);
+        assert!((back - pan).length() < 0.001);
     }
 
     #[test]

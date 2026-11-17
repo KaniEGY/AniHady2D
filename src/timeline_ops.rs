@@ -104,6 +104,7 @@ mod tests {
             brush_preset: KritaBrushPreset::GPenInk,
             opacity: 1.0,
             brush_texture_id: None,
+            tip_shape: crate::project::BrushTipShape::Round,
         }
     }
 

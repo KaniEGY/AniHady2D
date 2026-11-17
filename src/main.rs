@@ -23,7 +23,7 @@ use exporter::{ImageExportFormat, VideoExportFormat};
 use profile::UserProfile;
 use project::{
     AniProject, AudioSyncMode, AudioTrack, EasingCurve, FrameData, KritaBrushPreset, Layer, MediaItem, MediaType,
-    Stroke, StrokePoint, Symbol, SymbolInstance, TextItem, TweenMode, PROJECT_SCHEMA_VERSION,
+    BrushTipShape, Stroke, StrokePoint, Symbol, SymbolInstance, TextItem, TweenMode, PROJECT_SCHEMA_VERSION,
 };
 use rodio::source::SineWave;
 use rodio::{Decoder, OutputStream, Sink, Source};
@@ -73,6 +73,8 @@ enum GeometricShapeKind {
     Circle,
     Square,
     Rectangle,
+    Triangle,
+    Pentagon,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -195,13 +197,17 @@ fn fix_ar(text: &str) -> String {
     if !text.chars().any(|c| ('\u{0600}'..='\u{06FF}').contains(&c)) {
         return text.to_string();
     }
-    let reshaped = arabic_reshape(text);
-    let bidi_info = BidiInfo::new(&reshaped, None);
-    if bidi_info.paragraphs.is_empty() {
-        return reshaped;
-    }
-    let para = &bidi_info.paragraphs[0];
-    bidi_info.reorder_line(para, para.range.clone()).into_owned()
+    // Shape each line independently: a multiline TextItem must not lose
+    // right-to-left ordering after the first paragraph.
+    text.split('\n').map(|line| {
+        let reshaped = arabic_reshape(line);
+        let bidi_info = BidiInfo::new(&reshaped, None);
+        if let Some(para) = bidi_info.paragraphs.first() {
+            bidi_info.reorder_line(para, para.range.clone()).into_owned()
+        } else {
+            reshaped
+        }
+    }).collect::<Vec<_>>().join("\n")
 }
 
 fn tr(lang: AppLang, en: &str, ar: &str) -> String {
@@ -346,6 +352,14 @@ struct AppConfig {
     sound_effects_enabled: bool,
     #[serde(default)]
     show_grid: bool,
+    #[serde(default = "default_true_val")]
+    show_top_bar: bool,
+    #[serde(default = "default_true_val")]
+    show_left_dock: bool,
+    #[serde(default = "default_true_val")]
+    show_right_dock: bool,
+    #[serde(default = "default_true_val")]
+    show_timeline_dock: bool,
     #[serde(default = "default_grid_size")]
     grid_size: f32,
     #[serde(default = "default_tl_bg")]
@@ -419,6 +433,10 @@ impl Default for AppConfig {
             recent_projects: Vec::new(),
             sound_effects_enabled: true,
             show_grid: false,
+            show_top_bar: true,
+            show_left_dock: true,
+            show_right_dock: true,
+            show_timeline_dock: true,
             grid_size: 40.0,
             timeline_bg_color: default_tl_bg(),
             timeline_cell_color: default_tl_cell(),
@@ -454,21 +472,36 @@ impl Default for AppConfig {
     }
 }
 
+/// User-specific settings live in the user's writable profile rather than in
+/// Program Files. The executable-adjacent location is a legacy read fallback.
+fn local_setting_paths(filename: &str) -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+    if let Some(base) = std::env::var_os("LOCALAPPDATA") {
+        paths.push(PathBuf::from(base).join("StickStudio").join(filename));
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        paths.push(exe.with_file_name(filename));
+    }
+    paths
+}
+
 impl AppConfig {
     fn load() -> Self {
-        if let Ok(exe) = std::env::current_exe() {
-            if let Ok(data) = std::fs::read_to_string(exe.with_file_name("stick_config.json")) {
-                if let Ok(parsed) = serde_json::from_str(&data) {
-                    return parsed;
-                }
+        for path in local_setting_paths("stick_config.json") {
+            if let Ok(data) = std::fs::read_to_string(path) {
+                if let Ok(parsed) = serde_json::from_str(&data) { return parsed; }
             }
         }
         Self::default()
     }
+
     fn save(&self) {
-        if let Ok(exe) = std::env::current_exe() {
-            if let Ok(json) = serde_json::to_string_pretty(self) {
-                let _ = std::fs::write(exe.with_file_name("stick_config.json"), json);
+        if let Ok(json) = serde_json::to_string_pretty(self) {
+            for path in local_setting_paths("stick_config.json") {
+                if let Some(parent) = path.parent() {
+                    if std::fs::create_dir_all(parent).is_err() { continue; }
+                }
+                if std::fs::write(&path, &json).is_ok() { break; }
             }
         }
     }
@@ -514,6 +547,26 @@ fn setup_custom_fonts(ctx: &egui::Context) {
         fonts.families.entry(egui::FontFamily::Proportional).or_default().insert(0, "arabic_font".to_owned());
     }
     ctx.set_fonts(fonts);
+}
+
+/// Decode a locally selected avatar using the supported image codecs.
+/// Render a small circle-cropped thumbnail; original project media is untouched.
+fn load_artist_avatar(ctx: &egui::Context, path: Option<&str>) -> Option<egui::TextureHandle> {
+    let path = path?;
+    let reader = image::ImageReader::open(path).ok()?.with_guessed_format().ok()?;
+    let decoded = reader.decode().ok()?;
+    let mut rgba = decoded.resize_to_fill(128, 128, image::imageops::FilterType::Lanczos3).to_rgba8();
+    for y in 0..128 {
+        for x in 0..128 {
+            let dx = x as f32 - 63.5;
+            let dy = y as f32 - 63.5;
+            if dx * dx + dy * dy > 63.0 * 63.0 {
+                rgba.get_pixel_mut(x, y).0[3] = 0;
+            }
+        }
+    }
+    let color_image = egui::ColorImage::from_rgba_unmultiplied([128, 128], rgba.as_raw());
+    Some(ctx.load_texture("stick_artist_avatar", color_image, egui::TextureOptions::LINEAR))
 }
 
 fn apply_user_theme(ctx: &egui::Context, config: &AppConfig) {
@@ -728,6 +781,7 @@ fn erase_partial_from_strokes(strokes: &mut Vec<Stroke>, center: egui::Pos2, rad
                     brush_preset: s.brush_preset,
                     opacity: s.opacity,
                     brush_texture_id: s.brush_texture_id.clone(),
+                    tip_shape: s.tip_shape,
                 });
             } else {
                 current_seg.clear();
@@ -743,6 +797,7 @@ fn erase_partial_from_strokes(strokes: &mut Vec<Stroke>, center: egui::Pos2, rad
                 brush_preset: s.brush_preset,
                 opacity: s.opacity,
                 brush_texture_id: s.brush_texture_id,
+                tip_shape: s.tip_shape,
             });
         }
     }
@@ -777,6 +832,21 @@ fn build_geometric_stroke(kind: GeometricShapeKind, p0: egui::Pos2, p1: egui::Po
                 pts.push(StrokePoint { x: c.x, y: c.y, pressure: 1.0 });
             }
         }
+        GeometricShapeKind::Triangle | GeometricShapeKind::Pentagon => {
+            let count = if kind == GeometricShapeKind::Triangle { 3 } else { 5 };
+            let center = p0.lerp(p1, 0.5);
+            let rx = ((p1.x - p0.x) * 0.5).abs();
+            let ry = ((p1.y - p0.y) * 0.5).abs();
+            for i in 0..=count {
+                let theta = -std::f32::consts::FRAC_PI_2
+                    + (i as f32 / count as f32) * std::f32::consts::TAU;
+                pts.push(StrokePoint {
+                    x: center.x + theta.cos() * rx,
+                    y: center.y + theta.sin() * ry,
+                    pressure: 1.0,
+                });
+            }
+        }
     }
     Stroke {
         points: pts,
@@ -786,7 +856,7 @@ fn build_geometric_stroke(kind: GeometricShapeKind, p0: egui::Pos2, p1: egui::Po
         is_vector: true,
         brush_preset: KritaBrushPreset::GPenInk,
         opacity: 1.0,
-        brush_texture_id: None,
+        brush_texture_id: None, tip_shape: BrushTipShape::Round,
     }
 }
 
@@ -835,6 +905,8 @@ struct StickApp {
     selected_stroke_indices: Vec<usize>,
     selected_vector_node: Option<(usize, usize)>,
     transform_drag_anchor: Option<egui::Pos2>,
+    transform_rotate_pivot: Option<egui::Pos2>,
+    lasso_dragging_selection: bool,
     selected_text_item_index: Option<usize>,
     selection_rect_start: Option<egui::Pos2>,
     selection_rect_current: Option<egui::Pos2>,
@@ -843,6 +915,7 @@ struct StickApp {
     brush_color: [u8; 4],
     stage_bg_color: [u8; 4],
     brush_size: f32,
+    brush_tip_shape: BrushTipShape,
     zoom_level: f32,
     pan_offset: egui::Vec2,
     canvas_rotation_deg: f32,
@@ -877,6 +950,7 @@ struct StickApp {
     listening_shortcut_idx: Option<usize>,
     config: AppConfig,
     user_profile: UserProfile,
+    artist_avatar: Option<egui::TextureHandle>,
     installed_version: String,
     update_state: Arc<Mutex<UpdateState>>,
     new_symbol_name: String,
@@ -887,6 +961,7 @@ struct StickApp {
     status_message: String,
     audio_sink: Option<(OutputStream, Sink)>,
     last_pointer_pos: Option<egui::Pos2>,
+    last_secondary_pointer_pos: Option<egui::Pos2>,
 }
 
 impl StickApp {
@@ -896,6 +971,7 @@ impl StickApp {
         let mut proj = AniProject::default();
         proj.total_frames = 1;
         let profile = UserProfile::load();
+        let artist_avatar = load_artist_avatar(&cc.egui_ctx, profile.avatar_path.as_deref());
         let default_install_path = std::env::var("LOCALAPPDATA").map(|p| format!("{}\\StickStudio", p)).unwrap_or_else(|_| "C:\\StickStudio".to_string());
         let initial_mode = if is_running_from_installed_dir() { WorkspaceMode::Launcher } else { WorkspaceMode::InstallerSetup };
 
@@ -944,6 +1020,8 @@ impl StickApp {
             selected_stroke_indices: Vec::new(),
             selected_vector_node: None,
             transform_drag_anchor: None,
+            transform_rotate_pivot: None,
+            lasso_dragging_selection: false,
             selected_text_item_index: None,
             selection_rect_start: None,
             selection_rect_current: None,
@@ -952,6 +1030,7 @@ impl StickApp {
             brush_color: [0, 0, 0, 255],
             stage_bg_color: [255, 255, 255, 255],
             brush_size: 7.0,
+            brush_tip_shape: BrushTipShape::Round,
             zoom_level: 0.75,
             pan_offset: egui::Vec2::ZERO,
             canvas_rotation_deg: 0.0,
@@ -986,6 +1065,7 @@ impl StickApp {
             listening_shortcut_idx: None,
             config: AppConfig::load(),
             user_profile: profile,
+            artist_avatar,
             installed_version: get_installed_version(),
             update_state: Arc::new(Mutex::new(UpdateState::Idle)),
             new_symbol_name: "Symbol_1".to_string(),
@@ -996,6 +1076,7 @@ impl StickApp {
             status_message: "Stick Studio Ready".to_string(),
             audio_sink: None,
             last_pointer_pos: None,
+            last_secondary_pointer_pos: None,
         }
     }
 
@@ -1245,6 +1326,51 @@ impl StickApp {
                         text.x = anchor.x + (text.x - anchor.x) * factor;
                         text.y = anchor.y + (text.y - anchor.y) * factor;
                         text.font_size = (text.font_size * factor).clamp(4.0, 512.0);
+                    }
+                }
+                self.has_unsaved_changes = true;
+            }
+        }
+    }
+
+    fn move_selected_items(&mut self, delta: egui::Vec2) {
+        if self.is_active_layer_locked() || delta.length_sq() <= 0.0 { return; }
+        self.ensure_editable_keyframe();
+        if let Some(layer) = self.project.layers.get_mut(self.active_layer_idx) {
+            if let Some(frame) = layer.keyframes.get_mut(&self.current_frame) {
+                for &index in &self.selected_stroke_indices {
+                    if let Some(stroke) = frame.strokes.get_mut(index) {
+                        for p in &mut stroke.points { p.x += delta.x; p.y += delta.y; }
+                    }
+                }
+                if let Some(idx) = self.selected_text_item_index {
+                    if let Some(text) = frame.text_items.get_mut(idx) {
+                        text.x += delta.x; text.y += delta.y;
+                    }
+                }
+                self.has_unsaved_changes = true;
+            }
+        }
+    }
+
+    fn rotate_selection_around(&mut self, pivot: egui::Pos2, radians: f32) {
+        if self.is_active_layer_locked() || !radians.is_finite() || radians.abs() < 0.00001 {
+            return;
+        }
+        self.ensure_editable_keyframe();
+        if let Some(layer) = self.project.layers.get_mut(self.active_layer_idx) {
+            if let Some(frame) = layer.keyframes.get_mut(&self.current_frame) {
+                for &index in &self.selected_stroke_indices {
+                    if let Some(stroke) = frame.strokes.get_mut(index) {
+                        selection_tools::rotate_points_around(stroke, pivot, radians);
+                    }
+                }
+                if let Some(index) = self.selected_text_item_index {
+                    if let Some(text) = frame.text_items.get_mut(index) {
+                        let (sn, cs) = radians.sin_cos();
+                        let (dx, dy) = (text.x - pivot.x, text.y - pivot.y);
+                        text.x = pivot.x + dx * cs - dy * sn;
+                        text.y = pivot.y + dx * sn + dy * cs;
                     }
                 }
                 self.has_unsaved_changes = true;
@@ -1837,6 +1963,20 @@ impl StickApp {
                     ui.label(tr(lang, "Stabilizer:", "مثبت اليد:"));
                     ui.add(egui::Slider::new(&mut self.stabilizer_strength, 0.0..=0.75));
                 });
+                ui.separator();
+                ui.strong(tr(lang, "Brush Tip Shape", "شكل الفرشة"));
+                ui.horizontal_wrapped(|ui| {
+                    for (shape, en, ar) in [
+                        (BrushTipShape::Round, "● Circle", "● دائري"),
+                        (BrushTipShape::Square, "■ Square", "■ مربع"),
+                        (BrushTipShape::Triangle, "▲ Triangle", "▲ مثلث"),
+                        (BrushTipShape::Pentagon, "⬟ Pentagon", "⬟ خماسي"),
+                        (BrushTipShape::TallRectangle, "▮ Tall", "▮ مستطيل طويل"),
+                        (BrushTipShape::WideRectangle, "▬ Wide", "▬ مستطيل عريض"),
+                    ] {
+                        ui.selectable_value(&mut self.brush_tip_shape, shape, tr(lang,en,ar));
+                    }
+                });
             }
             ActiveToolUI::ShapeLine => {
                 ui.strong(tr(lang, "Shapes & Line Tool (U)", "أداة الخطوط والأشكال"));
@@ -1844,6 +1984,8 @@ impl StickApp {
                 ui.radio_value(&mut self.selected_shape_kind, GeometricShapeKind::Circle, tr(lang, "Circle", "دائرة"));
                 ui.radio_value(&mut self.selected_shape_kind, GeometricShapeKind::Square, tr(lang, "Square", "مربع"));
                 ui.radio_value(&mut self.selected_shape_kind, GeometricShapeKind::Rectangle, tr(lang, "Rectangle", "مستطيل"));
+                ui.radio_value(&mut self.selected_shape_kind, GeometricShapeKind::Triangle, tr(lang, "Triangle", "مثلث"));
+                ui.radio_value(&mut self.selected_shape_kind, GeometricShapeKind::Pentagon, tr(lang, "Pentagon", "خماسي"));
                 ui.separator();
                 ui.add(egui::Slider::new(&mut self.brush_size, 1.0..=120.0)
                     .text(tr(lang, "Outline Size", "سُمك حدود الشكل")));
@@ -2415,8 +2557,18 @@ impl eframe::App for StickApp {
         }
 
         if self.show_text_dialog {
-            egui::Window::new(tr(lang, "Insert Text", "إضافة نص")).collapsible(false).resizable(false).anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0]).show(ctx, |ui| {
-                ui.text_edit_singleline(&mut self.text_input_buf);
+            egui::Window::new(tr(lang, "Insert Text", "إضافة نص")).collapsible(false).resizable(true)
+                .default_width(440.0).anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0]).show(ctx, |ui| {
+                ui.label(tr(lang, "Type here. The preview shows correctly joined Arabic letters.",
+                    "اكتب هنا؛ المعاينة بتعرض الحروف العربية متصلة بشكل صحيح."));
+                ui.add(egui::TextEdit::multiline(&mut self.text_input_buf)
+                    .desired_width(f32::INFINITY).desired_rows(4));
+                if !self.text_input_buf.is_empty() {
+                    ui.label(tr(lang, "Live text preview", "معاينة النص"));
+                    ui.label(egui::RichText::new(fix_ar(&self.text_input_buf))
+                        .size(self.text_font_size.clamp(14.0, 48.0))
+                        .color(egui::Color32::from_rgb(236, 241, 255)));
+                }
                 ui.horizontal(|ui| {
                     if ui.button(tr(lang, "Add", "إضافة")).clicked() {
                         if !self.text_input_buf.trim().is_empty() {
@@ -2488,9 +2640,10 @@ impl eframe::App for StickApp {
                 .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0]).show(ctx, |ui| {
                 ui.horizontal_wrapped(|ui| {
                     ui.selectable_value(&mut self.settings_tab, 0, tr(lang, "General", "عام"));
-                    ui.selectable_value(&mut self.settings_tab, 1, tr(lang, "SYSTEM", "السيستم"));
+                    ui.selectable_value(&mut self.settings_tab, 1, tr(lang, "Art System", "نظام الفنان"));
                     ui.selectable_value(&mut self.settings_tab, 2, tr(lang, "Shortcuts", "اختصارات"));
                     ui.selectable_value(&mut self.settings_tab, 3, tr(lang, "Colors & Timeline", "ألوان وتايم لاين"));
+                    ui.selectable_value(&mut self.settings_tab, 4, tr(lang, "Personalization", "التخصيص"));
                 });
                 ui.separator();
                 match self.settings_tab {
@@ -2520,19 +2673,67 @@ impl eframe::App for StickApp {
                     1 => {
                         let (lvl, cxp, rxp) = self.user_profile.get_level_progress();
                         let rank = self.user_profile.get_hunter_rank();
-                        ui.heading(format!("✦ LEVEL {} | {}-Rank", lvl, rank));
-                        ui.add(egui::ProgressBar::new(
-                            (cxp as f32 / rxp.max(1) as f32).clamp(0.0, 1.0)
-                        ).text(format!("{} / {} XP", cxp, rxp)));
-                        ui.label(tr(lang, "5 XP per minute", "5 نقاط XP لكل دقيقة"));
-                        ui.label(tr(lang, "50 XP for each 20 unique drawn frames", "50 نقطة لكل 20 فريم مختلف اترسم عليهم"));
-                        ui.label(tr(lang, "20 XP for each 5 painted layers", "20 نقطة لكل 5 ليرز اترسم عليهم"));
-                        ui.label(format!("{} XP  •  {} frames  •  {} layers",
-                            self.user_profile.xp,
-                            self.user_profile.total_frames_drawn,
-                            self.user_profile.total_painted_layers));
-                        ui.small(tr(lang, "Ranks: F (0–5), E (6–10), D (11–15), C (16–20), B (21–25), A (26–30), A+ (31–35), S (36+).",
-                            "الرتب: F من 0 لـ5، E من 6 لـ10، D من 11 لـ15، C من 16 لـ20، B من 21 لـ25، A من 26 لـ30، A+ من 31 لـ35، S من 36 لفوق."));
+                        egui::Frame::none()
+                            .fill(egui::Color32::from_rgb(17, 23, 40))
+                            .rounding(12.0)
+                            .inner_margin(14.0)
+                            .show(ui, |ui| {
+                                ui.horizontal(|ui| {
+                                    if let Some(avatar) = &self.artist_avatar {
+                                        ui.image((avatar.id(), egui::vec2(84.0, 84.0)));
+                                    } else {
+                                        let (rect, _) = ui.allocate_exact_size(egui::vec2(84.0,84.0), egui::Sense::hover());
+                                        ui.painter().circle_filled(rect.center(), 41.0,
+                                            egui::Color32::from_rgb(59, 75, 112));
+                                        ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, "✦",
+                                            egui::FontId::proportional(37.0), egui::Color32::from_rgb(139, 204, 255));
+                                    }
+                                    ui.vertical(|ui| {
+                                        ui.label(egui::RichText::new(tr(lang, "ARTIST PROFILE", "ملف الفنان"))
+                                            .color(egui::Color32::from_rgb(119, 210, 255)).size(12.0));
+                                        ui.label(egui::RichText::new(format!("LEVEL {}  •  {}-Rank", lvl, rank))
+                                            .color(egui::Color32::from_rgb(255, 218, 102)).size(20.0).strong());
+                                        ui.label(egui::RichText::new(tr(lang, "Create. Practice. Evolve.", "ارسم. اتدرّب. اتطوّر."))
+                                            .color(egui::Color32::LIGHT_GRAY));
+                                    });
+                                });
+                                ui.add_space(10.0);
+                                ui.label(tr(lang, "Artist name", "اسم الفنان"));
+                                if ui.add(egui::TextEdit::singleline(&mut self.user_profile.username)
+                                    .desired_width(f32::INFINITY).char_limit(48)).changed() {
+                                    self.user_profile.save();
+                                }
+                                ui.horizontal(|ui| {
+                                    if ui.button(tr(lang, "Choose profile picture", "اختار صورة شخصية")).clicked() {
+                                        let formats = ["png", "jpg", "jpeg", "webp", "gif", "bmp",
+                                            "tiff", "tif", "tga", "ico", "pnm", "qoi", "dds", "hdr", "exr"];
+                                        if let Some(path) = rfd::FileDialog::new()
+                                            .add_filter("Supported images", &formats).pick_file() {
+                                            if let Some(path_string) = path.to_str() {
+                                                if let Some(avatar) = load_artist_avatar(ctx, Some(path_string)) {
+                                                    self.artist_avatar = Some(avatar);
+                                                    self.user_profile.avatar_path = Some(path_string.to_owned());
+                                                    self.user_profile.save();
+                                                } else {
+                                                    self.status_message = tr(lang, "Can't decode this image format.",
+                                                        "تعذر فتح الصورة. جرّب PNG أو JPG أو WebP.");
+                                                }
+                                            }
+                                        }
+                                    }
+                                    if self.artist_avatar.is_some()
+                                        && ui.small_button(tr(lang, "Remove", "إزالة")).clicked() {
+                                        self.artist_avatar = None;
+                                        self.user_profile.avatar_path = None;
+                                        self.user_profile.save();
+                                    }
+                                });
+                                ui.add_space(12.0);
+                                ui.add(egui::ProgressBar::new((cxp as f32 / rxp.max(1) as f32)
+                                    .clamp(0.0, 1.0)).text(format!("{} / {} XP", cxp, rxp)));
+                                ui.label(tr(lang, "Every masterpiece begins with one frame.",
+                                    "كل لوحة عظيمة بتبدأ بخط واحد."));
+                            });
                     }
                     2 => {
                         ui.label(tr(lang,
@@ -2604,6 +2805,30 @@ impl eframe::App for StickApp {
                         }
                         ui.small(tr(lang, "You can also resize the Timeline by dragging its top edge.",
                             "تقدر تكبّر أو تصغّر التايم لاين بسحب حافته من فوق."));
+                    }
+                    4 => {
+                        ui.heading(tr(lang, "Customize your workspace", "خصص مساحة شغلك"));
+                        ui.small(tr(lang, "Hide panels to maximize canvas space. Your choices are saved.",
+                            "اخفي اللي مش محتاجه عشان تكبر مساحة الرسم. الاختيارات بتتحفظ."));
+                        let mut changed = false;
+                        changed |= ui.checkbox(&mut self.config.show_left_dock,
+                            tr(lang, "Left tools panel", "قائمة الأدوات على الشمال")).changed();
+                        changed |= ui.checkbox(&mut self.config.show_right_dock,
+                            tr(lang, "Right properties and layers panel", "الخصائص والطبقات على اليمين")).changed();
+                        changed |= ui.checkbox(&mut self.config.show_timeline_dock,
+                            tr(lang, "Timeline in animation mode", "التايم لاين في وضع الأنيميشن")).changed();
+                        changed |= ui.checkbox(&mut self.config.show_top_bar,
+                            tr(lang, "Top toolbar", "الشريط العلوي")).changed();
+                        if ui.button(tr(lang, "Restore standard workspace", "رجّع شكل البرنامج الافتراضي")).clicked() {
+                            self.config.show_left_dock = true;
+                            self.config.show_right_dock = true;
+                            self.config.show_top_bar = true;
+                            self.config.show_timeline_dock = true;
+                            changed = true;
+                        }
+                        if changed { self.config.save(); }
+                        ui.small(tr(lang, "When the top bar is hidden, use the floating gear to reopen settings.",
+                            "لو خفيت الشريط العلوي، تقدر تفتح الإعدادات من الترس العائم."));
                     }
                     _ => {}
                 }
@@ -2684,6 +2909,7 @@ impl eframe::App for StickApp {
         }
 
         // الشريط العلوي
+        if self.config.show_top_bar {
         egui::TopBottomPanel::top("top_bar").show(ctx, |ui| {
             egui::menu::bar(ui, |ui| {
                 let (h_rect, h_resp) = ui.allocate_exact_size(egui::vec2(22.0, 20.0), egui::Sense::click());
@@ -2755,7 +2981,21 @@ impl eframe::App for StickApp {
             });
         });
 
+        }
+        if !self.config.show_top_bar {
+            egui::Area::new(egui::Id::new("restore_workspace_settings"))
+                .anchor(egui::Align2::LEFT_TOP, egui::vec2(8.0, 8.0))
+                .order(egui::Order::Foreground)
+                .show(ctx, |ui| {
+                    if ui.button("⚙").on_hover_text(tr(lang, "Workspace settings", "إعدادات مساحة العمل"))
+                        .clicked() {
+                        self.show_settings_dialog = true;
+                        self.settings_tab = 4;
+                    }
+                });
+        }
         // شريط أدوات ثنائي اللغة: اسم دائم بجوار كل أيقونة واختصار فعلي من الإعدادات.
+        if self.config.show_left_dock {
         egui::SidePanel::left("tools_panel").resizable(true).default_width(210.0).min_width(180.0).show(ctx, |ui| {
             ui.vertical_centered(|ui| {
                 ui.add_space(5.0);
@@ -2790,7 +3030,67 @@ impl eframe::App for StickApp {
                             egui::Color32::WHITE,
                         );
                         let shortcut_hint = format!("{}: {}", tr(lang, "Shortcut", "الاختصار"), key);
-                        if response.on_hover_text(format!("{} — {}", name, shortcut_hint)).clicked() {
+                        let response = response.on_hover_text(format!("{} — {}", name, shortcut_hint));
+                        response.context_menu(|ui| {
+                            ui.strong(tr(lang, "Quick tool options", "اختيارات الأداة السريعة"));
+                            ui.separator();
+                            match tool {
+                                ActiveToolUI::ShapeLine => {
+                                    for (kind, en, ar) in [
+                                        (GeometricShapeKind::StraightLine, "Line", "خط"),
+                                        (GeometricShapeKind::Circle, "Circle", "دائرة"),
+                                        (GeometricShapeKind::Square, "Square", "مربع"),
+                                        (GeometricShapeKind::Rectangle, "Rectangle", "مستطيل"),
+                                        (GeometricShapeKind::Triangle, "Triangle", "مثلث"),
+                                        (GeometricShapeKind::Pentagon, "Pentagon", "خماسي"),
+                                    ] {
+                                        if ui.selectable_label(self.selected_shape_kind == kind, tr(lang, en, ar)).clicked() {
+                                            self.selected_shape_kind = kind;
+                                            self.active_tool_ui = ActiveToolUI::ShapeLine;
+                                            ui.close_menu();
+                                        }
+                                    }
+                                }
+                                ActiveToolUI::Brush => {
+                                    for (preset, label) in [
+                                        (KritaBrushPreset::GPenInk, "G-Pen"),
+                                        (KritaBrushPreset::Watercolor, "Watercolor"),
+                                        (KritaBrushPreset::ChiselMarker, "Marker"),
+                                        (KritaBrushPreset::SoftAirbrush, "Airbrush"),
+                                        (KritaBrushPreset::SketchPencil, "Pencil"),
+                                    ] {
+                                        if ui.selectable_label(self.active_krita_brush == preset, label).clicked() {
+                                            self.active_krita_brush = preset;
+                                            self.brush_opacity = preset.default_opacity();
+                                            self.active_tool_ui = ActiveToolUI::Brush;
+                                            ui.close_menu();
+                                        }
+                                    }
+                                }
+                                ActiveToolUI::EraserRed | ActiveToolUI::EraserGreen
+                                | ActiveToolUI::VectorPen => {
+                                    ui.add(egui::Slider::new(&mut self.brush_size, 1.0..=120.0)
+                                        .text(tr(lang, "Size", "الحجم")));
+                                }
+                                ActiveToolUI::HandCanvas => {
+                                    if ui.button(tr(lang, "Reset canvas rotation", "تصفير زاوية اللوحة")).clicked() {
+                                        self.canvas_rotation_deg = 0.0;
+                                        self.canvas_flip_h = false;
+                                        self.canvas_flip_v = false;
+                                        ui.close_menu();
+                                    }
+                                }
+                                _ => {
+                                    if ui.button(tr(lang, "Open tool properties", "افتح خصائص الأداة")).clicked() {
+                                        self.active_tool_ui = tool;
+                                        self.config.show_right_dock = true;
+                                        self.config.save();
+                                        ui.close_menu();
+                                    }
+                                }
+                            }
+                        });
+                        if response.clicked() {
                             self.active_tool_ui = tool;
                             self.play_sfx(SfxType::ToolSelect(tool as u8));
                         }
@@ -2806,12 +3106,14 @@ impl eframe::App for StickApp {
             });
         });
 
+        }
         // Split dock: tools keep their own scrolling upper section; layers
         // remain in a dedicated lower section, like a painting editor.
         let mut layer_menu_action: Option<(usize, layer_ops::LayerAction)> = None;
         let mut copy_layer_index: Option<usize> = None;
         let mut paste_layer_index: Option<usize> = None;
         let mut rename_layer_index: Option<usize> = None;
+        if self.config.show_right_dock {
         egui::SidePanel::right("right_panel").resizable(true).default_width(318.0)
             .min_width(250.0).show(ctx, |ui| {
             ui.horizontal(|ui| {
@@ -2902,7 +3204,19 @@ impl eframe::App for StickApp {
             }
             let can_delete_layers = self.project.layers.len() > 1;
             for (idx, layer) in self.project.layers.iter_mut().enumerate() {
+                let selected_row = self.active_layer_idx == idx;
+                egui::Frame::none()
+                    .fill(if selected_row { egui::Color32::from_rgb(34, 65, 90) }
+                        else { egui::Color32::from_rgb(37, 39, 46) })
+                    .rounding(5.0)
+                    .inner_margin(egui::Margin::symmetric(5.0, 4.0))
+                    .show(ui, |ui| {
                 ui.horizontal(|ui| {
+                    let has_art = layer.keyframes.values().any(|frame|
+                        !frame.strokes.is_empty() || !frame.text_items.is_empty() || !frame.media_items.is_empty());
+                    ui.label(egui::RichText::new(if has_art { "◆" } else { "◇" })
+                        .color(if has_art { egui::Color32::from_rgb(105, 218, 207) }
+                               else { egui::Color32::from_gray(115) }).size(15.0));
                     if ui.checkbox(&mut layer.visible, "")
                         .on_hover_text(tr(lang, "Show or hide layer", "أظهر أو اخفي اللير")).changed() {
                         self.has_unsaved_changes = true;
@@ -2945,9 +3259,12 @@ impl eframe::App for StickApp {
                         self.pending_delete_layer = Some(idx);
                     }
                 });
+                });
+                ui.add_space(2.0);
             }
                 }); // scrollable layer dock
         });
+        }
         if let Some(idx) = copy_layer_index {
             self.layer_clipboard = self.project.layers.get(idx).cloned();
         }
@@ -3031,31 +3348,36 @@ impl eframe::App for StickApp {
 
         let mut frame_menu_action: Option<(usize, usize, timeline_ops::FrameAction)> = None;
         // شريط التايم لاين السفلي في وضع الأنيميشن
-        if self.workspace_mode == WorkspaceMode::AnimationStudio {
-            egui::TopBottomPanel::bottom("timeline_panel").resizable(true).default_height(255.0).show(ctx, |ui| {
+        if self.workspace_mode == WorkspaceMode::AnimationStudio && self.config.show_timeline_dock {
+            egui::TopBottomPanel::bottom("timeline_panel").resizable(true).default_height(295.0).show(ctx, |ui| {
                 let bg = self.config.timeline_bg_color;
                 ui.painter().rect_filled(ui.max_rect(), 0.0,
                     egui::Color32::from_rgb(bg[0],bg[1],bg[2]));
                 ui.horizontal_wrapped(|ui| {
-                    ui.strong(tr(lang, "🎬 TIMELINE", "🎬 التايم لاين"));
+                    ui.label(egui::RichText::new(tr(lang, "● ANIMATION TIMELINE", "● الخط الزمني للأنيميشن"))
+                        .size(16.0).strong().color(egui::Color32::from_rgb(107, 210, 252)));
                     if ui.button("⚙").on_hover_text(
                         tr(lang, "Timeline Settings", "إعدادات التايم لاين")
                     ).clicked() {
                         self.show_timeline_settings = true;
                     }
                     ui.separator();
-                    if ui.button("|<").clicked() { self.current_frame = 1; }
-                    if ui.button("<").clicked() && self.current_frame > 1 { self.current_frame -= 1; }
-                    if ui.button(if self.is_playing { "Pause" } else { "Play" }).clicked() {
+                    if ui.button("⏮").on_hover_text(tr(lang, "First frame", "أول فريم")).clicked() { self.current_frame = 1; }
+                    if ui.button("◀").on_hover_text(tr(lang, "Previous frame", "الفريم السابق")).clicked() && self.current_frame > 1 { self.current_frame -= 1; }
+                    let play_button = egui::Button::new(if self.is_playing { "Ⅱ  PAUSE" } else { "▶  PLAY" })
+                        .fill(if self.is_playing { egui::Color32::from_rgb(163, 59, 62) }
+                            else { egui::Color32::from_rgb(21, 133, 111) });
+                    if ui.add(play_button).clicked() {
                         self.is_playing = !self.is_playing;
                         if self.is_playing { self.start_audio_playback(); } else { self.stop_audio_playback(); }
                     }
-                    if ui.button(">").clicked() && self.current_frame < self.timeline_length { self.current_frame += 1; }
+                    if ui.button("▶").on_hover_text(tr(lang, "Next frame", "الفريم الجاي")).clicked() && self.current_frame < self.timeline_length { self.current_frame += 1; }
                     ui.toggle_value(&mut self.loop_enabled, tr(lang, "🔁 Loop Range", "🔁 تكرار جزء"));
-                    ui.label(format!("{}f / {}f", self.current_frame, self.timeline_length));
-                    if ui.button("Frame (F5)").clicked() { self.action_insert_frame_f5(); }
-                    if ui.button("Keyframe (F6)").clicked() { self.action_insert_keyframe_f6(now_time); }
-                    if ui.button("Blank (F7)").clicked() { self.action_insert_blank_keyframe_f7(now_time); }
+                    ui.label(egui::RichText::new(format!("Frame {} / {}", self.current_frame, self.timeline_length))
+                        .color(egui::Color32::from_rgb(255, 214, 110)).strong());
+                    if ui.button(tr(lang, "+ Frame (F5)", "+ فريم (F5)")).clicked() { self.action_insert_frame_f5(); }
+                    if ui.button(tr(lang, "◆ Keyframe (F6)", "◆ كي فريم (F6)")).clicked() { self.action_insert_keyframe_f6(now_time); }
+                    if ui.button(tr(lang, "◇ Blank (F7)", "◇ فاضي (F7)")).clicked() { self.action_insert_blank_keyframe_f7(now_time); }
                     if ui.checkbox(&mut self.project.onion_skin.enabled, tr(lang, "Onion Skin", "عرض الفريمات المجاورة"))
                         .on_hover_text(tr(lang, "Show faded previous and next frames to help animate.", "إظهار الفريمات السابقة والتالية بشفافية لتسهيل التحريك."))
                         .changed()
@@ -3096,10 +3418,12 @@ impl eframe::App for StickApp {
                 let cols = self.timeline_length.max(30);
                 egui::ScrollArea::both().id_salt("timeline_frame_scroller").show(ui, |ui| {
                     ui.horizontal(|ui| {
-                        ui.allocate_ui(egui::vec2(140.0, 26.0), |ui| { ui.strong(tr(lang, "Frames", "الفريمات")); });
+                        ui.allocate_ui(egui::vec2(158.0, 30.0), |ui| {
+                            ui.strong(tr(lang, "FRAMES / LAYERS", "الفريمات / الطبقات"));
+                        });
                         for f in 1..=cols {
                             let is_c = self.current_frame == f;
-                            let (r, resp) = ui.allocate_exact_size(egui::vec2(cell_w, 26.0), egui::Sense::click_and_drag());
+                            let (r, resp) = ui.allocate_exact_size(egui::vec2(cell_w, 30.0), egui::Sense::click_and_drag());
                             if self.loop_enabled && f >= self.loop_start_frame && f <= self.loop_end_frame {
                                 ui.painter().rect_filled(r.shrink(1.0), 2.0, egui::Color32::from_rgb(57, 103, 83));
                             }
@@ -3119,8 +3443,12 @@ impl eframe::App for StickApp {
                     });
                     for (l_idx, layer) in self.project.layers.iter().enumerate() {
                         ui.horizontal(|ui| {
-                            ui.allocate_ui(egui::vec2(140.0, 30.0), |ui| {
-                                ui.label(egui::RichText::new(&layer.name).strong());
+                            ui.allocate_ui(egui::vec2(158.0, 34.0), |ui| {
+                                ui.label(egui::RichText::new(&layer.name).strong().color(
+                                    if self.active_layer_idx == l_idx {
+                                        egui::Color32::from_rgb(119, 209, 255)
+                                    } else { egui::Color32::WHITE }
+                                ));
                             });
                             for f in 1..=cols {
                                 let is_b = f > self.timeline_length;
@@ -3128,7 +3456,7 @@ impl eframe::App for StickApp {
                                 let eff = if is_b { None } else { Self::get_effective_frame_data(layer, f) };
                                 let has_d = eff.map_or(false, |fd| !fd.strokes.is_empty() || !fd.media_items.is_empty());
                                 let tw = eff.map(|fd| fd.tween_mode).unwrap_or(TweenMode::None);
-                                let (cr, cresp) = ui.allocate_exact_size(egui::vec2(cell_w, 30.0), egui::Sense::click());
+                                let (cr, cresp) = ui.allocate_exact_size(egui::vec2(cell_w, 34.0), egui::Sense::click());
                                 let cell = self.config.timeline_cell_color;
                                 let accent = self.config.ui_accent_color;
                                 let bg = if self.active_layer_idx == l_idx && self.current_frame == f {
@@ -3142,6 +3470,13 @@ impl eframe::App for StickApp {
                                     egui::Color32::from_rgb(cell[0], cell[1], cell[2])
                                 };
                                 ui.painter().rect_filled(cr.shrink2(egui::vec2(1.0, 2.0)), 4.0, bg);
+                                if self.current_frame == f {
+                                    ui.painter().line_segment(
+                                        [cr.left_top() + egui::vec2(0.0, 1.0),
+                                         cr.left_bottom() - egui::vec2(0.0, 1.0)],
+                                        egui::Stroke::new(2.0, egui::Color32::from_rgb(255, 202, 65))
+                                    );
+                                }
                                 if !is_b { draw_anicraft_timeline_cell(ui.painter(), cr, is_kf, has_d, tw); }
                                 if cresp.clicked() {
                                     if is_b { self.timeline_length = f; self.project.total_frames = f; }
@@ -3297,7 +3632,11 @@ impl eframe::App for StickApp {
             let tool_cursor = if show_dot || show_tool_icon {
                 egui::CursorIcon::None
             } else if space_down || self.active_tool_ui == ActiveToolUI::HandCanvas {
-                egui::CursorIcon::Grab
+                if pointer_down || ctx.input(|i| i.pointer.secondary_down()) {
+                    egui::CursorIcon::Grabbing
+                } else {
+                    egui::CursorIcon::Grab
+                }
             } else {
                 match self.active_tool_ui {
                     ActiveToolUI::Text => egui::CursorIcon::Text,
@@ -3312,15 +3651,31 @@ impl eframe::App for StickApp {
 
             let is_over_canvas = pointer_pos.map_or(false, |p| canvas_rect.contains(p));
             if scroll_y != 0.0 && is_over_canvas && !any_modal_open {
-                self.zoom_level = (self.zoom_level * (1.0 + scroll_y * 0.0022).clamp(0.75, 1.35)).clamp(0.1, 6.0);
+                let old_zoom = self.zoom_level;
+                let new_zoom = (old_zoom * (1.0 + scroll_y * 0.0018).clamp(0.82, 1.22)).clamp(0.1, 6.0);
+                if let Some(pointer) = pointer_pos {
+                    self.pan_offset = selection_tools::zoom_pan_around_pointer(
+                        self.pan_offset, canvas_rect.center(), pointer, old_zoom, new_zoom,
+                    );
+                }
+                self.zoom_level = new_zoom;
             }
             if (space_down || self.active_tool_ui == ActiveToolUI::HandCanvas) && pointer_down && !any_modal_open {
                 if let (Some(c), Some(l)) = (pointer_pos, self.last_pointer_pos) { self.pan_offset += c - l; }
             }
+            // With the hand tool, left drag pans; right drag rotates the entire stage view.
+            let secondary_down = ctx.input(|i| i.pointer.secondary_down());
+            if self.active_tool_ui == ActiveToolUI::HandCanvas && secondary_down && is_over_canvas && !any_modal_open {
+                if let (Some(current), Some(previous)) = (pointer_pos, self.last_secondary_pointer_pos) {
+                    let angle = self.canvas_rotation_deg + (current.x - previous.x) * 0.45;
+                    self.canvas_rotation_deg = (angle + 180.0).rem_euclid(360.0) - 180.0;
+                }
+                self.last_secondary_pointer_pos = pointer_pos;
+            } else {
+                self.last_secondary_pointer_pos = None;
+            }
 
             let bg = self.stage_bg_color;
-            painter.rect_filled(stage_rect, 0.0, egui::Color32::from_rgba_unmultiplied(bg[0], bg[1], bg[2], bg[3]));
-
             let (sin_r, cos_r) = self.canvas_rotation_deg.to_radians().sin_cos();
             let (fh, fv) = (self.canvas_flip_h, self.canvas_flip_v);
             let to_screen = |p: egui::Pos2| -> egui::Pos2 {
@@ -3338,6 +3693,16 @@ impl eframe::App for StickApp {
                 if fv { ny = -ny; }
                 egui::pos2(nx + stage_w * 0.5, ny + stage_h * 0.5)
             };
+            // Rotate the paper along with the artwork, rather than rotating
+            // only the strokes over an unrotated white rectangle.
+            painter.add(egui::Shape::convex_polygon(
+                vec![to_screen(egui::pos2(0.0, 0.0)),
+                     to_screen(egui::pos2(stage_w, 0.0)),
+                     to_screen(egui::pos2(stage_w, stage_h)),
+                     to_screen(egui::pos2(0.0, stage_h))],
+                egui::Color32::from_rgba_unmultiplied(bg[0], bg[1], bg[2], bg[3]),
+                egui::Stroke::NONE,
+            ));
 
             if !space_down && !alt_down && self.active_tool_ui != ActiveToolUI::HandCanvas && is_over_canvas && !any_modal_open && !self.is_active_layer_locked() {
                 if let Some(pos) = pointer_pos {
@@ -3350,26 +3715,28 @@ impl eframe::App for StickApp {
                             else if pointer_down { self.shape_drag_current = Some(stage_pos); }
                         }
                         ActiveToolUI::Bucket if pointer_pressed => {
-                            // Bucket works on closed vector shapes. Full
-                            // paint-region flood fill needs a raster backend.
+                            // Fill a single closed stroke or a contour formed
+                            // by multiple connected strokes on the active layer.
+                            // Raster-pixel flood fill is still a separate feature.
                             let can_fill = self.project.layers.get(self.active_layer_idx).is_some_and(|l| {
                                 let evaluated = self.project.evaluate_layer_at_frame(l, self.current_frame);
-                                fill_tools::find_topmost_shape(&evaluated.strokes, stage_pos.x, stage_pos.y).is_some()
+                                fill_tools::can_fill_contour(&evaluated.strokes, stage_pos.x, stage_pos.y)
                             });
                             if can_fill {
                                 self.save_undo_state();
                                 self.ensure_editable_keyframe();
                                 if let Some(l) = self.project.layers.get_mut(self.active_layer_idx) {
                                     if let Some(f) = l.keyframes.get_mut(&self.current_frame) {
-                                        if fill_tools::apply_shape_fill(&mut f.strokes, stage_pos.x, stage_pos.y, self.brush_color) {
+                                        if fill_tools::apply_contour_fill(&mut f.strokes,
+                                            stage_pos.x, stage_pos.y, self.brush_color) {
                                             self.has_unsaved_changes = true;
                                         }
                                     }
                                 }
                             } else {
                                 self.status_message = tr(lang,
-                                    "Bucket: click inside a closed vector shape.",
-                                    "البوكت: دوس جوّه شكل مقفول الأول.");
+                                    "Fill: click inside a closed contour. Multiple joined strokes are supported.",
+                                    "التعبئة: اضغط جوّه شكل مقفول؛ ينفع يكون معمول من أكتر من خط متوصل.");
                             }
                         }
                         ActiveToolUI::EraserRed | ActiveToolUI::EraserGreen if pointer_down => {
@@ -3407,7 +3774,7 @@ impl eframe::App for StickApp {
                                 }
                             } else {
                                 self.save_undo_state();
-                                self.current_stroke = Some(Stroke { points: vec![StrokePoint { x: stage_pos.x, y: stage_pos.y, pressure: 1.0 }], color: self.brush_color, fill_color: None, base_width: self.brush_size, is_vector: true, brush_preset: KritaBrushPreset::GPenInk, opacity: 1.0, brush_texture_id: None });
+                                self.current_stroke = Some(Stroke { points: vec![StrokePoint { x: stage_pos.x, y: stage_pos.y, pressure: 1.0 }], color: self.brush_color, fill_color: None, base_width: self.brush_size, is_vector: true, brush_preset: KritaBrushPreset::GPenInk, opacity: 1.0, brush_texture_id: None, tip_shape: BrushTipShape::Round });
                             }
                         }
                         ActiveToolUI::Brush if pointer_down => {
@@ -3424,7 +3791,7 @@ impl eframe::App for StickApp {
                                 }
                             } else {
                                 self.save_undo_state();
-                                self.current_stroke = Some(Stroke { points: vec![StrokePoint { x: virt.x, y: virt.y, pressure: drawing_pressure }], color: self.brush_color, fill_color: None, base_width: self.brush_size, is_vector: false, brush_preset: self.active_krita_brush, opacity: self.brush_opacity, brush_texture_id: None });
+                                self.current_stroke = Some(Stroke { points: vec![StrokePoint { x: virt.x, y: virt.y, pressure: drawing_pressure }], color: self.brush_color, fill_color: None, base_width: self.brush_size, is_vector: false, brush_preset: self.active_krita_brush, opacity: self.brush_opacity, brush_texture_id: None, tip_shape: self.brush_tip_shape });
                             }
                         }
                         ActiveToolUI::VectorDirectSelect => {
@@ -3458,20 +3825,38 @@ impl eframe::App for StickApp {
                         }
                         ActiveToolUI::SelectNormal | ActiveToolUI::FreeTransform => {
                             if pointer_pressed {
-                                // In Free Transform, grab the bottom-right handle
-                                // to resize an existing multi-object selection.
+                                // A dedicated handle above the selection provides free rotation.
+                                let bounds = self.selected_canvas_bounds();
+                                let rotate_pivot = if self.active_tool_ui == ActiveToolUI::FreeTransform {
+                                    bounds.filter(|rect| {
+                                        (rect.center_top() + egui::vec2(0.0, -26.0 / scale))
+                                            .distance(stage_pos) < (14.0 / scale)
+                                    }).map(|rect| rect.center())
+                                } else { None };
                                 let resize_anchor = if self.active_tool_ui == ActiveToolUI::FreeTransform {
-                                    self.selected_canvas_bounds().and_then(|rect| {
+                                    bounds.and_then(|rect| {
                                         if rect.max.distance(stage_pos) <= (16.0 / scale).max(4.0) {
                                             Some(rect.min)
                                         } else { None }
                                     })
                                 } else { None };
-                                if let Some(anchor) = resize_anchor {
+                                let reuse_selection = bounds.is_some_and(|rect| rect.contains(stage_pos))
+                                    && (!self.selected_stroke_indices.is_empty() || self.selected_text_item_index.is_some());
+                                if let Some(pivot) = rotate_pivot {
+                                    self.save_undo_state();
+                                    self.transform_rotate_pivot = Some(pivot);
+                                    self.transform_drag_anchor = None;
+                                } else if let Some(anchor) = resize_anchor {
                                     self.save_undo_state();
                                     self.transform_drag_anchor = Some(anchor);
+                                    self.transform_rotate_pivot = None;
+                                } else if reuse_selection {
+                                    self.save_undo_state();
+                                    self.transform_drag_anchor = None;
+                                    self.transform_rotate_pivot = None;
                                 } else {
                                 self.transform_drag_anchor = None;
+                                self.transform_rotate_pivot = None;
                                 self.selected_stroke_indices.clear();
                                 self.selected_text_item_index = None;
                                 self.selection_rect_start = None;
@@ -3498,7 +3883,14 @@ impl eframe::App for StickApp {
                                 }
                                 } // finished regular selection; otherwise grabbed transform handle
                             } else if pointer_down {
-                                if let Some(anchor) = self.transform_drag_anchor {
+                                if let Some(pivot) = self.transform_rotate_pivot {
+                                    if let Some(previous) = self.last_pointer_pos {
+                                        let prev = to_stage(previous) - pivot;
+                                        let curr = stage_pos - pivot;
+                                        let radians = curr.y.atan2(curr.x) - prev.y.atan2(prev.x);
+                                        self.rotate_selection_around(pivot, radians);
+                                    }
+                                } else if let Some(anchor) = self.transform_drag_anchor {
                                     if let Some(previous) = self.last_pointer_pos {
                                         let previous_stage = to_stage(previous);
                                         let old_length = previous_stage.distance(anchor).max(1.0);
@@ -3509,40 +3901,28 @@ impl eframe::App for StickApp {
                                 } else if self.selection_rect_start.is_some() {
                                     self.selection_rect_current = Some(stage_pos);
                                 } else if delta.length_sq() > 0.0 {
-                                    if self.selected_text_item_index.is_some() || !self.selected_stroke_indices.is_empty() {
-                                        self.ensure_editable_keyframe();
-                                        if let Some(layer) = self.project.layers.get_mut(self.active_layer_idx) {
-                                            if let Some(frame) = layer.keyframes.get_mut(&self.current_frame) {
-                                                if let Some(index) = self.selected_text_item_index {
-                                                    if let Some(text) = frame.text_items.get_mut(index) {
-                                                        text.x += delta.x;
-                                                        text.y += delta.y;
-                                                    }
-                                                }
-                                                for &index in &self.selected_stroke_indices {
-                                                    if let Some(stroke) = frame.strokes.get_mut(index) {
-                                                        for p in &mut stroke.points {
-                                                            p.x += delta.x;
-                                                            p.y += delta.y;
-                                                        }
-                                                    }
-                                                }
-                                                self.has_unsaved_changes = true;
-                                            }
-                                        }
-                                    }
+                                    self.move_selected_items(delta);
                                 }
                             }
                         }
                         ActiveToolUI::SelectLasso => {
                             if pointer_pressed {
+                                let existing = self.selected_canvas_bounds().is_some_and(
+                                    |bounds| bounds.contains(stage_pos));
+                                self.lasso_dragging_selection = existing &&
+                                    (!self.selected_stroke_indices.is_empty() || self.selected_text_item_index.is_some());
                                 self.lasso_points.clear();
-                                self.selected_stroke_indices.clear();
-                                self.selected_text_item_index = None;
-                                self.lasso_points.push(stage_pos);
+                                if self.lasso_dragging_selection {
+                                    self.save_undo_state();
+                                } else {
+                                    self.selected_stroke_indices.clear();
+                                    self.selected_text_item_index = None;
+                                    self.lasso_points.push(stage_pos);
+                                }
+                            } else if pointer_down && self.lasso_dragging_selection {
+                                self.move_selected_items(delta);
                             } else if pointer_down && self.lasso_points.last()
                                 .is_none_or(|&prev| prev.distance(stage_pos) >= 2.5) {
-                                // Limit to avoid memory growth on very long drag gestures.
                                 if self.lasso_points.len() < 4_096 {
                                     self.lasso_points.push(stage_pos);
                                 }
@@ -3555,6 +3935,8 @@ impl eframe::App for StickApp {
 
             if pointer_released {
                 self.transform_drag_anchor = None;
+                self.transform_rotate_pivot = None;
+                self.lasso_dragging_selection = false;
                 if let (Some(start), Some(end)) = (
                     self.selection_rect_start.take(), self.selection_rect_current.take()
                 ) {
@@ -3660,12 +4042,33 @@ impl eframe::App for StickApp {
                     let fd = self.project.evaluate_layer_at_frame(layer, self.current_frame);
                     for m in &fd.media_items {
                         if let Some(tex) = self.texture_cache.get(&m.path) {
-                            painter.image(tex.id(), egui::Rect::from_min_max(to_screen(egui::pos2(m.x, m.y)), to_screen(egui::pos2(m.x + m.width, m.y + m.height))), egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)), egui::Color32::from_white_alpha((255.0 * l_op) as u8));
+                            let mut mesh = egui::Mesh::with_texture(tex.id());
+                            let tint = egui::Color32::from_white_alpha((255.0 * l_op) as u8);
+                            for (pt, uv) in [
+                                (egui::pos2(m.x, m.y), egui::pos2(0.0, 0.0)),
+                                (egui::pos2(m.x + m.width, m.y), egui::pos2(1.0, 0.0)),
+                                (egui::pos2(m.x + m.width, m.y + m.height), egui::pos2(1.0, 1.0)),
+                                (egui::pos2(m.x, m.y + m.height), egui::pos2(0.0, 1.0)),
+                            ] {
+                                mesh.vertices.push(egui::epaint::Vertex { pos: to_screen(pt), uv, color: tint });
+                            }
+                            mesh.indices.extend_from_slice(&[0, 1, 2, 0, 2, 3]);
+                            painter.add(egui::Shape::mesh(mesh));
                         }
                     }
                     for s in &fd.strokes { draw_stroke_pro(&painter, s, None, l_op, scale, 0.0, 0.0, &to_screen); }
                     for txt in &fd.text_items {
-                        painter.text(to_screen(egui::pos2(txt.x, txt.y)), egui::Align2::LEFT_TOP, fix_ar(&txt.content), egui::FontId::proportional(txt.font_size * scale), egui::Color32::from_rgba_unmultiplied(txt.color[0], txt.color[1], txt.color[2], (txt.color[3] as f32 * l_op) as u8));
+                        let tint = egui::Color32::from_rgba_unmultiplied(txt.color[0], txt.color[1],
+                            txt.color[2], (txt.color[3] as f32 * l_op) as u8);
+                        let galley = painter.layout_no_wrap(
+                            fix_ar(&txt.content),
+                            egui::FontId::proportional(txt.font_size * scale),
+                            tint,
+                        );
+                        let text_shape = egui::epaint::TextShape::new(
+                            to_screen(egui::pos2(txt.x, txt.y)), galley, tint,
+                        ).with_angle(self.canvas_rotation_deg.to_radians());
+                        painter.add(egui::Shape::Text(text_shape));
                     }
                 }
             }
@@ -3697,7 +4100,7 @@ impl eframe::App for StickApp {
                 }
             }
             // Persistent visual selection and a draggable scale handle.
-            if matches!(self.active_tool_ui, ActiveToolUI::SelectNormal | ActiveToolUI::FreeTransform) {
+            if matches!(self.active_tool_ui, ActiveToolUI::SelectNormal | ActiveToolUI::SelectLasso | ActiveToolUI::FreeTransform) {
                 if let Some(bounds) = self.selected_canvas_bounds() {
                     let screen_bounds = egui::Rect::from_two_pos(
                         to_screen(bounds.min), to_screen(bounds.max)
@@ -3706,6 +4109,13 @@ impl eframe::App for StickApp {
                         1.6, egui::Color32::from_rgb(54, 194, 255)
                     ));
                     if self.active_tool_ui == ActiveToolUI::FreeTransform {
+                        let top = to_screen(bounds.center_top());
+                        let handle = to_screen(bounds.center_top() + egui::vec2(0.0, -26.0 / scale));
+                        painter.line_segment([top, handle], egui::Stroke::new(1.5, egui::Color32::from_rgb(54, 194, 255)));
+                        painter.circle_filled(handle, 11.0, egui::Color32::from_rgb(19, 31, 42));
+                        painter.circle_stroke(handle, 11.0, egui::Stroke::new(2.0, egui::Color32::from_rgb(54, 194, 255)));
+                        painter.text(handle, egui::Align2::CENTER_CENTER, "↻",
+                            egui::FontId::proportional(16.0), egui::Color32::WHITE);
                         for corner in [screen_bounds.left_top(), screen_bounds.right_top(),
                                        screen_bounds.left_bottom(), screen_bounds.right_bottom()] {
                             let handle = egui::Rect::from_center_size(corner, egui::vec2(9.0, 9.0));
@@ -3808,9 +4218,12 @@ impl eframe::App for StickApp {
                 if let Some(p) = pointer_pos {
                     let rect = egui::Rect::from_min_size(p + egui::vec2(8.0, 7.0),
                         egui::vec2(26.0, 26.0));
-                    painter.rect_filled(rect.expand(2.0), 5.0,
-                        egui::Color32::from_rgba_unmultiplied(21, 24, 35, 235));
-                    draw_tool_ui_icon(&painter, rect, self.active_tool_ui, true);
+                    let tool_color = get_tool_ui_color(self.active_tool_ui);
+                    painter.circle_filled(rect.center(), 14.0,
+                        egui::Color32::from_rgba_unmultiplied(24, 27, 36, 180));
+                    painter.circle_stroke(rect.center(), 14.0,
+                        egui::Stroke::new(1.2, tool_color));
+                    draw_tool_ui_icon(&painter, rect, self.active_tool_ui, false);
                 }
             }
         });
@@ -3847,6 +4260,13 @@ fn main() -> eframe::Result<()> {
 #[cfg(test)]
 mod tool_discovery_tests {
     use super::*;
+
+    #[test]
+    fn arabic_text_keeps_multiple_lines_without_dropping_content() {
+        let joined = fix_ar("مرحبا يا فنان\nمرحبا يا مبدع");
+        assert_eq!(joined.split('\n').count(), 2);
+        assert!(joined.chars().any(|c| ('\u{FB50}'..='\u{FEFF}').contains(&c)));
+    }
 
     #[test]
     fn updater_notice_keeps_arabic_unshaped_until_one_render_pass() {
