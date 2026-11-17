@@ -111,7 +111,12 @@ pub fn save_project_atomic(project: &AniProject, target_path: &Path) -> Result<(
     // إذا كان الملف الأصلي موجوداً، أنشئ نسخة احتياطية .bak قبل الاستبدال
     let bak_path = target_path.with_extension("stick.bak");
     if target_path.exists() {
-        let _ = fs::copy(target_path, &bak_path);
+        // لا نتابع الاستبدال إن فشل النسخ الاحتياطي: الكتابة لا تستحق المخاطرة
+        // بضياع النسخة الموجودة لدى المستخدم.
+        if let Err(e) = fs::copy(target_path, &bak_path) {
+            let _ = fs::remove_file(&tmp_path);
+            return Err(format!("تم إلغاء الحفظ لأن إنشاء النسخة الاحتياطية فشل: {}", e));
+        }
     }
 
     // الاستبدال الآمن المتوافق مع Windows
