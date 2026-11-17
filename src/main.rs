@@ -3174,9 +3174,9 @@ impl eframe::App for StickApp {
                                         });
                                         ui.add_space(10.0);
                                         ui.label(egui::RichText::new(tr(lang,
-                                            "Last 5 eligible older releases", "آخر 5 إصدارات أقدم متاحة")).strong());
+                                            "Five versions before the previous release", "آخر 5 نسخ قبل النسخة السابقة")).strong());
                                         egui::ScrollArea::vertical().max_height(205.0).show(ui, |ui| {
-                                            for (index, release) in releases.iter().enumerate() {
+                                            for (index, release) in releases.iter().skip(1).enumerate() {
                                                 ui.horizontal(|ui| {
                                                     ui.label(format!("{}. v{}", index + 1, release.info.version));
                                                     ui.label(release.published_at.get(0..10).unwrap_or("?"));
