@@ -16,6 +16,7 @@ mod eraser_tools;
 mod selection_tools;
 mod layer_ops;
 mod timeline_ops;
+mod timeline_styles;
 mod profile;
 mod project;
 mod collab;
@@ -413,6 +414,12 @@ struct AppConfig {
     vanishing_y: f32,
     #[serde(default = "default_timeline_height")]
     timeline_dock_height: f32,
+    #[serde(default)]
+    timeline_style: u8,
+    #[serde(default = "default_new_timeline_row_height")]
+    timeline_new_row_height: f32,
+    #[serde(default = "default_true_val")]
+    timeline_show_timecodes: bool,
     #[serde(default = "default_true_val")]
     show_top_bar: bool,
     #[serde(default = "default_true_val")]
@@ -487,6 +494,7 @@ fn default_perspective_opacity() -> f32 { 0.32 }
 fn default_vanishing_x() -> f32 { 0.5 }
 fn default_vanishing_y() -> f32 { 0.30 }
 fn default_timeline_height() -> f32 { 310.0 }
+fn default_new_timeline_row_height() -> f32 { 50.0 }
 fn default_right_split() -> f32 { 0.45 }
 fn default_grid_size() -> f32 { 40.0 }
 fn default_autosave_mins() -> u64 { 5 }
@@ -522,6 +530,9 @@ impl Default for AppConfig {
             vanishing_x: default_vanishing_x(),
             vanishing_y: default_vanishing_y(),
             timeline_dock_height: default_timeline_height(),
+            timeline_style: 0,
+            timeline_new_row_height: default_new_timeline_row_height(),
+            timeline_show_timecodes: true,
             show_top_bar: true,
             show_left_dock: true,
             show_right_dock: true,
@@ -998,6 +1009,7 @@ struct StickApp {
     timeline_length: usize,
     timeline_cell_width: f32,
     show_timeline_settings: bool,
+    show_feedback_dialog: bool,
     loop_enabled: bool,
     loop_start_frame: usize,
     loop_end_frame: usize,
@@ -1140,6 +1152,7 @@ impl StickApp {
             timeline_length: 1,
             timeline_cell_width: 30.0,
             show_timeline_settings: false,
+            show_feedback_dialog: false,
             loop_enabled: false,
             loop_start_frame: 1,
             loop_end_frame: 12,
@@ -2450,6 +2463,36 @@ impl StickApp {
         }
     }
 
+    fn render_feedback_dialog(&mut self, ctx: &egui::Context) {
+        if !self.show_feedback_dialog { return; }
+        let lang = self.config.lang;
+        let mut open = true;
+        let mut close_clicked = false;
+        egui::Window::new(tr(lang, "Contact & feedback", "تواصل مع المطوّر"))
+            .open(&mut open)
+            .resizable(false).collapsible(false)
+            .default_width(425.0)
+            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+            .show(ctx, |ui| {
+                ui.heading(tr(lang, "Bug reports and feature ideas", "بلغ عن مشكلة أو اقترح ميزة"));
+                ui.label(tr(lang,
+                    "Choose a contact method. These links open in your browser.",
+                    "اختار الطريقة المناسبة؛ الروابط دي هتفتح في المتصفح."));
+                ui.add_space(12.0);
+                ui.strong(tr(lang, "Instagram — message the developer", "إنستجرام — ابعت للمطوّر"));
+                ui.hyperlink_to("Instagram @ablikash",
+                    "https://www.instagram.com/ablikash?exln=NmFtNWZidnBvb3k1");
+                ui.add_space(14.0);
+                ui.strong(tr(lang, "GitHub — report a bug or suggest a feature",
+                    "GitHub — افتح بلاغ أو اقترح ميزة"));
+                ui.hyperlink_to(tr(lang, "Open GitHub Issues", "افتح صفحة الاقتراحات والمشاكل"),
+                    "https://github.com/KaniEGY/Stick/issues/new/choose");
+                ui.add_space(16.0);
+                if ui.button(tr(lang, "Close", "إغلاق")).clicked() { close_clicked = true; }
+            });
+        self.show_feedback_dialog = open && !close_clicked;
+    }
+
     fn render_tool_properties_ui(&mut self, ui: &mut egui::Ui, lang: AppLang) {
         match self.active_tool_ui {
             ActiveToolUI::SelectNormal | ActiveToolUI::SelectLasso | ActiveToolUI::FreeTransform | ActiveToolUI::VectorDirectSelect => {
@@ -2730,10 +2773,10 @@ impl eframe::App for StickApp {
                 if ui.button(tr(lang, "Check for Updates", "تحديث البرنامج")).clicked() {
                     self.check_for_updates(ctx.clone());
                 }
-                ui.hyperlink_to(
-                    tr(lang, "Report a bug or suggest a feature", "بلّغ عن مشكلة أو اقترح ميزة"),
-                    "https://github.com/KaniEGY/Stick/issues/new/choose",
-                );
+                if ui.link(tr(lang, "Report a bug or suggest a feature",
+                    "بلّغ عن مشكلة أو اقترح ميزة")).clicked() {
+                    self.show_feedback_dialog = true;
+                }
                 if !self.config.recent_projects.is_empty() {
                     ui.add_space(22.0);
                     ui.separator();
@@ -2767,6 +2810,7 @@ impl eframe::App for StickApp {
             // Show the updater before mode selection too, so users do not
             // need to start a drawing project just to install a new build.
             self.render_update_dialog(ctx, lang);
+            self.render_feedback_dialog(ctx);
             return;
         }
 
@@ -4538,6 +4582,31 @@ impl eframe::App for StickApp {
             egui::Window::new(tr(lang, "⚙ Timeline Preferences", "⚙ إعدادات التايم لاين"))
                 .open(&mut open).resizable(true).default_width(430.0)
                 .show(ctx, |ui| {
+                    ui.heading(tr(lang, "Timeline style", "شكل التايم لاين"));
+                    let mut changed = false;
+                    ui.horizontal(|ui| {
+                        changed |= ui.selectable_value(&mut self.config.timeline_style, 0,
+                            "OLD Timeline").changed();
+                        changed |= ui.selectable_value(&mut self.config.timeline_style, 1,
+                            "NEW Timeline").changed();
+                    });
+                    ui.small(if self.config.timeline_style == 0 {
+                        tr(lang, "Legacy Stick frame grid: unchanged.",
+                            "OLD: نفس شبكة الفريمات الحالية بدون أي تغيير.")
+                    } else {
+                        tr(lang,
+                            "NEW: exposure-sheet tracks, keyframe diamonds and a time ruler. Both layouts edit the same project.",
+                            "NEW: صفوف أوضح، كي فريمات ملوّنة ومسطرة توقيت. الشكلين بيعدلوا نفس المشروع.")
+                    });
+                    if self.config.timeline_style == 1 {
+                        changed |= ui.add(egui::Slider::new(
+                            &mut self.config.timeline_new_row_height, 36.0..=76.0)
+                            .text(tr(lang, "Track row height", "ارتفاع صف اللير"))).changed();
+                        changed |= ui.checkbox(&mut self.config.timeline_show_timecodes,
+                            tr(lang, "Timecode labels", "عرض التوقيت بدل رقم الفريم")).changed();
+                    }
+                    if changed { self.config.save(); }
+                    ui.separator();
                     ui.heading(tr(lang, "Onion Skin", "الأونين سكين"));
                     if ui.checkbox(&mut self.project.onion_skin.enabled,
                         tr(lang, "Enable Onion Skin", "تشغيل عرض الفريمات المجاورة")).changed() {
