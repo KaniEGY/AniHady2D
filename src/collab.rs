@@ -195,13 +195,13 @@ fn host_peer(mut stream: TcpStream, host: Arc<HostShared>) -> io::Result<()> {
     let id = host.peer_ids.fetch_add(1, Ordering::Relaxed);
     let (out_tx, out_rx) = mpsc::channel();
     {
-        let mut peers = host.peers.lock().map_err(io::Error::other)?;
+        let mut peers = host.peers.lock().map_err(|_| io::Error::other("Peer registry poisoned"))?;
         if peers.len() + 1 >= host.limit {
             packet_write(&mut stream, &Packet::Rejected { reason: "Room is full".into() })?;
             return Ok(());
         }
         // Snapshot and registration are ordered with subsequent host operations.
-        let project = host.project.lock().map_err(io::Error::other)?.clone();
+        let project = host.project.lock().map_err(|_| io::Error::other("Room project lock poisoned"))?.clone();
         packet_write(&mut stream, &Packet::Welcome { project: Box::new(project) })?;
         peers.insert(id, out_tx);
     }
