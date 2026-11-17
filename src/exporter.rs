@@ -226,7 +226,7 @@ fn draw_skia_stroke(pixmap: &mut Pixmap, s: &crate::project::Stroke, ts: Transfo
     if s.points.is_empty() {
         return;
     }
-    let alpha = ((s.color[3] as f32) * s.opacity.clamp(0.05, 1.0)) as u8;
+    let alpha = ((s.color[3] as f32) * s.opacity.clamp(0.0, 1.0)) as u8;
     let mut paint = Paint::default();
     paint.set_color_rgba8(s.color[0], s.color[1], s.color[2], alpha);
     paint.anti_alias = true;
