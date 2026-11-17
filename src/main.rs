@@ -1391,6 +1391,63 @@ impl StickApp {
                     self.online_members = roster.len();
                     self.online_participants = roster;
                 }
+                OnlineEvent::HostHandoff { address, promote, title, room_code, limit, project } => {
+                    let password = self.online_session.as_ref()
+                        .map(|s| s.password.clone()).unwrap_or_default();
+                    self.leave_online_session();
+                    let nickname = self.user_profile.username.trim().to_owned();
+                    let nickname = if nickname.is_empty() { "Artist".into() } else { nickname };
+                    let level = self.user_profile.get_level_progress().0;
+                    self.online_room_name = title.clone();
+                    self.online_code_input = room_code.clone();
+                    self.online_password = password.clone();
+                    let result = if promote {
+                        if let Some(snapshot) = project {
+                            let session = OnlineSession::host_room_with_code(
+                                title, password, limit, self.online_mode,
+                                snapshot.clone(), nickname, level, Some(room_code));
+                            session.map(|new_session| {
+                                // Transfer takes the previous host's canonical snapshot,
+                                // not a guessed copy of the guest's unsent edits.
+                                if self.has_unsaved_changes {
+                                    let _ = persistence::atomic_save::write_recovery_snapshot(
+                                        &self.project, "online_before_host_transfer");
+                                }
+                                self.project = snapshot;
+                                self.timeline_length = self.project.total_frames.max(1);
+                                self.active_layer_idx = self.active_layer_idx.min(self.project.layers.len().saturating_sub(1));
+                                self.undo_stack.clear();
+                                self.redo_stack.clear();
+                                self.online_members = 1;
+                                self.online_participants = vec![Participant {
+                                    id: 0, name: self.user_profile.username.clone(),
+                                    level, color: [64, 185, 250],
+                                }];
+                                self.online_session = Some(new_session);
+                                self.has_unsaved_changes = true;
+                                self.online_message = tr(self.config.lang,
+                                    "You are the new room host. Other members are reconnecting.",
+                                    "إنت دلوقتي الهوست الجديد، وباقي الأعضاء بيعيدوا الاتصال.").to_owned();
+                            })
+                        } else {
+                            Err("Host transfer did not include the room project".to_owned())
+                        }
+                    } else {
+                        OnlineSession::rejoin_after_handoff(address, password,
+                            nickname, level, self.online_mode).map(|mut new_session| {
+                                new_session.title = title;
+                                new_session.room_code = room_code;
+                                self.online_session = Some(new_session);
+                                self.online_message = tr(self.config.lang,
+                                    "Reconnecting to the new host...", "جاري الاتصال بالهوست الجديد...").into();
+                        })
+                    };
+                    if let Err(err) = result {
+                        self.online_message = format!("Host transfer failed: {err}");
+                        self.status_message = self.online_message.clone();
+                        self.has_unsaved_changes = true;
+                    }
+                }
                 OnlineEvent::Notice(message) => self.online_message = message,
                 OnlineEvent::Disconnected(message) => {
                     self.online_message = message;
@@ -1403,6 +1460,20 @@ impl StickApp {
         }
         if self.online_session.is_some() || self.online_discovery.is_some() {
             ctx.request_repaint_after(Duration::from_millis(160));
+        }
+    }
+
+    fn leave_online_session(&mut self) {
+        if let Some(session) = self.online_session.take() {
+            if session.is_host {
+                match session.handoff_before_leave(&self.project) {
+                    Ok(true) => self.online_message =
+                        "Room ownership offered to the earliest connected guest.".into(),
+                    Ok(false) => {}
+                    Err(err) => self.online_message = format!("Host transfer could not finish: {err}"),
+                }
+            }
+            session.close();
         }
     }
 
@@ -1490,7 +1561,7 @@ impl StickApp {
                     tr(lang, "Enable online networking for this session",
                         "تشغيل اتصال الأونلاين للجلسة دي فقط")).changed() {
                     if !self.online_enabled {
-                        if let Some(session)=self.online_session.take(){session.close();}
+                        self.leave_online_session();
                         self.online_discovery=None;
                         self.online_remote_info=None;
                         self.online_rooms.clear();
@@ -1766,7 +1837,7 @@ impl StickApp {
                         },
                         OnlinePage::ChooseAction => self.online_page = OnlinePage::ChooseMode,
                         OnlinePage::CreateRoom | OnlinePage::JoinRoom => {
-                            if let Some(session) = self.online_session.take() { session.close(); }
+                            self.leave_online_session();
                             self.online_page = OnlinePage::ChooseAction;
                         }
                     }
@@ -4007,6 +4078,7 @@ impl eframe::App for StickApp {
             } else {
                 // Never block window teardown on an audio device/worker.
                 // The old wait_finish=true could keep Windows waiting forever.
+                self.leave_online_session();
                 self.allow_close = true;
             }
         }
@@ -4017,13 +4089,13 @@ impl eframe::App for StickApp {
                     if ui.button(tr(lang,"Save & Exit","احفظ واخرج")).clicked() && self.trigger_save() {
                         self.show_exit_dialog=false;
                         self.allow_close = true;
-                        if let Some(session)=self.online_session.take(){session.close();}
+                        self.leave_online_session();
                         ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                     }
                     if ui.button(tr(lang,"Exit without saving","اخرج من غير حفظ")).clicked() {
                         self.show_exit_dialog=false;
                         self.allow_close = true;
-                        if let Some(session)=self.online_session.take(){session.close();}
+                        self.leave_online_session();
                         ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                     }
                     if ui.button(tr(lang,"Cancel","إلغاء")).clicked(){self.show_exit_dialog=false;}
