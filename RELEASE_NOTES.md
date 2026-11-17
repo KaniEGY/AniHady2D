@@ -14,6 +14,12 @@
 - **Known boundaries:** bucket fill operates on recognized closed stroke contours (now with improved near-closure tolerance), not arbitrary raster flood fill. Imported artwork/text still needs further parity tests for every transform. No Krita GPL code is copied into Stick.
 
 ### What's new
+- Bright two-tone vector icons for all 13 drawing tools and matching pointer icons; original short, musical game-style UI sound synthesis replaces one-note sine beeps.
+- Paint Bucket: bounded raster mask + flood-region vector reconstruction for shapes enclosed by multiple freehand brush strokes; preserves prior direct vector contour filling. Complex cases still have limits.
+- Online LAN preview: host the current project, find rooms on the local network, share a copyable 8-digit room code, enter code on LAN or direct IP, and see unique-color participants with names and self-reported levels in the right Layers dock. This is NOT an Internet-wide room directory or verified Google account system. Existing multi-user stroke sync remains a beta; other operations are not fully synced.
+- Perspective settings: non-destructive overlay square grid, parallel lines, or single-point perspective with adjustable spacing, color, line thickness, opacity and vanishing point.
+- Persisted timeline panel height and adjustable dock separator (drag between Properties and Layers). Colors and Symmetry inspectors collapse to free space.
+- Rollback list now shows the immediate previous release separately from FIVE older releases without duplicating it.
 - **Version Backup / النسخة الاحتياطية:** open Settings → Previous Versions to return to the preceding official release or choose from the five latest eligible older GitHub builds, each showing its publication date. All downloads use the existing SHA-256-verified installer flow and require confirmation; unsaved projects block restart.
 - **Layers dock refresh:** wider resizable Krita-inspired sidebar with live stroke thumbnails, quick layer-name search, colored selection, stroke/frame metadata, guide-layer context action, and existing visibility, lock, rename, duplicate, delete, move, opacity controls. No Krita GPL code imported.
 - **Stick Online beta:** third option under Drawing and Animation. LAN-hosted rooms, optional password, participant limit, LAN discovery and manual direct IPv4 connection. Newly committed strokes synchronize with the host; room-wide timeline/layer edits and Internet-wide discovery are not implemented yet. This preview is not end-to-end encrypted.
@@ -71,6 +77,12 @@
 - **القيود الحالية:** الدلو بيلون المسارات المقفولة اللي بيتعرف عليها، ولسه مش Flood Fill كامل على أي سطح Raster. لم يتم نسخ أكواد Krita الخاضعة لترخيص GPL.
 
 ### إيه الجديد؟
+- أيقونات ملونة بتفاصيل أوضح لكل الأدوات الـ13 ومؤشرات الماوس، وأصوات UI جديدة مولّدة داخل البرنامج بدل الصفارات القديمة.
+- تعبئة الدلو: طريقة إضافية بتحدد المساحات المقفولة من عدة خطوط مرسومة بالفرشة، وبترجع المنطقة لحدود فيكتور؛ مع استمرار التعبئة المباشرة للأشكال المغلقة. الحالات المعقدة لسه ليها حدود.
+- أونلاين تجريبي على نفس الشبكة: الهوست بيشارك المشروع الحالي، وكود غرفة من 8 أرقام سهل النسخ، والانضمام بالكود محليًا أو IP، وقائمة بأسماء المشاركين ومستوياتهم اللي بيبلغوا بيها وألوانهم. ده مش دليل غرف عالمي، ولا تسجيل دخول Google معتمد؛ مزامنة الأدوات غير الرسم الجديد لسه مش كاملة.
+- خانة المنظور: شبكة مربعات أو خطوط متساوية أو منظور بنقطة تلاشي، مع التحكم في المسافة واللون والشفافية والسمك ومكان نقطة التلاشي. الخطوط مساعدة ومش بتدخل في التصدير.
+- التايم لاين يقدر يتمدد ويتحفظ ارتفاعه، وقسم الخصائص والليرز في اليمين بينهم فاصل قابل للسحب، وقسم الألوان والتماثل قابل للفتح والقفل.
+- رجوع النسخ الاحتياطية بقى يعرض النسخة السابقة منفصلة عن خمس نسخ أقدم منها، من غير تكرار.
 - **النسخة الاحتياطية:** خانة جديدة في ترس الإعدادات، تقدر ترجع منها لآخر إصدار أقدم أو تختار من 5 إصدارات قديمة متاحة بتاريخ نشر كل واحد. البرنامج بيتأكد من سلامة ملف EXE ببصمة SHA-256 وبيطلب تأكيد، ومش بيقفل لو في شغل لسه متحفظش.
 - **لوحة الليرز:** مساحة أوسع قابلة للتمدد شبه برامج الرسم الاحترافية، ومعاينة فعلية صغيرة من خطوط كل لير، وبحث بالاسم، ومعلومات عن عدد الفريمات والخطوط، وخيارات للكليك يمين، بالإضافة لأزرار القفل والإظهار والنسخ والترتيب والشفافية. الكود مكتوب لـStick من غير نقل كود Krita.
 - **أونلاين تجريبي:** اختيار جديد في شاشة البداية للرسم أو الأنيميشن سوا، مع غرف محلية وكلمة سر اختيارية وحد أقصى للأعضاء، وإظهار الغرف على نفس الشبكة أو الدخول بعنوان IP. مزامنة الخطوط الجديدة متاحة؛ التايم لاين والليرز مش متزامنين بالكامل، ومفيش دليل عالمي بالغرف أو تشفير كامل لسه.

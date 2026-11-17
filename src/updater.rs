@@ -115,7 +115,8 @@ pub fn parse_rollback_history(json: &Value, installed: &str) -> Result<Vec<Archi
     }
     candidates.sort_by(|a, b| b.published_at.cmp(&a.published_at));
     candidates.dedup_by(|a, b| a.info.version == b.info.version);
-    candidates.truncate(5);
+    // First entry is the immediate previous release; five *more* appear below it.
+    candidates.truncate(6);
     Ok(candidates)
 }
 

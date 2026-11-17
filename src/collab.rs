@@ -6,6 +6,7 @@ use crate::project::{AniProject, Stroke};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
+use std::hash::{BuildHasher, Hasher};
 use std::io::{self, Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream, UdpSocket};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -16,7 +17,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 pub const TCP_PORT: u16 = 47554;
 const DISCOVERY_PORT: u16 = 47553;
 const DISCOVER_REQUEST: &[u8] = b"STICK_STUDIO_LAN_DISCOVER_V1";
-const PROTOCOL: u16 = 1;
+// Protocol v2 includes peer roster and LAN room codes; old v1 peers are rejected.
+const PROTOCOL: u16 = 2;
 const MAX_PACKET: usize = 8 * 1024 * 1024;
 const MAX_MEMBERS: usize = 12;
 const MAX_FRAME: usize = 10_000;
@@ -34,11 +36,40 @@ pub struct RoomListing {
     pub locked: bool,
     pub port: u16,
     pub protocol: u16,
+    #[serde(default)]
+    pub room_code: String,
+}
+
+#[derive(Clone, Serialize, Deserialize, Debug, PartialEq, Eq)]
+pub struct Participant {
+    pub id: u64,
+    pub name: String,
+    pub level: u32,
+    pub color: [u8;3],
+}
+
+const MEMBER_COLORS: [[u8;3];12] = [
+    [64,185,250], [247,115,87], [159,125,248], [47,207,147],
+    [240,186,54], [229,98,184], [76,200,210], [244,141,68],
+    [164,223,75], [128,166,251], [248,102,135], [191,150,247],
+];
+fn member_color(id:u64) -> [u8;3] { MEMBER_COLORS[id as usize % MEMBER_COLORS.len()] }
+fn new_room_code() -> String {
+    // System-seeded SipHash state + fresh time: an 8-digit locator, NOT an auth token.
+    let state = std::collections::hash_map::RandomState::new();
+    let mut h = state.build_hasher();
+    h.write_u128(SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_nanos());
+    format!("{:08}", 10_000_000 + h.finish() % 90_000_000)
+}
+pub fn find_room_by_code<'a>(rooms:&'a [RoomListing], code:&str) -> Option<&'a RoomListing> {
+    let key = code.trim();
+    if key.len()!=8 || !key.bytes().all(|b| b.is_ascii_digit()) { return None; }
+    rooms.iter().find(|r| r.room_code == key)
 }
 
 #[derive(Serialize, Deserialize, Debug)]
 enum Packet {
-    Hello { name: String, protocol: u16, mode: OnlineMode },
+    Hello { name: String, level: u32, protocol: u16, mode: OnlineMode },
     Challenge { nonce: String },
     Auth { proof: String },
     Welcome { project: Box<AniProject> },
@@ -46,6 +77,7 @@ enum Packet {
     Strokes { layer: usize, frame: usize, strokes: Vec<Stroke> },
     Snapshot { project: Box<AniProject> },
     Members { count: usize },
+    Roster { participants: Vec<Participant> },
     Goodbye,
 }
 
@@ -56,6 +88,7 @@ pub enum OnlineEvent {
     Strokes { layer: usize, frame: usize, strokes: Vec<Stroke> },
     Snapshot(AniProject),
     Members(usize),
+    Roster(Vec<Participant>),
     Notice(String),
 }
 
@@ -141,7 +174,9 @@ fn local_address() -> String {
 
 struct HostShared {
     running: Arc<AtomicBool>,
-    peers: Mutex<HashMap<u64, mpsc::Sender<Packet>>>,
+    peers: Mutex<HashMap<u64, (mpsc::Sender<Packet>, Participant)>>,
+    local: Participant,
+    room_code: String,
     project: Mutex<AniProject>,
     password: String,
     title: String,
@@ -155,7 +190,7 @@ impl HostShared {
     fn member_count(&self) -> usize { self.peers.lock().map(|p| p.len()+1).unwrap_or(1) }
     fn broadcast(&self, msg: &Packet, exclude: Option<u64>) {
         if let Ok(peers) = self.peers.lock() {
-            for (id, tx) in peers.iter() {
+            for (id, (tx,_)) in peers.iter() {
                 if Some(*id) != exclude { let _ = tx.send(clone_packet(msg)); }
             }
         }
@@ -164,6 +199,14 @@ impl HostShared {
         let count = self.member_count();
         self.broadcast(&Packet::Members { count }, None);
         let _ = self.events.send(OnlineEvent::Members(count));
+        let roster = self.peers.lock().ok().map(|peers| {
+            let mut list: Vec<Participant> = vec![self.local.clone()];
+            list.extend(peers.values().map(|(_, p)| p.clone()));
+            list.sort_by_key(|p| p.id);
+            list
+        }).unwrap_or_else(|| vec![self.local.clone()]);
+        self.broadcast(&Packet::Roster { participants: roster.clone() }, None);
+        let _ = self.events.send(OnlineEvent::Roster(roster));
     }
 }
 
@@ -172,6 +215,7 @@ fn clone_packet(packet: &Packet) -> Packet {
         Packet::Strokes { layer, frame, strokes } => Packet::Strokes { layer: *layer, frame: *frame, strokes: strokes.clone() },
         Packet::Snapshot { project } => Packet::Snapshot { project: project.clone() },
         Packet::Members { count } => Packet::Members { count: *count },
+        Packet::Roster { participants } => Packet::Roster { participants: participants.clone() },
         _ => Packet::Goodbye,
     }
 }
@@ -191,8 +235,8 @@ fn writer_loop(mut stream: TcpStream, rx: mpsc::Receiver<Packet>, running: Arc<A
 fn host_peer(mut stream: TcpStream, host: Arc<HostShared>) -> io::Result<()> {
     stream.set_read_timeout(Some(Duration::from_millis(300)))?;
     stream.set_write_timeout(Some(Duration::from_secs(3)))?;
-    let (name, protocol, mode) = match packet_read(&mut stream, &host.running)? {
-        Packet::Hello { name, protocol, mode } => (name, protocol, mode),
+    let (name, level, protocol, mode) = match packet_read(&mut stream, &host.running)? {
+        Packet::Hello { name, level, protocol, mode } => (name, level, protocol, mode),
         _ => return Err(io::Error::new(io::ErrorKind::InvalidData, "Handshake required")),
     };
     if protocol != PROTOCOL || mode != host.mode || name.trim().is_empty() || name.chars().count() > 40 {
@@ -222,7 +266,7 @@ fn host_peer(mut stream: TcpStream, host: Arc<HostShared>) -> io::Result<()> {
         // Snapshot and registration are ordered with subsequent host operations.
         let project = host.project.lock().map_err(|_| io::Error::other("Room project lock poisoned"))?.clone();
         packet_write(&mut stream, &Packet::Welcome { project: Box::new(public_project(project)) })?;
-        peers.insert(id, out_tx);
+        peers.insert(id, (out_tx, Participant { id, name, level: level.min(1000), color: member_color(id) }));
     }
     host.announce_members();
     let writer = stream.try_clone()?;
@@ -254,6 +298,7 @@ pub struct OnlineSession {
     pub address: String,
     pub is_host: bool,
     pub members: usize,
+    pub room_code: String,
     event_rx: mpsc::Receiver<OnlineEvent>,
     outgoing: Option<mpsc::Sender<Packet>>,
     host: Option<Arc<HostShared>>,
@@ -261,7 +306,7 @@ pub struct OnlineSession {
 }
 
 impl OnlineSession {
-    pub fn host_room(title: String, password: String, limit: usize, mode: OnlineMode, project: AniProject) -> Result<Self, String> {
+    pub fn host_room(title: String, password: String, limit: usize, mode: OnlineMode, project: AniProject, nickname: String, level: u32) -> Result<Self, String> {
         if title.trim().is_empty() || title.chars().count() > 48 { return Err("Room name must have 1–48 characters".into()); }
         if password.chars().count() > 128 { return Err("Password is too long".into()); }
         if !(2..=MAX_MEMBERS).contains(&limit) { return Err("Room capacity must be 2–12".into()); }
@@ -270,8 +315,11 @@ impl OnlineSession {
         listener.set_nonblocking(true).map_err(|e| e.to_string())?;
         let (event_tx, event_rx) = mpsc::channel();
         let running = Arc::new(AtomicBool::new(true));
+        let room_code = new_room_code();
         let host = Arc::new(HostShared {
             running: running.clone(), peers: Mutex::new(HashMap::new()),
+            local: Participant { id: 0, name: nickname, level, color: member_color(0) },
+            room_code: room_code.clone(),
             project: Mutex::new(project), password: password.clone(),
             title: title.clone(), mode, limit, events: event_tx,
             peer_ids: AtomicU64::new(1),
@@ -308,6 +356,7 @@ impl OnlineSession {
                             mode: host_discover.mode, members: host_discover.member_count(),
                             limit: host_discover.limit, locked: !host_discover.password.is_empty(),
                             port: TCP_PORT, protocol: PROTOCOL,
+                            room_code: host_discover.room_code.clone(),
                         };
                         if let Ok(json) = serde_json::to_vec(&listing) { let _ = socket.send_to(&json, address); }
                     }
@@ -315,10 +364,10 @@ impl OnlineSession {
             }
         });
         Ok(Self { title, mode, address: local_address(), is_host: true, members: 1,
-            event_rx, outgoing: None, host: Some(host), running })
+            room_code, event_rx, outgoing: None, host: Some(host), running })
     }
 
-    pub fn join_room(address: String, password: String, nickname: String, mode: OnlineMode) -> Result<Self, String> {
+    pub fn join_room(address: String, password: String, nickname: String, level: u32, mode: OnlineMode) -> Result<Self, String> {
         let address = if address.contains(':') { address } else { format!("{}:{}", address, TCP_PORT) };
         let addr: SocketAddr = address.parse().map_err(|_| "Enter a valid IPv4 address and port, such as 192.168.1.5:47554".to_string())?;
         let (event_tx, event_rx) = mpsc::channel();
@@ -330,7 +379,7 @@ impl OnlineSession {
                 let mut stream = TcpStream::connect_timeout(&addr, Duration::from_secs(5)).map_err(|e| format!("Connection failed: {}", e))?;
                 stream.set_read_timeout(Some(Duration::from_millis(300))).map_err(|e| e.to_string())?;
                 stream.set_write_timeout(Some(Duration::from_secs(3))).map_err(|e| e.to_string())?;
-                packet_write(&mut stream, &Packet::Hello { name: nickname, protocol: PROTOCOL, mode }).map_err(|e| e.to_string())?;
+                packet_write(&mut stream, &Packet::Hello { name: nickname, level: level.min(1000), protocol: PROTOCOL, mode }).map_err(|e| e.to_string())?;
                 let nonce = match packet_read(&mut stream, &running_worker).map_err(|e| e.to_string())? {
                     Packet::Challenge { nonce } => nonce,
                     Packet::Rejected { reason } => return Err(reason),
@@ -352,6 +401,7 @@ impl OnlineSession {
                         }
                         Ok(Packet::Snapshot { project }) => { let _ = event_tx.send(OnlineEvent::Snapshot(*project)); }
                         Ok(Packet::Members { count }) => { let _ = event_tx.send(OnlineEvent::Members(count)); }
+                        Ok(Packet::Roster { participants }) => { let _ = event_tx.send(OnlineEvent::Roster(participants)); }
                         Ok(Packet::Goodbye) => break,
                         Err(e) => return Err(format!("Lost connection: {}", e)),
                         _ => {}
@@ -364,7 +414,7 @@ impl OnlineSession {
             }
         });
         Ok(Self { title: String::new(), mode, address, is_host: false, members: 1,
-            event_rx, outgoing: Some(out_tx), host: None, running })
+            room_code: String::new(), event_rx, outgoing: Some(out_tx), host: None, running })
     }
 
     pub fn events(&self) -> Vec<OnlineEvent> { self.event_rx.try_iter().collect() }
@@ -399,6 +449,17 @@ pub fn discover_rooms() -> Vec<RoomListing> {
     let _ = socket.set_broadcast(true);
     let _ = socket.set_read_timeout(Some(Duration::from_millis(450)));
     let _ = socket.send_to(DISCOVER_REQUEST, ("255.255.255.255", DISCOVERY_PORT));
+    // Windows routers may drop global broadcast but accept the subnet broadcast.
+    if let Ok(addr) = local_address().parse::<SocketAddr>() {
+        if let std::net::IpAddr::V4(ip) = addr.ip() {
+            let mut octets = ip.octets();
+            if !ip.is_loopback() {
+                octets[3] = 255;
+                let bcast = std::net::Ipv4Addr::from(octets);
+                let _ = socket.send_to(DISCOVER_REQUEST, (bcast, DISCOVERY_PORT));
+            }
+        }
+    }
     let _ = socket.send_to(DISCOVER_REQUEST, ("127.0.0.1", DISCOVERY_PORT));
     let mut buf = [0u8; 4096];
     loop {
@@ -420,6 +481,17 @@ pub fn discover_rooms() -> Vec<RoomListing> {
 mod tests {
     use super::*;
     #[test]
+    fn room_code_is_eight_digits_and_resolves_only_discovered_rooms() {
+        let code = new_room_code();
+        assert_eq!(code.len(),8);
+        assert!(code.bytes().all(|b| b.is_ascii_digit()));
+        let listings = vec![RoomListing {title:"Art".into(),address:"127.0.0.1:47554".into(),
+            mode:OnlineMode::Drawing,members:1,limit:4,locked:false,port:TCP_PORT,protocol:PROTOCOL,
+            room_code:code.clone()}];
+        assert_eq!(find_room_by_code(&listings,&code).unwrap().title,"Art");
+        assert!(find_room_by_code(&listings,"123").is_none());
+    }
+    #[test]
     fn challenge_changes_proof_and_does_not_contain_password() {
         let a = proof("private-pass", "challenge-a");
         assert_ne!(a, proof("private-pass", "challenge-b"));
@@ -440,11 +512,11 @@ mod tests {
     fn loopback_room_handshake_and_stroke_delivery() {
         let host = OnlineSession::host_room(
             "Loopback Test".into(), "unique-test-password".into(), 3,
-            OnlineMode::Drawing, AniProject::default(),
+            OnlineMode::Drawing, AniProject::default(), "Host".into(), 9,
         ).expect("open local TCP room");
         let guest = OnlineSession::join_room(
             format!("127.0.0.1:{}", TCP_PORT),
-            "unique-test-password".into(), "Guest".into(), OnlineMode::Drawing,
+            "unique-test-password".into(), "Guest".into(), 5, OnlineMode::Drawing,
         ).expect("start local TCP join");
         let deadline = std::time::Instant::now() + Duration::from_secs(8);
         let mut connected = false;

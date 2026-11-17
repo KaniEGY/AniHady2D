@@ -22,12 +22,12 @@ use stylus::TouchPressureTracker;
 use eframe::egui;
 use exporter::{ImageExportFormat, VideoExportFormat};
 use profile::UserProfile;
-use collab::{OnlineMode, OnlineEvent, OnlineSession, RoomListing};
+use collab::{OnlineMode, OnlineEvent, OnlineSession, RoomListing, Participant};
 use project::{
     AniProject, AudioSyncMode, AudioTrack, EasingCurve, FrameData, KritaBrushPreset, Layer, MediaItem, MediaType,
     BrushTipShape, Stroke, StrokePoint, Symbol, SymbolInstance, TextItem, TweenMode, PROJECT_SCHEMA_VERSION,
 };
-use rodio::source::SineWave;
+// Game UI sounds are generated as samples without shipping external audio assets.
 use rodio::{Decoder, OutputStream, Sink, Source};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -118,65 +118,80 @@ enum SfxType {
     ToolSelect(u8),
 }
 
-fn play_sfx_async(enabled: bool, sfx: SfxType, wait_finish: bool) {
-    if !enabled {
-        return;
+// Original synthesised game-style UI sounds. No external assets or audio downloads.
+fn game_ui_samples(sfx: SfxType) -> Vec<f32> {
+    let duration = match sfx {
+        SfxType::UiClick => 0.062,
+        SfxType::NewFrame => 0.095,
+        SfxType::VectorPenTick => 0.042,
+        SfxType::BrushScratch => 0.044,
+        SfxType::EraserRub => 0.062,
+        SfxType::LassoSelect => 0.115,
+        SfxType::ZoomStep => 0.040,
+        SfxType::ExportSuccess => 0.340,
+        SfxType::ExitFarewell => 0.190,
+        SfxType::LevelUpFanfare(_) => 0.520,
+        SfxType::ToolSelect(_) => 0.090,
+    };
+    let rate = 44_100.0f32;
+    let count = (duration * rate) as usize;
+    let mut output = Vec::with_capacity(count);
+    let mut seed = 0x9e37_79b9u32;
+    for i in 0..count {
+        let t = i as f32 / rate;
+        let progress = (t / duration).clamp(0.0,1.0);
+        // Pitch slides make more expressive 'pop', 'blip' and 'reward' sounds
+        // than the old flat sine-wave beeps.
+        let (f0,f1,loud,noise) = match sfx {
+            SfxType::UiClick => (770.,520.,0.14,0.06),
+            SfxType::NewFrame => (510.,970.,0.18,0.03),
+            SfxType::VectorPenTick => (1160.,740.,0.085,0.045),
+            SfxType::BrushScratch => (580.,310.,0.06,0.16),
+            SfxType::EraserRub => (360.,190.,0.075,0.20),
+            SfxType::LassoSelect => (580.,1120.,0.14,0.07),
+            SfxType::ZoomStep => (680.,815.,0.09,0.02),
+            SfxType::ExportSuccess => (560.,950.,0.17,0.025),
+            SfxType::ExitFarewell => (530.,230.,0.11,0.03),
+            SfxType::LevelUpFanfare(variation) => {
+                let band = 420. + (variation/10) as f32*24.;
+                (band,band*1.8,0.18,0.03)
+            }
+            SfxType::ToolSelect(index) => {
+                let base = 535. + (index as f32)*26.;
+                (base,base*1.21,0.095,0.05)
+            }
+        };
+        let f = f0+(f1-f0)*progress;
+        // Chirp phase integral, with a short upper-octave sparkle.
+        let phase = std::f32::consts::TAU*(f0*t + (f1-f0)*t*t/(2.0*duration));
+        let mut tone = phase.sin()*0.73 + (2.02*phase).sin()*0.20;
+        if matches!(sfx, SfxType::ExportSuccess | SfxType::LevelUpFanfare(_)) {
+            let note = (progress*4.0).floor() as usize;
+            let arpeggio = [1.0,1.25,1.5,2.0][note.min(3)];
+            tone = (phase*arpeggio).sin()*0.8 + (phase*arpeggio*2.0).sin()*0.18;
+        }
+        seed ^= seed<<13;
+        seed ^= seed>>17;
+        seed ^= seed<<5;
+        let grit = ((seed&65535) as f32/32767.5-1.0)*noise;
+        let attack = (t/0.007).min(1.0);
+        let release = (1.0-progress).powf(2.4);
+        output.push(((tone+grit)*loud*attack*release).clamp(-0.38,0.38));
     }
+    output
+}
+
+fn play_sfx_async(enabled: bool, sfx: SfxType, wait_finish: bool) {
+    if !enabled { return; }
     let handle = std::thread::spawn(move || {
-        if let Ok((_stream, stream_handle)) = OutputStream::try_default() {
+        if let Ok((_stream,stream_handle)) = OutputStream::try_default() {
             if let Ok(sink) = Sink::try_new(&stream_handle) {
-                match sfx {
-                    SfxType::UiClick => sink.append(SineWave::new(740.0).take_duration(Duration::from_millis(28)).amplify(0.12)),
-                    SfxType::NewFrame => {
-                        sink.append(SineWave::new(620.0).take_duration(Duration::from_millis(50)).amplify(0.18));
-                        sink.append(SineWave::new(920.0).take_duration(Duration::from_millis(55)).amplify(0.18));
-                    }
-                    SfxType::VectorPenTick => sink.append(SineWave::new(1180.0).take_duration(Duration::from_millis(22)).amplify(0.09)),
-                    SfxType::BrushScratch => sink.append(SineWave::new(290.0).take_duration(Duration::from_millis(32)).amplify(0.09)),
-                    SfxType::EraserRub => sink.append(SineWave::new(175.0).take_duration(Duration::from_millis(45)).amplify(0.13)),
-                    SfxType::LassoSelect => {
-                        sink.append(SineWave::new(540.0).take_duration(Duration::from_millis(35)).amplify(0.14));
-                        sink.append(SineWave::new(810.0).take_duration(Duration::from_millis(45)).amplify(0.14));
-                    }
-                    SfxType::ZoomStep => sink.append(SineWave::new(660.0).take_duration(Duration::from_millis(22)).amplify(0.09)),
-                    SfxType::ExportSuccess => {
-                        sink.append(SineWave::new(523.25).take_duration(Duration::from_millis(110)).amplify(0.20));
-                        sink.append(SineWave::new(659.25).take_duration(Duration::from_millis(110)).amplify(0.20));
-                        sink.append(SineWave::new(783.99).take_duration(Duration::from_millis(190)).amplify(0.22));
-                    }
-                    SfxType::ExitFarewell => {
-                        sink.append(SineWave::new(520.0).take_duration(Duration::from_millis(130)).amplify(0.18));
-                        sink.append(SineWave::new(340.0).take_duration(Duration::from_millis(170)).amplify(0.18));
-                    }
-                    SfxType::LevelUpFanfare(variant) => {
-                        // 10 pitch bands x 10 motifs = 100 distinct procedural jingles.
-                        let base = 350.0 + (variant / 10) as f32 * 32.0;
-                        let motif = (variant % 10) as usize;
-                        let notes = [1.0, 1.125, 1.25, 1.3333, 1.5, 1.6667, 1.75];
-                        for i in 0..4usize {
-                            let index = (i * 2 + motif) % notes.len();
-                            let duration = 55 + motif as u64 * 3 + i as u64 * 23;
-                            sink.append(SineWave::new(base * notes[index])
-                                .take_duration(Duration::from_millis(duration))
-                                .amplify(0.12 + 0.015 * i as f32));
-                        }
-                    }
-                    SfxType::ToolSelect(tool) => {
-                        let base = 280.0 + tool as f32 * 53.0;
-                        sink.append(SineWave::new(base)
-                            .take_duration(Duration::from_millis(38)).amplify(0.08));
-                        sink.append(SineWave::new(base * (1.10 + tool as f32 * 0.016))
-                            .take_duration(Duration::from_millis(25 + tool as u64 * 2))
-                            .amplify(0.05));
-                    }
-                }
+                sink.append(rodio::buffer::SamplesBuffer::new(1, 44_100, game_ui_samples(sfx)));
                 sink.sleep_until_end();
             }
         }
     });
-    if wait_finish {
-        let _ = handle.join();
-    }
+    if wait_finish { let _ = handle.join(); }
 }
 
 fn extract_audio_waveform(path: &str, max_bars: usize) -> Vec<f32> {
@@ -371,12 +386,30 @@ struct AppConfig {
     sound_effects_enabled: bool,
     #[serde(default)]
     show_grid: bool,
+    #[serde(default)]
+    perspective_mode: u8,
+    #[serde(default = "default_perspective_spacing")]
+    perspective_spacing: f32,
+    #[serde(default = "default_perspective_width")]
+    perspective_line_width: f32,
+    #[serde(default = "default_perspective_color")]
+    perspective_color: [u8; 4],
+    #[serde(default = "default_perspective_opacity")]
+    perspective_opacity: f32,
+    #[serde(default = "default_vanishing_x")]
+    vanishing_x: f32,
+    #[serde(default = "default_vanishing_y")]
+    vanishing_y: f32,
+    #[serde(default = "default_timeline_height")]
+    timeline_dock_height: f32,
     #[serde(default = "default_true_val")]
     show_top_bar: bool,
     #[serde(default = "default_true_val")]
     show_left_dock: bool,
     #[serde(default = "default_true_val")]
     show_right_dock: bool,
+    #[serde(default = "default_right_split")]
+    right_panel_split: f32,
     #[serde(default = "default_true_val")]
     show_timeline_dock: bool,
     #[serde(default = "default_grid_size")]
@@ -428,6 +461,14 @@ struct AppConfig {
 }
 
 fn default_true_val() -> bool { true }
+fn default_perspective_spacing() -> f32 { 40.0 }
+fn default_perspective_width() -> f32 { 1.0 }
+fn default_perspective_color() -> [u8;4] { [58, 154, 227, 255] }
+fn default_perspective_opacity() -> f32 { 0.32 }
+fn default_vanishing_x() -> f32 { 0.5 }
+fn default_vanishing_y() -> f32 { 0.30 }
+fn default_timeline_height() -> f32 { 310.0 }
+fn default_right_split() -> f32 { 0.45 }
 fn default_grid_size() -> f32 { 40.0 }
 fn default_autosave_mins() -> u64 { 5 }
 fn default_tl_bg() -> [u8; 4] { [28, 29, 34, 255] }
@@ -452,9 +493,18 @@ impl Default for AppConfig {
             recent_projects: Vec::new(),
             sound_effects_enabled: true,
             show_grid: false,
+            perspective_mode: 0,
+            perspective_spacing: default_perspective_spacing(),
+            perspective_line_width: default_perspective_width(),
+            perspective_color: default_perspective_color(),
+            perspective_opacity: default_perspective_opacity(),
+            vanishing_x: default_vanishing_x(),
+            vanishing_y: default_vanishing_y(),
+            timeline_dock_height: default_timeline_height(),
             show_top_bar: true,
             show_left_dock: true,
             show_right_dock: true,
+            right_panel_split: default_right_split(),
             show_timeline_dock: true,
             grid_size: 40.0,
             timeline_bg_color: default_tl_bg(),
@@ -661,72 +711,122 @@ fn get_tool_ui_color(tool: ActiveToolUI) -> egui::Color32 {
     }
 }
 
+// Cohesive two-tone vector icons adapted to the colorful toolbar reference.
+// They stay crisp at high-DPI scaling and at the smaller mouse-cursor size.
 fn draw_tool_ui_icon(painter: &egui::Painter, rect: egui::Rect, tool: ActiveToolUI, active: bool) {
     let c = rect.center();
-    let main_color = if active { egui::Color32::WHITE } else { get_tool_ui_color(tool) };
-    let stroke = egui::Stroke::new(2.0, main_color);
+    let primary = get_tool_ui_color(tool);
+    let pale = egui::Color32::from_rgb(234, 245, 255);
+    let deep = egui::Color32::from_rgb(39, 43, 62);
+    let line = egui::Stroke::new(2.2, primary);
+    let p = |x:f32,y:f32| c+egui::vec2(x,y);
     match tool {
         ActiveToolUI::SelectNormal => {
-            let pts = vec![
-                c + egui::vec2(-5.5, -8.5), c + egui::vec2(-5.5, 7.5), c + egui::vec2(-1.2, 3.8),
-                c + egui::vec2(2.5, 9.5), c + egui::vec2(5.2, 8.0), c + egui::vec2(1.5, 2.2), c + egui::vec2(7.0, 2.2),
-            ];
-            painter.add(egui::Shape::convex_polygon(pts, main_color, egui::Stroke::NONE));
+            painter.add(egui::Shape::convex_polygon(
+                vec![p(-7.,-10.),p(-5.,9.),p(-0.5,3.0),p(5.,2.)],
+                primary,egui::Stroke::new(0.8,pale)));
+            painter.line_segment([p(0.,3.),p(5.,10.)],egui::Stroke::new(3.3,primary));
+            painter.line_segment([p(-5.5,-7.),p(-4.5,4.)],egui::Stroke::new(1.2,pale));
         }
         ActiveToolUI::SelectLasso => {
-            painter.circle_stroke(c + egui::vec2(-1.0, -2.0), 6.5, stroke);
-            painter.line_segment([c + egui::vec2(3.5, 3.0), c + egui::vec2(7.5, 8.5)], stroke);
+            painter.circle_stroke(p(-2.5,-3.5),8.0,egui::Stroke::new(3.0,primary));
+            painter.circle_stroke(p(-2.5,-3.5),5.5,egui::Stroke::new(0.9,pale));
+            painter.line_segment([p(3.5,2.),p(10.,10.)],egui::Stroke::new(3.4,primary));
+            painter.circle_filled(p(10.,10.),2.1,pale);
         }
         ActiveToolUI::FreeTransform => {
-            let sq = egui::Rect::from_center_size(c, egui::vec2(13.0, 13.0));
-            painter.rect_stroke(sq, 1.0, stroke);
-            painter.circle_filled(c, 2.2, main_color);
+            painter.rect_stroke(egui::Rect::from_center_size(c,egui::vec2(14.,14.)),0.,
+                egui::Stroke::new(1.6,primary));
+            for (x,y) in [(-8.,-8.),(8.,-8.),(-8.,8.),(8.,8.)] {
+                let r=egui::Rect::from_center_size(p(x,y),egui::vec2(5.,5.));
+                painter.rect_filled(r,0.,primary);
+                painter.rect_stroke(r,0.,egui::Stroke::new(0.8,pale));
+            }
+            painter.circle_stroke(p(0.,-11.),2.1,egui::Stroke::new(1.7,primary));
         }
         ActiveToolUI::VectorDirectSelect => {
-            let pts = vec![c + egui::vec2(-4.5, -8.5), c + egui::vec2(-4.5, 6.5), c + egui::vec2(0.0, 3.0), c + egui::vec2(5.5, 3.0)];
-            painter.add(egui::Shape::closed_line(pts, stroke));
-            painter.circle_filled(c + egui::vec2(6.0, -5.0), 2.5, main_color);
+            let verts=[p(-8.,-9.),p(-5.,9.),p(8.,0.)];
+            painter.line_segment([verts[0],verts[1]],line);
+            painter.line_segment([verts[1],verts[2]],line);
+            painter.line_segment([verts[0],verts[2]],line);
+            for (i,point) in verts.iter().enumerate() {
+                painter.circle_filled(*point,if i==1{3.4}else{3.0},primary);
+                painter.circle_filled(*point,1.0,pale);
+            }
+            painter.line_segment([p(-5.,9.),p(9.,-9.)],egui::Stroke::new(1.0,primary));
         }
         ActiveToolUI::VectorPen => {
-            let pts = vec![c + egui::vec2(0.0, -9.5), c + egui::vec2(6.5, 1.0), c + egui::vec2(3.5, 8.5), c + egui::vec2(-3.5, 8.5), c + egui::vec2(-6.5, 1.0)];
-            painter.add(egui::Shape::closed_line(pts, stroke));
-            painter.circle_filled(c + egui::vec2(0.0, -0.5), 2.0, main_color);
+            painter.add(egui::Shape::convex_polygon(
+                vec![p(0.,-11.),p(8.,0.),p(3.5,9.),p(-3.5,9.),p(-8.,0.)],
+                primary,egui::Stroke::new(1.0,deep)));
+            painter.line_segment([p(0.,-9.),p(0.,-1.)],egui::Stroke::new(1.5,pale));
+            painter.circle_filled(p(0.,0.5),2.4,pale);
+            painter.rect_filled(egui::Rect::from_min_max(p(-5.,10.),p(5.,12.)),0.,deep);
         }
         ActiveToolUI::Brush => {
-            painter.line_segment([c + egui::vec2(-1.5, 1.5), c + egui::vec2(7.5, -7.5)], egui::Stroke::new(3.2, main_color));
-            let tip = vec![c + egui::vec2(-2.0, 2.0), c + egui::vec2(-7.5, 3.5), c + egui::vec2(-8.5, 8.5), c + egui::vec2(-3.5, 7.5)];
-            painter.add(egui::Shape::convex_polygon(tip, main_color, egui::Stroke::NONE));
+            painter.line_segment([p(-3.,4.),p(8.,-9.)],egui::Stroke::new(5.,primary));
+            painter.line_segment([p(1.,-1.),p(7.,-8.)],egui::Stroke::new(1.4,pale));
+            painter.add(egui::Shape::convex_polygon(
+                vec![p(-4.,3.),p(-10.,7.),p(-10.,10.),p(-3.,9.),p(-1.,6.)],
+                egui::Color32::from_rgb(217,72,56),egui::Stroke::NONE));
+            painter.circle_filled(p(-8.,8.),1.4,primary);
         }
         ActiveToolUI::EraserRed | ActiveToolUI::EraserGreen => {
-            let pts = vec![c + egui::vec2(-7.5, 2.0), c + egui::vec2(1.0, -6.5), c + egui::vec2(7.5, 0.0), c + egui::vec2(-1.0, 8.5)];
-            painter.add(egui::Shape::closed_line(pts, stroke));
-            let half = vec![c + egui::vec2(-7.5, 2.0), c + egui::vec2(-3.2, -2.2), c + egui::vec2(3.2, 4.2), c + egui::vec2(-1.0, 8.5)];
-            painter.add(egui::Shape::convex_polygon(half, main_color, egui::Stroke::NONE));
+            let top = if tool==ActiveToolUI::EraserRed {
+                egui::Color32::from_rgb(244,88,112)
+            } else { egui::Color32::from_rgb(44,207,117) };
+            painter.add(egui::Shape::convex_polygon(
+                vec![p(-9.,3.),p(1.,-10.),p(9.,-3.),p(-1.,10.)],
+                top,egui::Stroke::new(0.7,pale)));
+            painter.add(egui::Shape::convex_polygon(
+                vec![p(-9.,3.),p(-1.,10.),p(4.,3.),p(-4.,-4.)],
+                egui::Color32::from_rgb(190,197,211),egui::Stroke::NONE));
+            painter.line_segment([p(-8.,11.),p(9.,11.)],egui::Stroke::new(1.6,primary));
         }
         ActiveToolUI::Bucket => {
-            let pts = vec![c + egui::vec2(-6.5, 0.0), c + egui::vec2(0.0, -6.5), c + egui::vec2(6.5, 0.0), c + egui::vec2(0.0, 6.5)];
-            painter.add(egui::Shape::closed_line(pts, stroke));
-            painter.circle_filled(c + egui::vec2(7.5, 4.5), 2.6, main_color);
+            painter.add(egui::Shape::convex_polygon(
+                vec![p(-8.,0.),p(-1.,-8.),p(8.,-1.),p(1.,7.)],
+                primary,egui::Stroke::new(1.0,deep)));
+            painter.line_segment([p(-5.,-1.),p(2.,-5.)],egui::Stroke::new(1.5,pale));
+            painter.line_segment([p(-3.,-10.),p(3.,-10.)],egui::Stroke::new(2.3,primary));
+            painter.line_segment([p(-3.,-10.),p(-3.,-5.)],egui::Stroke::new(2.3,primary));
+            painter.add(egui::Shape::convex_polygon(
+                vec![p(7.,3.),p(10.,8.),p(6.,10.),p(4.,8.)],
+                egui::Color32::from_rgb(37,227,183),egui::Stroke::NONE));
         }
         ActiveToolUI::Eyedropper => {
-            painter.line_segment([c + egui::vec2(-7.0, 7.0), c + egui::vec2(2.5, -2.5)], egui::Stroke::new(2.4, main_color));
-            painter.circle_filled(c + egui::vec2(5.0, -5.0), 3.6, main_color);
+            painter.line_segment([p(-7.,7.),p(4.,-4.)],egui::Stroke::new(4.0,primary));
+            painter.circle_filled(p(6.,-6.),4.0,primary);
+            painter.circle_filled(p(7.,-7.),1.5,pale);
+            painter.add(egui::Shape::convex_polygon(
+                vec![p(-8.,6.),p(-10.,10.),p(-4.,8.)],
+                egui::Color32::from_rgb(246,215,68),egui::Stroke::NONE));
         }
         ActiveToolUI::Text => {
-            painter.line_segment([c + egui::vec2(-7.0, -7.5), c + egui::vec2(7.0, -7.5)], egui::Stroke::new(2.5, main_color));
-            painter.line_segment([c + egui::vec2(0.0, -7.5), c + egui::vec2(0.0, 8.0)], egui::Stroke::new(2.5, main_color));
+            painter.line_segment([p(-9.,-9.),p(9.,-9.)],egui::Stroke::new(3.4,primary));
+            painter.line_segment([p(0.,-9.),p(0.,10.)],egui::Stroke::new(3.4,primary));
+            painter.line_segment([p(-5.,10.),p(5.,10.)],egui::Stroke::new(3.4,primary));
+            painter.circle_filled(p(-8.,-9.),1.5,pale);
         }
         ActiveToolUI::ShapeLine => {
-            painter.rect_stroke(egui::Rect::from_min_size(c + egui::vec2(-7.5, -7.5), egui::vec2(8.0, 8.0)), 1.0, stroke);
-            painter.circle_stroke(c + egui::vec2(4.0, 4.0), 4.5, stroke);
+            let sq=egui::Rect::from_min_max(p(-10.,-10.),p(1.,1.));
+            painter.rect_stroke(sq,1.0,egui::Stroke::new(3.0,primary));
+            painter.circle_stroke(p(5.,5.),6.0,egui::Stroke::new(3.0,primary));
+            painter.circle_filled(p(5.,5.),2.5,egui::Color32::from_rgb(46,207,188));
         }
         ActiveToolUI::HandCanvas => {
-            let palm = egui::Rect::from_center_size(c + egui::vec2(0.0, 2.5), egui::vec2(10.0, 9.0));
-            painter.rect_filled(palm, 3.0, main_color);
-            for dx in [-4.0, -1.3, 1.3, 4.0] {
-                painter.line_segment([c + egui::vec2(dx, -1.0), c + egui::vec2(dx, -7.5)], egui::Stroke::new(2.0, main_color));
+            let hand = egui::Color32::from_rgb(172,102,253);
+            painter.add(egui::Shape::convex_polygon(
+                vec![p(-8.,1.),p(7.,1.),p(7.,9.),p(-4.,9.),p(-9.,4.)],
+                hand,egui::Stroke::new(0.9,deep)));
+            for (x,y) in [(-5.,-8.),(-1.,-10.),(3.,-9.),(7.,-6.)] {
+                painter.line_segment([p(x,y),p(x,3.)],egui::Stroke::new(3.1,hand));
             }
+            painter.line_segment([p(-7.,4.),p(-4.,7.)],egui::Stroke::new(1.2,pale));
         }
+    }
+    if active {
+        painter.circle_filled(rect.right_top()+egui::vec2(-2.5,2.5),1.5,pale);
     }
 }
 
@@ -887,6 +987,8 @@ struct StickApp {
     online_password: String,
     online_capacity: usize,
     online_address: String,
+    online_code_input: String,
+    online_participants: Vec<Participant>,
     online_rooms: Vec<RoomListing>,
     online_discovery: Option<std::sync::mpsc::Receiver<Vec<RoomListing>>>,
     online_session: Option<OnlineSession>,
@@ -927,7 +1029,6 @@ struct StickApp {
     layer_rename_buffer: String,
     layer_filter: String,
     layer_clipboard: Option<Layer>,
-    right_properties_ratio: f32,
     symmetry_mode: SymmetryMode,
     stabilizer_strength: f32,
     stabilized_cursor: Option<egui::Pos2>,
@@ -1016,6 +1117,8 @@ impl StickApp {
             online_password: String::new(),
             online_capacity: 4,
             online_address: String::new(),
+            online_code_input: String::new(),
+            online_participants: Vec::new(),
             online_rooms: Vec::new(),
             online_discovery: None,
             online_session: None,
@@ -1056,7 +1159,6 @@ impl StickApp {
             layer_rename_buffer: String::new(),
             layer_filter: String::new(),
             layer_clipboard: None,
-            right_properties_ratio: 0.36,
             symmetry_mode: SymmetryMode::Off,
             stabilizer_strength: 0.30,
             stabilized_cursor: None,
@@ -1189,6 +1291,10 @@ impl StickApp {
                     self.has_unsaved_changes = true;
                 }
                 OnlineEvent::Members(n) => self.online_members = n,
+                OnlineEvent::Roster(roster) => {
+                    self.online_members = roster.len();
+                    self.online_participants = roster;
+                }
                 OnlineEvent::Notice(message) => self.online_message = message,
                 OnlineEvent::Disconnected(message) => {
                     self.online_message = message;
@@ -1262,18 +1368,22 @@ impl StickApp {
                         ui.add_space(18.0);
                         if ui.add_sized([220.0, 44.0], egui::Button::new(tr(lang, "Create and Start", "إنشاء وبدء الغرفة"))
                             .fill(egui::Color32::from_rgb(18, 160, 113))).clicked() {
-                            let mut project = AniProject::default();
-                            project.total_frames = 1;
+                            // Hosting the current project keeps its artwork, layers and timeline.
+                            // Never replace a user's existing document with a blank room.
+                            let mut project = self.project.clone();
+                            project.total_frames = self.timeline_length.max(1);
+                            let nickname = if self.user_profile.username.trim().is_empty() {
+                                "Artist".to_owned()
+                            } else { self.user_profile.username.trim().to_owned() };
+                            let level = self.user_profile.get_level_progress().0;
                             match OnlineSession::host_room(self.online_room_name.trim().to_owned(),
-                                    self.online_password.clone(), self.online_capacity, self.online_mode, project.clone()) {
+                                    self.online_password.clone(), self.online_capacity, self.online_mode,
+                                    project, nickname.clone(), level) {
                                 Ok(session) => {
-                                    self.save_undo_state();
-                                    self.project = project;
-                                    self.timeline_length = 1;
-                                    self.current_frame = 1;
-                                    self.active_layer_idx = 0;
-                                    self.current_project_path = None;
-                                    self.has_unsaved_changes = true;
+                                    self.online_participants = vec![Participant {
+                                        id: 0, name: nickname, level, color: [64,185,250],
+                                    }];
+                                    self.online_code_input = session.room_code.clone();
                                     self.online_session = Some(session);
                                     self.online_members = 1;
                                     self.online_message.clear();
@@ -1297,15 +1407,57 @@ impl StickApp {
                         }
                         for room in self.online_rooms.clone() {
                             let mode = if room.mode == OnlineMode::Drawing { "Drawing" } else { "Animation" };
-                            let label = format!("{}  |  {}  |  {}/{}  {}",
-                                room.title, mode, room.members, room.limit, if room.locked { "Locked" } else { "Open" });
+                            let label = format!("{}  |  {}  |  {}/{}  •  #{}  {}",
+                                room.title, mode, room.members, room.limit, room.room_code,
+                                if room.locked { "🔒" } else { "Open" });
                             if ui.button(label).clicked() {
                                 self.online_address = room.address;
+                                self.online_code_input = room.room_code;
                                 self.online_room_name = room.title;
                                 self.online_mode = room.mode;
+                                if !room.locked && self.online_session.is_none() {
+                                    // Open LAN rooms join with one click; protected rooms
+                                    // instead leave the password field available below.
+                                    self.online_password.clear();
+                                    let nickname = self.user_profile.username.trim().to_owned();
+                                    let level = self.user_profile.get_level_progress().0;
+                                    match OnlineSession::join_room(self.online_address.clone(),
+                                        String::new(),
+                                        if nickname.is_empty() { "Artist".into() } else { nickname },
+                                        level, self.online_mode) {
+                                        Ok(mut session) => {
+                                            session.title = self.online_room_name.clone();
+                                            session.room_code = self.online_code_input.clone();
+                                            self.online_session = Some(session);
+                                            self.online_message = tr(lang, "Connecting to open room...", "جاري الدخول للغرفة المفتوحة...");
+                                        }
+                                        Err(error) => self.online_message = error,
+                                    }
+                                }
                             }
                         }
                         ui.add_space(12.0);
+                        ui.label(tr(lang, "8-digit room code (LAN only)", "كود الغرفة 8 أرقام (نفس الشبكة)"));
+                        ui.horizontal(|ui| {
+                            ui.add(egui::TextEdit::singleline(&mut self.online_code_input)
+                                .char_limit(8).desired_width(180.0).hint_text("12345678"));
+                            if ui.button(tr(lang, "Find room", "دور على الغرفة")).clicked() {
+                                match collab::find_room_by_code(&self.online_rooms, &self.online_code_input) {
+                                    Some(room) => {
+                                        self.online_address = room.address.clone();
+                                        self.online_room_name = room.title.clone();
+                                        self.online_mode = room.mode;
+                                        self.online_message.clear();
+                                    }
+                                    None => {
+                                        self.online_message = tr(lang,
+                                            "Room code not found on this LAN. Refresh first, or enter the host IP for remote networks.",
+                                            "الكود مش موجود على الشبكة دي. حدّث القائمة أو اكتب IP الهوست لو في شبكة تانية.");
+                                        self.refresh_online_rooms();
+                                    }
+                                }
+                            }
+                        });
                         ui.label(tr(lang, "Host IPv4 address (IP:port)", "عنوان الهوست (IP:port)"));
                         ui.add(egui::TextEdit::singleline(&mut self.online_address)
                             .hint_text("192.168.1.5:47554").desired_width(300.0));
@@ -1315,11 +1467,17 @@ impl StickApp {
                         let connecting = self.online_session.is_some();
                         if ui.add_enabled(!connecting, egui::Button::new(tr(lang, "Join this room", "دخول الغرفة"))).clicked() {
                             let nickname = self.user_profile.username.trim().to_owned();
-                            match OnlineSession::join_room(self.online_address.trim().to_owned(),
+                            let level = self.user_profile.get_level_progress().0;
+                            let address = if self.online_address.trim().is_empty() {
+                                collab::find_room_by_code(&self.online_rooms, &self.online_code_input)
+                                    .map(|room| room.address.clone()).unwrap_or_default()
+                            } else { self.online_address.trim().to_owned() };
+                            match OnlineSession::join_room(address,
                                     self.online_password.clone(), if nickname.is_empty() { "Artist".into() } else { nickname },
-                                    self.online_mode) {
+                                    level, self.online_mode) {
                                 Ok(mut session) => {
                                     session.title = self.online_room_name.clone();
+                                    session.room_code = self.online_code_input.clone();
                                     self.online_session = Some(session);
                                     self.online_message = tr(lang, "Connecting to host...", "جاري الاتصال بالهوست...");
                                 }
@@ -2951,6 +3109,7 @@ impl eframe::App for StickApp {
                     ui.selectable_value(&mut self.settings_tab, 3, tr(lang, "Colors & Timeline", "ألوان وتايم لاين"));
                     ui.selectable_value(&mut self.settings_tab, 4, tr(lang, "Personalization", "التخصيص"));
                     ui.selectable_value(&mut self.settings_tab, 5, tr(lang, "Previous Versions", "النسخة الاحتياطية"));
+                    ui.selectable_value(&mut self.settings_tab, 6, tr(lang, "Perspective", "المنظور"));
                 });
                 ui.separator();
                 match self.settings_tab {
@@ -3174,9 +3333,9 @@ impl eframe::App for StickApp {
                                         });
                                         ui.add_space(10.0);
                                         ui.label(egui::RichText::new(tr(lang,
-                                            "Last 5 eligible older releases", "آخر 5 إصدارات أقدم متاحة")).strong());
+                                            "Five versions before the previous release", "آخر 5 نسخ قبل النسخة السابقة")).strong());
                                         egui::ScrollArea::vertical().max_height(205.0).show(ui, |ui| {
-                                            for (index, release) in releases.iter().enumerate() {
+                                            for (index, release) in releases.iter().skip(1).enumerate() {
                                                 ui.horizontal(|ui| {
                                                     ui.label(format!("{}. v{}", index + 1, release.info.version));
                                                     ui.label(release.published_at.get(0..10).unwrap_or("?"));
@@ -3215,6 +3374,46 @@ impl eframe::App for StickApp {
                                 }
                             });
                         }
+                    }
+                    6 => {
+                        ui.heading(tr(lang, "Drawing guides / Perspective", "أدوات المنظور وخطوط الإرشاد"));
+                        ui.small(tr(lang,
+                            "These are non-destructive on-screen guides. They follow canvas rotation and zoom and do not become part of exported artwork.",
+                            "الخطوط دي إرشادية على الشاشة فقط، بتتحرك مع الكانفا ومش بتدخل في ملف الرسم أو التصدير."));
+                        ui.horizontal_wrapped(|ui| {
+                            ui.selectable_value(&mut self.config.perspective_mode, 0, tr(lang, "Off", "إيقاف"));
+                            ui.selectable_value(&mut self.config.perspective_mode, 1, tr(lang, "Square grid", "مربعات"));
+                            ui.selectable_value(&mut self.config.perspective_mode, 2, tr(lang, "Parallel lines", "خطوط متساوية"));
+                            ui.selectable_value(&mut self.config.perspective_mode, 3, tr(lang, "1-point perspective", "منظور بنقطة تلاشي"));
+                        });
+                        ui.separator();
+                        let mut changed = false;
+                        changed |= ui.add(egui::Slider::new(&mut self.config.perspective_spacing, 8.0..=300.0)
+                            .text(tr(lang, "Grid size / line spacing", "حجم المربعات / مسافة الخطوط"))).changed();
+                        changed |= ui.add(egui::Slider::new(&mut self.config.perspective_line_width, 0.5..=5.0)
+                            .text(tr(lang, "Line thickness", "سمك الخط"))).changed();
+                        changed |= ui.add(egui::Slider::new(&mut self.config.perspective_opacity, 0.02..=1.0)
+                            .text(tr(lang, "Opacity", "الشفافية"))).changed();
+                        ui.horizontal(|ui| {
+                            ui.label(tr(lang, "Guide color", "لون الخطوط"));
+                            changed |= ui.color_edit_button_srgba_unmultiplied(&mut self.config.perspective_color).changed();
+                        });
+                        if self.config.perspective_mode == 3 {
+                            changed |= ui.add(egui::Slider::new(&mut self.config.vanishing_x, 0.05..=0.95)
+                                .text(tr(lang, "Vanishing X", "نقطة التلاشي أفقي"))).changed();
+                            changed |= ui.add(egui::Slider::new(&mut self.config.vanishing_y, 0.05..=0.85)
+                                .text(tr(lang, "Vanishing Y", "نقطة التلاشي رأسي"))).changed();
+                        }
+                        if ui.button(tr(lang, "Reset perspective settings", "رجّع إعدادات المنظور الأصلية")).clicked() {
+                            self.config.perspective_spacing = default_perspective_spacing();
+                            self.config.perspective_line_width = default_perspective_width();
+                            self.config.perspective_color = default_perspective_color();
+                            self.config.perspective_opacity = default_perspective_opacity();
+                            self.config.vanishing_x = default_vanishing_x();
+                            self.config.vanishing_y = default_vanishing_y();
+                            changed = true;
+                        }
+                        if changed { self.config.save(); }
                     }
                     _ => {}
                 }
@@ -3298,6 +3497,7 @@ impl eframe::App for StickApp {
         if let Some(session) = self.online_session.as_ref() {
             let title = session.title.clone();
             let address = session.address.clone();
+            let code = session.room_code.clone();
             let host = session.is_host;
             let mut leave = false;
             let mut resync = false;
@@ -3307,6 +3507,10 @@ impl eframe::App for StickApp {
                     ui.label(format!("{}  •  {} online", title, self.online_members));
                     if host {
                         ui.label(format!("LAN {}", address));
+                        if ui.button(format!("Room #{}  ⧉", code)).on_hover_text(
+                            tr(lang, "Copy room code", "نسخ كود الغرفة")).clicked() {
+                            ui.output_mut(|out| out.copied_text = code.clone());
+                        }
                         if ui.small_button(tr(lang, "Sync full project", "مزامنة المشروع بالكامل")).clicked() { resync = true; }
                     }
                     if ui.small_button(tr(lang, "Leave Room", "مغادرة الغرفة")).clicked() { leave = true; }
@@ -3319,6 +3523,7 @@ impl eframe::App for StickApp {
             }
             if leave {
                 if let Some(session) = self.online_session.take() { session.close(); }
+                self.online_participants.clear();
                 self.workspace_mode = WorkspaceMode::Launcher;
             }
         }
@@ -3425,13 +3630,28 @@ impl eframe::App for StickApp {
                             egui::vec2(width, 34.0), egui::Sense::click()
                         );
                         let bg = if selected {
-                            get_tool_ui_color(tool)
+                            egui::Color32::from_rgb(34, 56, 70)
                         } else if response.hovered() {
                             egui::Color32::from_rgb(62, 62, 68)
                         } else {
                             egui::Color32::from_rgb(44, 44, 48)
                         };
                         ui.painter().rect_filled(rect, 6.0, bg);
+                        if selected {
+                            ui.painter().rect_stroke(rect.shrink(0.7),6.0,
+                                egui::Stroke::new(1.6,get_tool_ui_color(tool)));
+                        }
+                        if self.online_session.is_some() {
+                            if let Some(member) = self.online_participants.iter().find(|p|
+                                p.name == self.user_profile.username) {
+                                let rgb = member.color;
+                                ui.painter().rect_filled(
+                                    egui::Rect::from_min_max(
+                                        rect.right_top()+egui::vec2(-4.0,4.0),
+                                        rect.right_bottom()+egui::vec2(-2.0,-4.0)),
+                                    2.0,egui::Color32::from_rgb(rgb[0],rgb[1],rgb[2]));
+                            }
+                        }
                         let icon_rect = egui::Rect::from_min_size(
                             rect.left_top() + egui::vec2(5.0, 2.0), egui::vec2(30.0, 30.0)
                         );
@@ -3533,11 +3753,15 @@ impl eframe::App for StickApp {
             ui.horizontal(|ui| {
                 ui.strong(tr(lang, "Tool Properties", "خصائص الأداة"));
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.add(egui::Slider::new(&mut self.right_properties_ratio, 0.23..=0.75)
-                        .show_value(false).text(tr(lang, "Split", "تقسيم")));
+                    if ui.add(egui::Slider::new(&mut self.config.right_panel_split, 0.18..=0.85)
+                        .show_value(false).text(tr(lang, "Split", "تقسيم"))).changed() {
+                        self.config.save();
+                    }
                 });
             });
-            let tool_height = (ui.available_height() * self.right_properties_ratio).max(160.0);
+            let panel_height = ui.available_height();
+            let tool_height = ((panel_height - 44.0).max(180.0)
+                * self.config.right_panel_split.clamp(0.18, 0.85)).max(110.0);
             ui.allocate_ui_with_layout(
                 egui::vec2(ui.available_width(), tool_height),
                 egui::Layout::top_down(egui::Align::Min),
@@ -3547,7 +3771,8 @@ impl eframe::App for StickApp {
                             self.render_tool_properties_ui(ui, lang);
             ui.add_space(8.0);
             ui.separator();
-            ui.strong(tr(lang, "Colors", "الألوان"));
+            egui::CollapsingHeader::new(tr(lang, "Colors", "الألوان"))
+                .default_open(true).show(ui, |ui| {
             ui.label(tr(lang, "Click a swatch or use the custom color picker:", "اختار لون جاهز أو افتح منتقي الألوان:"));
             ui.horizontal_wrapped(|ui| {
                 for (rgb, en_name) in BASIC_COLORS {
@@ -3570,18 +3795,36 @@ impl eframe::App for StickApp {
                 ui.label(tr(lang, "Custom color:", "لون مخصص:"));
                 ui.color_edit_button_srgba_unmultiplied(&mut self.brush_color);
             });
+            });
             ui.add_space(8.0);
             ui.separator();
-            ui.strong(tr(lang, "Symmetry Mirroring", "الرسم المتماثل"));
+            egui::CollapsingHeader::new(tr(lang, "Symmetry Mirroring", "الرسم المتماثل"))
+                .default_open(true).show(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.selectable_value(&mut self.symmetry_mode, SymmetryMode::Off, "Off");
                 ui.selectable_value(&mut self.symmetry_mode, SymmetryMode::Horizontal, "H");
                 ui.selectable_value(&mut self.symmetry_mode, SymmetryMode::Vertical, "V");
             });
+            });
             ui.add_space(6.0);
                         }); // independent tool-props scroll
                 }); // adjustable upper dock
-            ui.separator();
+            // A genuine draggable splitter between Properties and the Layers dock.
+            let (handle_rect, handle) = ui.allocate_exact_size(
+                egui::vec2(ui.available_width(), 13.0), egui::Sense::click_and_drag());
+            ui.painter().rect_filled(handle_rect, 3.0,
+                if handle.hovered() || handle.dragged() {
+                    egui::Color32::from_rgb(57, 96, 119)
+                } else { egui::Color32::from_rgb(47, 50, 59) });
+            for dx in [-11.0,0.0,11.0] {
+                ui.painter().circle_filled(handle_rect.center()+egui::vec2(dx,0.0),
+                    1.8,egui::Color32::from_gray(186));
+            }
+            if handle.dragged() {
+                self.config.right_panel_split = (self.config.right_panel_split
+                    + handle.drag_delta().y / panel_height.max(250.0)).clamp(0.18, 0.85);
+                self.config.save();
+            }
             ui.horizontal(|ui| {
                 ui.label(egui::RichText::new(tr(lang, "LAYERS", "الطبقات")).size(16.0)
                     .strong().color(egui::Color32::from_rgb(115, 208, 244)));
@@ -3740,6 +3983,27 @@ impl eframe::App for StickApp {
                 });
                 ui.add_space(2.0);
             }
+                // Current room roster lives under Layers in the right dock.
+                if self.online_session.is_some() {
+                    ui.add_space(12.0);
+                    ui.separator();
+                    ui.label(egui::RichText::new(tr(lang, "ROOM MEMBERS", "الناس اللي في الغرفة"))
+                        .strong().color(egui::Color32::from_rgb(103, 208, 239)));
+                    ui.small(tr(lang, "Colors are unique per participant. Levels are self-reported by each PC.",
+                        "كل مشارك له لون مميز؛ المستويات بيبلغ بيها الجهاز ومش موثّقة بسيرفر."));
+                    for participant in &self.online_participants {
+                        ui.horizontal(|ui| {
+                            let c = participant.color;
+                            let color = egui::Color32::from_rgb(c[0],c[1],c[2]);
+                            let (rect, _) = ui.allocate_exact_size(
+                                egui::vec2(13.0,13.0), egui::Sense::hover());
+                            ui.painter().circle_filled(rect.center(),6.0,color);
+                            ui.colored_label(color, &participant.name);
+                            ui.label(format!("LVL {}",participant.level));
+                        });
+                    }
+                    ui.add_space(6.0);
+                }
                 }); // scrollable layer dock
         });
         }
@@ -3825,9 +4089,36 @@ impl eframe::App for StickApp {
         }
 
         let mut frame_menu_action: Option<(usize, usize, timeline_ops::FrameAction)> = None;
+        let mut timeline_visibility_toggle: Option<usize> = None;
+        let mut timeline_lock_toggle: Option<usize> = None;
         // شريط التايم لاين السفلي في وضع الأنيميشن
         if self.workspace_mode == WorkspaceMode::AnimationStudio && self.config.show_timeline_dock {
-            egui::TopBottomPanel::bottom("timeline_panel").resizable(true).default_height(295.0).show(ctx, |ui| {
+            // Explicit height and an interior drag grip prevent the timeline from
+            // snapping back when the window is redrawn or reopened.
+            let available = (ctx.screen_rect().height() - 160.0).max(180.0);
+            egui::TopBottomPanel::bottom("timeline_panel").resizable(false)
+                .exact_height(self.config.timeline_dock_height.clamp(140.0, available))
+                .show(ctx, |ui| {
+                let (handle_rect, handle) = ui.allocate_exact_size(
+                    egui::vec2(ui.available_width(), 13.0), egui::Sense::drag());
+                ui.painter().rect_filled(handle_rect, 0.0,
+                    if handle.hovered() || handle.dragged() {
+                        egui::Color32::from_rgb(56, 91, 120)
+                    } else { egui::Color32::from_rgb(50, 52, 61) });
+                for dx in [-19.0,-9.0,1.0,11.0] {
+                    ui.painter().line_segment(
+                        [handle_rect.center()+egui::vec2(dx,-2.0),
+                         handle_rect.center()+egui::vec2(dx+7.0,-2.0)],
+                        egui::Stroke::new(2.0, egui::Color32::from_gray(163)));
+                }
+                if handle.dragged() {
+                    let delta = ui.input(|i| i.pointer.delta().y);
+                    if delta.abs() > 0.1 {
+                        self.config.timeline_dock_height =
+                            (self.config.timeline_dock_height - delta).clamp(140.0,available);
+                        self.config.save();
+                    }
+                }
                 let bg = self.config.timeline_bg_color;
                 ui.painter().rect_filled(ui.max_rect(), 0.0,
                     egui::Color32::from_rgb(bg[0],bg[1],bg[2]));
@@ -3885,6 +4176,10 @@ impl eframe::App for StickApp {
                     ui.label(tr(lang, "Timeline zoom", "تكبير التايم لاين"));
                     ui.add(egui::Slider::new(&mut self.timeline_cell_width, 16.0..=84.0)
                         .show_value(false));
+                    if ui.add(egui::Slider::new(&mut self.config.timeline_dock_height, 140.0..=850.0)
+                        .text(tr(lang, "Panel height", "ارتفاع التايم لاين"))).changed() {
+                        self.config.save();
+                    }
                     if ui.small_button(tr(lang, "+24 frames", "زوّد 24 فريم")).clicked() {
                         self.save_undo_state();
                         self.timeline_length = self.timeline_length.saturating_add(24).min(20_000);
@@ -3896,8 +4191,9 @@ impl eframe::App for StickApp {
                 let cols = self.timeline_length.max(30);
                 egui::ScrollArea::both().id_salt("timeline_frame_scroller").show(ui, |ui| {
                     ui.horizontal(|ui| {
-                        ui.allocate_ui(egui::vec2(158.0, 30.0), |ui| {
-                            ui.strong(tr(lang, "FRAMES / LAYERS", "الفريمات / الطبقات"));
+                        ui.allocate_ui(egui::vec2(198.0, 30.0), |ui| {
+                            ui.strong(egui::RichText::new(tr(lang, "LAYERS  /  FRAMES", "الطبقات  /  الفريمات"))
+                                .color(egui::Color32::from_rgb(117, 196, 241)));
                         });
                         for f in 1..=cols {
                             let is_c = self.current_frame == f;
@@ -3921,12 +4217,23 @@ impl eframe::App for StickApp {
                     });
                     for (l_idx, layer) in self.project.layers.iter().enumerate() {
                         ui.horizontal(|ui| {
-                            ui.allocate_ui(egui::vec2(158.0, 34.0), |ui| {
-                                ui.label(egui::RichText::new(&layer.name).strong().color(
-                                    if self.active_layer_idx == l_idx {
-                                        egui::Color32::from_rgb(119, 209, 255)
-                                    } else { egui::Color32::WHITE }
-                                ));
+                            ui.allocate_ui(egui::vec2(198.0, 34.0), |ui| {
+                                ui.horizontal(|ui| {
+                                    if ui.small_button(if layer.visible { "◉" } else { "○" })
+                                        .on_hover_text(tr(lang, "Toggle visibility", "إظهار أو إخفاء اللير"))
+                                        .clicked() { timeline_visibility_toggle = Some(l_idx); }
+                                    if ui.small_button(if layer.locked { "▣" } else { "▢" })
+                                        .on_hover_text(tr(lang, "Toggle layer lock", "قفل أو فتح اللير"))
+                                        .clicked() { timeline_lock_toggle = Some(l_idx); }
+                                    if ui.selectable_label(self.active_layer_idx == l_idx,
+                                        egui::RichText::new(&layer.name).strong().size(12.5)
+                                            .color(if self.active_layer_idx == l_idx {
+                                                egui::Color32::from_rgb(113, 209, 255)
+                                            } else { egui::Color32::WHITE }))
+                                        .on_hover_text(&layer.name).clicked() {
+                                        self.active_layer_idx = l_idx;
+                                    }
+                                });
                             });
                             for f in 1..=cols {
                                 let is_b = f > self.timeline_length;
@@ -4011,6 +4318,21 @@ impl eframe::App for StickApp {
                     }
                 });
             });
+            // The grip and the height slider both modify the same persisted value.
+        }
+        if let Some(idx) = timeline_visibility_toggle {
+            self.save_undo_state();
+            if let Some(layer) = self.project.layers.get_mut(idx) {
+                layer.visible = !layer.visible;
+                self.has_unsaved_changes = true;
+            }
+        }
+        if let Some(idx) = timeline_lock_toggle {
+            self.save_undo_state();
+            if let Some(layer) = self.project.layers.get_mut(idx) {
+                layer.locked = !layer.locked;
+                self.has_unsaved_changes = true;
+            }
         }
 
         if self.show_timeline_settings && self.workspace_mode == WorkspaceMode::AnimationStudio {
@@ -4182,6 +4504,66 @@ impl eframe::App for StickApp {
                 egui::Stroke::NONE,
             ));
 
+            // Non-destructive drawing guides; composed in stage coordinates and transformed
+            // with the actual paper. They do not affect project strokes or exports.
+            if self.config.perspective_mode > 0 {
+                let step = self.config.perspective_spacing.clamp(8.0, 300.0);
+                let lw = self.config.perspective_line_width.clamp(0.5, 5.0);
+                let gc = self.config.perspective_color;
+                let alpha = ((gc[3] as f32) * self.config.perspective_opacity.clamp(0.02, 1.0))
+                    .round() as u8;
+                let paint = egui::Stroke::new(lw,
+                    egui::Color32::from_rgba_unmultiplied(gc[0], gc[1], gc[2], alpha));
+                match self.config.perspective_mode {
+                    1 => {
+                        for n in 1..=((stage_w / step).ceil() as usize).min(500) {
+                            let x = n as f32 * step;
+                            if x < stage_w {
+                                painter.line_segment([to_screen(egui::pos2(x, 0.0)),
+                                    to_screen(egui::pos2(x, stage_h))], paint);
+                            }
+                        }
+                        for n in 1..=((stage_h / step).ceil() as usize).min(500) {
+                            let y = n as f32 * step;
+                            if y < stage_h {
+                                painter.line_segment([to_screen(egui::pos2(0.0, y)),
+                                    to_screen(egui::pos2(stage_w, y))], paint);
+                            }
+                        }
+                    }
+                    2 => {
+                        for n in 1..=((stage_h / step).ceil() as usize).min(500) {
+                            let y = n as f32 * step;
+                            if y < stage_h {
+                                painter.line_segment([to_screen(egui::pos2(0.0, y)),
+                                    to_screen(egui::pos2(stage_w, y))], paint);
+                            }
+                        }
+                    }
+                    3 => {
+                        let vp = egui::pos2(stage_w * self.config.vanishing_x.clamp(0.05,0.95),
+                            stage_h * self.config.vanishing_y.clamp(0.05,0.85));
+                        let rays = ((stage_w / step).ceil() as usize).clamp(4, 48);
+                        for n in 0..=rays {
+                            let x = stage_w * n as f32 / rays as f32;
+                            painter.line_segment([to_screen(vp), to_screen(egui::pos2(x, stage_h))], paint);
+                        }
+                        let lines = ((stage_h / step).ceil() as usize).clamp(2, 36);
+                        for n in 1..=lines {
+                            let fraction = n as f32 / (lines + 1) as f32;
+                            let depth = fraction * fraction;
+                            let y = vp.y + (stage_h - vp.y) * depth;
+                            let left = vp.x * (1.0 - depth);
+                            let right = vp.x + (stage_w - vp.x) * depth;
+                            painter.line_segment([to_screen(egui::pos2(left, y)),
+                                to_screen(egui::pos2(right, y))], paint);
+                        }
+                        painter.circle_stroke(to_screen(vp), 4.0, paint);
+                    }
+                    _ => {}
+                }
+            }
+
             if !space_down && !alt_down && self.active_tool_ui != ActiveToolUI::HandCanvas && is_over_canvas && !any_modal_open && !self.is_active_layer_locked() {
                 if let Some(pos) = pointer_pos {
                     let stage_pos = to_stage(pos);
@@ -4193,28 +4575,41 @@ impl eframe::App for StickApp {
                             else if pointer_down { self.shape_drag_current = Some(stage_pos); }
                         }
                         ActiveToolUI::Bucket if pointer_pressed => {
-                            // Fill a single closed stroke or a contour formed
-                            // by multiple connected strokes on the active layer.
-                            // Raster-pixel flood fill is still a separate feature.
-                            let can_fill = self.project.layers.get(self.active_layer_idx).is_some_and(|l| {
-                                let evaluated = self.project.evaluate_layer_at_frame(l, self.current_frame);
-                                fill_tools::can_fill_contour(&evaluated.strokes, stage_pos.x, stage_pos.y)
-                            });
-                            if can_fill {
+                            // Existing exact vector-contour fill takes priority. If the
+                            // region is drawn using many brush strokes or intersections,
+                            // use a bounded raster wall mask + traced vector region.
+                            let (can_fill, fallback) = self.project.layers.get(self.active_layer_idx)
+                                .map(|l| {
+                                    let evaluated = self.project.evaluate_layer_at_frame(l, self.current_frame);
+                                    let direct = fill_tools::can_fill_contour(
+                                        &evaluated.strokes, stage_pos.x, stage_pos.y);
+                                    let polygon = if direct { None } else {
+                                        fill_tools::flood_fill_polygon(
+                                            &evaluated.strokes, (stage_pos.x, stage_pos.y),
+                                            (self.project.width as f32, self.project.height as f32), 1.4)
+                                    };
+                                    (direct, polygon)
+                                }).unwrap_or((false, None));
+                            if can_fill || fallback.is_some() {
                                 self.save_undo_state();
                                 self.ensure_editable_keyframe();
                                 if let Some(l) = self.project.layers.get_mut(self.active_layer_idx) {
                                     if let Some(f) = l.keyframes.get_mut(&self.current_frame) {
-                                        if fill_tools::apply_contour_fill(&mut f.strokes,
-                                            stage_pos.x, stage_pos.y, self.brush_color) {
+                                        if (can_fill && fill_tools::apply_contour_fill(
+                                            &mut f.strokes, stage_pos.x, stage_pos.y, self.brush_color))
+                                            || fallback.map(|points| {
+                                                f.strokes.insert(0, fill_tools::polygon_fill_stroke(
+                                                    points, self.brush_color));
+                                                true
+                                            }).unwrap_or(false) {
                                             self.has_unsaved_changes = true;
                                         }
                                     }
                                 }
                             } else {
                                 self.status_message = tr(lang,
-                                    "Fill: click inside a closed contour. Multiple joined strokes are supported.",
-                                    "التعبئة: اضغط جوّه شكل مقفول؛ ينفع يكون معمول من أكتر من خط متوصل.");
+                                    "Fill requires a closed region. Close small gaps between lines and retry.",
+                                    "التعبئة محتاجة مساحة مقفولة؛ اقفل الفجوات الصغيرة بين الخطوط وجرّب تاني.");
                             }
                         }
                         ActiveToolUI::EraserRed | ActiveToolUI::EraserGreen if pointer_down => {
@@ -4696,7 +5091,11 @@ impl eframe::App for StickApp {
                 if let Some(p) = pointer_pos {
                     let rect = egui::Rect::from_min_size(p + egui::vec2(8.0, 7.0),
                         egui::vec2(26.0, 26.0));
-                    let tool_color = get_tool_ui_color(self.active_tool_ui);
+                    let tool_color = self.online_participants.iter()
+                        .find(|participant| self.online_session.is_some()
+                            && participant.name == self.user_profile.username)
+                        .map(|p| egui::Color32::from_rgb(p.color[0],p.color[1],p.color[2]))
+                        .unwrap_or_else(|| get_tool_ui_color(self.active_tool_ui));
                     painter.circle_filled(rect.center(), 14.0,
                         egui::Color32::from_rgba_unmultiplied(24, 27, 36, 180));
                     painter.circle_stroke(rect.center(), 14.0,
