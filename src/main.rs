@@ -516,6 +516,26 @@ fn setup_custom_fonts(ctx: &egui::Context) {
     ctx.set_fonts(fonts);
 }
 
+/// Decode a locally selected avatar using the supported image codecs.
+/// Render a small circle-cropped thumbnail; original project media is untouched.
+fn load_artist_avatar(ctx: &egui::Context, path: Option<&str>) -> Option<egui::TextureHandle> {
+    let path = path?;
+    let reader = image::ImageReader::open(path).ok()?.with_guessed_format().ok()?;
+    let decoded = reader.decode().ok()?;
+    let mut rgba = decoded.resize_to_fill(128, 128, image::imageops::FilterType::Lanczos3).to_rgba8();
+    for y in 0..128 {
+        for x in 0..128 {
+            let dx = x as f32 - 63.5;
+            let dy = y as f32 - 63.5;
+            if dx * dx + dy * dy > 63.0 * 63.0 {
+                rgba.get_pixel_mut(x, y).0[3] = 0;
+            }
+        }
+    }
+    let color_image = egui::ColorImage::from_rgba_unmultiplied([128, 128], rgba.as_raw());
+    Some(ctx.load_texture("stick_artist_avatar", color_image, egui::TextureOptions::LINEAR))
+}
+
 fn apply_user_theme(ctx: &egui::Context, config: &AppConfig) {
     let mut style = (*ctx.style()).clone();
     let c = config.ui_panel_color;
@@ -879,6 +899,7 @@ struct StickApp {
     listening_shortcut_idx: Option<usize>,
     config: AppConfig,
     user_profile: UserProfile,
+    artist_avatar: Option<egui::TextureHandle>,
     installed_version: String,
     update_state: Arc<Mutex<UpdateState>>,
     new_symbol_name: String,
@@ -899,6 +920,7 @@ impl StickApp {
         let mut proj = AniProject::default();
         proj.total_frames = 1;
         let profile = UserProfile::load();
+        let artist_avatar = load_artist_avatar(&cc.egui_ctx, profile.avatar_path.as_deref());
         let default_install_path = std::env::var("LOCALAPPDATA").map(|p| format!("{}\\StickStudio", p)).unwrap_or_else(|_| "C:\\StickStudio".to_string());
         let initial_mode = if is_running_from_installed_dir() { WorkspaceMode::Launcher } else { WorkspaceMode::InstallerSetup };
 
@@ -991,6 +1013,7 @@ impl StickApp {
             listening_shortcut_idx: None,
             config: AppConfig::load(),
             user_profile: profile,
+            artist_avatar,
             installed_version: get_installed_version(),
             update_state: Arc::new(Mutex::new(UpdateState::Idle)),
             new_symbol_name: "Symbol_1".to_string(),
@@ -2539,7 +2562,7 @@ impl eframe::App for StickApp {
                 .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0]).show(ctx, |ui| {
                 ui.horizontal_wrapped(|ui| {
                     ui.selectable_value(&mut self.settings_tab, 0, tr(lang, "General", "عام"));
-                    ui.selectable_value(&mut self.settings_tab, 1, tr(lang, "SYSTEM", "السيستم"));
+                    ui.selectable_value(&mut self.settings_tab, 1, tr(lang, "Art System", "نظام الفنان"));
                     ui.selectable_value(&mut self.settings_tab, 2, tr(lang, "Shortcuts", "اختصارات"));
                     ui.selectable_value(&mut self.settings_tab, 3, tr(lang, "Colors & Timeline", "ألوان وتايم لاين"));
                 });
@@ -2571,19 +2594,67 @@ impl eframe::App for StickApp {
                     1 => {
                         let (lvl, cxp, rxp) = self.user_profile.get_level_progress();
                         let rank = self.user_profile.get_hunter_rank();
-                        ui.heading(format!("✦ LEVEL {} | {}-Rank", lvl, rank));
-                        ui.add(egui::ProgressBar::new(
-                            (cxp as f32 / rxp.max(1) as f32).clamp(0.0, 1.0)
-                        ).text(format!("{} / {} XP", cxp, rxp)));
-                        ui.label(tr(lang, "5 XP per minute", "5 نقاط XP لكل دقيقة"));
-                        ui.label(tr(lang, "50 XP for each 20 unique drawn frames", "50 نقطة لكل 20 فريم مختلف اترسم عليهم"));
-                        ui.label(tr(lang, "20 XP for each 5 painted layers", "20 نقطة لكل 5 ليرز اترسم عليهم"));
-                        ui.label(format!("{} XP  •  {} frames  •  {} layers",
-                            self.user_profile.xp,
-                            self.user_profile.total_frames_drawn,
-                            self.user_profile.total_painted_layers));
-                        ui.small(tr(lang, "Ranks: F (0–5), E (6–10), D (11–15), C (16–20), B (21–25), A (26–30), A+ (31–35), S (36+).",
-                            "الرتب: F من 0 لـ5، E من 6 لـ10، D من 11 لـ15، C من 16 لـ20، B من 21 لـ25، A من 26 لـ30، A+ من 31 لـ35، S من 36 لفوق."));
+                        egui::Frame::none()
+                            .fill(egui::Color32::from_rgb(17, 23, 40))
+                            .rounding(12.0)
+                            .inner_margin(14.0)
+                            .show(ui, |ui| {
+                                ui.horizontal(|ui| {
+                                    if let Some(avatar) = &self.artist_avatar {
+                                        ui.image((avatar.id(), egui::vec2(84.0, 84.0)));
+                                    } else {
+                                        let (rect, _) = ui.allocate_exact_size(egui::vec2(84.0,84.0), egui::Sense::hover());
+                                        ui.painter().circle_filled(rect.center(), 41.0,
+                                            egui::Color32::from_rgb(59, 75, 112));
+                                        ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, "✦",
+                                            egui::FontId::proportional(37.0), egui::Color32::from_rgb(139, 204, 255));
+                                    }
+                                    ui.vertical(|ui| {
+                                        ui.label(egui::RichText::new(tr(lang, "ARTIST PROFILE", "ملف الفنان"))
+                                            .color(egui::Color32::from_rgb(119, 210, 255)).size(12.0));
+                                        ui.label(egui::RichText::new(format!("LEVEL {}  •  {}-Rank", lvl, rank))
+                                            .color(egui::Color32::from_rgb(255, 218, 102)).size(20.0).strong());
+                                        ui.label(egui::RichText::new(tr(lang, "Create. Practice. Evolve.", "ارسم. اتدرّب. اتطوّر."))
+                                            .color(egui::Color32::LIGHT_GRAY));
+                                    });
+                                });
+                                ui.add_space(10.0);
+                                ui.label(tr(lang, "Artist name", "اسم الفنان"));
+                                if ui.add(egui::TextEdit::singleline(&mut self.user_profile.username)
+                                    .desired_width(f32::INFINITY).char_limit(48)).changed() {
+                                    self.user_profile.save();
+                                }
+                                ui.horizontal(|ui| {
+                                    if ui.button(tr(lang, "Choose profile picture", "اختار صورة شخصية")).clicked() {
+                                        let formats = ["png", "jpg", "jpeg", "webp", "gif", "bmp",
+                                            "tiff", "tif", "tga", "ico", "pnm", "qoi", "dds", "hdr", "exr"];
+                                        if let Some(path) = rfd::FileDialog::new()
+                                            .add_filter("Supported images", &formats).pick_file() {
+                                            if let Some(path_string) = path.to_str() {
+                                                if let Some(avatar) = load_artist_avatar(ctx, Some(path_string)) {
+                                                    self.artist_avatar = Some(avatar);
+                                                    self.user_profile.avatar_path = Some(path_string.to_owned());
+                                                    self.user_profile.save();
+                                                } else {
+                                                    self.status_message = tr(lang, "Can't decode this image format.",
+                                                        "تعذر فتح الصورة. جرّب PNG أو JPG أو WebP.");
+                                                }
+                                            }
+                                        }
+                                    }
+                                    if self.artist_avatar.is_some()
+                                        && ui.small_button(tr(lang, "Remove", "إزالة")).clicked() {
+                                        self.artist_avatar = None;
+                                        self.user_profile.avatar_path = None;
+                                        self.user_profile.save();
+                                    }
+                                });
+                                ui.add_space(12.0);
+                                ui.add(egui::ProgressBar::new((cxp as f32 / rxp.max(1) as f32)
+                                    .clamp(0.0, 1.0)).text(format!("{} / {} XP", cxp, rxp)));
+                                ui.label(tr(lang, "Every masterpiece begins with one frame.",
+                                    "كل لوحة عظيمة بتبدأ بخط واحد."));
+                            });
                     }
                     2 => {
                         ui.label(tr(lang,
