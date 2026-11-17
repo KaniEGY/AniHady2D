@@ -887,6 +887,7 @@ struct StickApp {
     status_message: String,
     audio_sink: Option<(OutputStream, Sink)>,
     last_pointer_pos: Option<egui::Pos2>,
+    last_secondary_pointer_pos: Option<egui::Pos2>,
 }
 
 impl StickApp {
@@ -996,6 +997,7 @@ impl StickApp {
             status_message: "Stick Studio Ready".to_string(),
             audio_sink: None,
             last_pointer_pos: None,
+            last_secondary_pointer_pos: None,
         }
     }
 
@@ -3297,7 +3299,11 @@ impl eframe::App for StickApp {
             let tool_cursor = if show_dot || show_tool_icon {
                 egui::CursorIcon::None
             } else if space_down || self.active_tool_ui == ActiveToolUI::HandCanvas {
-                egui::CursorIcon::Grab
+                if pointer_down || ctx.input(|i| i.pointer.secondary_down()) {
+                    egui::CursorIcon::Grabbing
+                } else {
+                    egui::CursorIcon::Grab
+                }
             } else {
                 match self.active_tool_ui {
                     ActiveToolUI::Text => egui::CursorIcon::Text,
@@ -3312,15 +3318,31 @@ impl eframe::App for StickApp {
 
             let is_over_canvas = pointer_pos.map_or(false, |p| canvas_rect.contains(p));
             if scroll_y != 0.0 && is_over_canvas && !any_modal_open {
-                self.zoom_level = (self.zoom_level * (1.0 + scroll_y * 0.0022).clamp(0.75, 1.35)).clamp(0.1, 6.0);
+                let old_zoom = self.zoom_level;
+                let new_zoom = (old_zoom * (1.0 + scroll_y * 0.0018).clamp(0.82, 1.22)).clamp(0.1, 6.0);
+                if let Some(pointer) = pointer_pos {
+                    self.pan_offset = selection_tools::zoom_pan_around_pointer(
+                        self.pan_offset, canvas_rect.center(), pointer, old_zoom, new_zoom,
+                    );
+                }
+                self.zoom_level = new_zoom;
             }
             if (space_down || self.active_tool_ui == ActiveToolUI::HandCanvas) && pointer_down && !any_modal_open {
                 if let (Some(c), Some(l)) = (pointer_pos, self.last_pointer_pos) { self.pan_offset += c - l; }
             }
+            // With the hand tool, left drag pans; right drag rotates the entire stage view.
+            let secondary_down = ctx.input(|i| i.pointer.secondary_down());
+            if self.active_tool_ui == ActiveToolUI::HandCanvas && secondary_down && is_over_canvas && !any_modal_open {
+                if let (Some(current), Some(previous)) = (pointer_pos, self.last_secondary_pointer_pos) {
+                    let angle = self.canvas_rotation_deg + (current.x - previous.x) * 0.45;
+                    self.canvas_rotation_deg = (angle + 180.0).rem_euclid(360.0) - 180.0;
+                }
+                self.last_secondary_pointer_pos = pointer_pos;
+            } else {
+                self.last_secondary_pointer_pos = None;
+            }
 
             let bg = self.stage_bg_color;
-            painter.rect_filled(stage_rect, 0.0, egui::Color32::from_rgba_unmultiplied(bg[0], bg[1], bg[2], bg[3]));
-
             let (sin_r, cos_r) = self.canvas_rotation_deg.to_radians().sin_cos();
             let (fh, fv) = (self.canvas_flip_h, self.canvas_flip_v);
             let to_screen = |p: egui::Pos2| -> egui::Pos2 {
@@ -3338,6 +3360,16 @@ impl eframe::App for StickApp {
                 if fv { ny = -ny; }
                 egui::pos2(nx + stage_w * 0.5, ny + stage_h * 0.5)
             };
+            // Rotate the paper along with the artwork, rather than rotating
+            // only the strokes over an unrotated white rectangle.
+            painter.add(egui::Shape::convex_polygon(
+                vec![to_screen(egui::pos2(0.0, 0.0)),
+                     to_screen(egui::pos2(stage_w, 0.0)),
+                     to_screen(egui::pos2(stage_w, stage_h)),
+                     to_screen(egui::pos2(0.0, stage_h))],
+                egui::Color32::from_rgba_unmultiplied(bg[0], bg[1], bg[2], bg[3]),
+                egui::Stroke::NONE,
+            ));
 
             if !space_down && !alt_down && self.active_tool_ui != ActiveToolUI::HandCanvas && is_over_canvas && !any_modal_open && !self.is_active_layer_locked() {
                 if let Some(pos) = pointer_pos {
@@ -3660,7 +3692,18 @@ impl eframe::App for StickApp {
                     let fd = self.project.evaluate_layer_at_frame(layer, self.current_frame);
                     for m in &fd.media_items {
                         if let Some(tex) = self.texture_cache.get(&m.path) {
-                            painter.image(tex.id(), egui::Rect::from_min_max(to_screen(egui::pos2(m.x, m.y)), to_screen(egui::pos2(m.x + m.width, m.y + m.height))), egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)), egui::Color32::from_white_alpha((255.0 * l_op) as u8));
+                            let mut mesh = egui::Mesh::with_texture(tex.id());
+                            let tint = egui::Color32::from_white_alpha((255.0 * l_op) as u8);
+                            for (pt, uv) in [
+                                (egui::pos2(m.x, m.y), egui::pos2(0.0, 0.0)),
+                                (egui::pos2(m.x + m.width, m.y), egui::pos2(1.0, 0.0)),
+                                (egui::pos2(m.x + m.width, m.y + m.height), egui::pos2(1.0, 1.0)),
+                                (egui::pos2(m.x, m.y + m.height), egui::pos2(0.0, 1.0)),
+                            ] {
+                                mesh.vertices.push(egui::epaint::Vertex { pos: to_screen(pt), uv, color: tint });
+                            }
+                            mesh.indices.extend_from_slice(&[0, 1, 2, 0, 2, 3]);
+                            painter.add(egui::Shape::mesh(mesh));
                         }
                     }
                     for s in &fd.strokes { draw_stroke_pro(&painter, s, None, l_op, scale, 0.0, 0.0, &to_screen); }
@@ -3808,9 +3851,12 @@ impl eframe::App for StickApp {
                 if let Some(p) = pointer_pos {
                     let rect = egui::Rect::from_min_size(p + egui::vec2(8.0, 7.0),
                         egui::vec2(26.0, 26.0));
-                    painter.rect_filled(rect.expand(2.0), 5.0,
-                        egui::Color32::from_rgba_unmultiplied(21, 24, 35, 235));
-                    draw_tool_ui_icon(&painter, rect, self.active_tool_ui, true);
+                    let tool_color = get_tool_ui_color(self.active_tool_ui);
+                    painter.circle_filled(rect.center(), 14.0,
+                        egui::Color32::from_rgba_unmultiplied(24, 27, 36, 180));
+                    painter.circle_stroke(rect.center(), 14.0,
+                        egui::Stroke::new(1.2, tool_color));
+                    draw_tool_ui_icon(&painter, rect, self.active_tool_ui, false);
                 }
             }
         });
