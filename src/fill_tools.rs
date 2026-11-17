@@ -186,6 +186,160 @@ pub fn apply_shape_fill(strokes: &mut [Stroke], x: f32, y: f32, color: [u8; 4]) 
     }
 }
 
+
+/// Vector-friendly raster region detection for complex painted contours.
+/// This fallback detects enclosed regions even when a shape is formed from
+/// many separate strokes, T-junctions or interior intersections.
+///
+/// We rasterize only a *bounded* coverage mask (never an unbounded image),
+/// flood the connected transparent area, then trace the outermost pixel edge
+/// back to a vector polygon. The resulting fill stays BELOW the linework.
+/// This is an independently implemented adaptation of the general method
+/// described in AniCraft's permissively licensed paint-bucket documentation.
+pub fn flood_fill_polygon(
+    strokes: &[Stroke], point: (f32, f32), canvas: (f32, f32), gap: f32,
+) -> Option<Vec<StrokePoint>> {
+    use std::collections::{HashMap, VecDeque};
+    let (cw, ch) = canvas;
+    let (sx, sy) = point;
+    if !cw.is_finite() || !ch.is_finite() || cw <= 0.0 || ch <= 0.0
+        || !sx.is_finite() || !sy.is_finite() || sx < 0.0 || sy < 0.0
+        || sx >= cw || sy >= ch || strokes.is_empty() { return None; }
+    // Limit memory and the number of points independently from canvas size.
+    let cell = (cw.max(ch) / 1200.0).max(0.5);
+    let w = (cw / cell).ceil() as usize + 4;
+    let h = (ch / cell).ceil() as usize + 4;
+    if w.checked_mul(h)? > 2_000_000 { return None; }
+    let size = w * h;
+    let mut wall = vec![false; size];
+    let world_to_px = |x: f32, y: f32| -> (f32, f32) {
+        (x / cell + 2.0, y / cell + 2.0)
+    };
+    let mut segment_budget = 0usize;
+    for stroke in strokes {
+        if stroke.points.len() < 2 || stroke.points.len() > 40_000 { continue; }
+        if stroke.points.iter().any(|p| !p.x.is_finite() || !p.y.is_finite()) { continue; }
+        // Ignore fill-only strokes: they should not block a new fill.
+        if stroke.color[3] == 0 { continue; }
+        segment_budget = segment_budget.saturating_add(stroke.points.len());
+        if segment_budget > 250_000 { return None; }
+        let r = ((stroke.base_width.abs() * 0.5 + gap.clamp(0.0, 14.0)) / cell)
+            .clamp(1.15, 9.0);
+        let r2 = r * r;
+        for pair in stroke.points.windows(2) {
+            let (x0, y0) = world_to_px(pair[0].x, pair[0].y);
+            let (x1, y1) = world_to_px(pair[1].x, pair[1].y);
+            let steps = (x1-x0).abs().max((y1-y0).abs()).ceil() as usize;
+            if steps > 15_000 { continue; }
+            for i in 0..=steps.max(1) {
+                let t = i as f32 / steps.max(1) as f32;
+                let cx = x0 + (x1-x0)*t;
+                let cy = y0 + (y1-y0)*t;
+                let min_x = (cx-r).floor().max(0.0) as usize;
+                let max_x = (cx+r).ceil().min((w-1) as f32) as usize;
+                let min_y = (cy-r).floor().max(0.0) as usize;
+                let max_y = (cy+r).ceil().min((h-1) as f32) as usize;
+                for iy in min_y..=max_y {
+                    for ix in min_x..=max_x {
+                        let dx = ix as f32 + 0.5 - cx;
+                        let dy = iy as f32 + 0.5 - cy;
+                        if dx*dx + dy*dy <= r2 { wall[iy*w+ix] = true; }
+                    }
+                }
+            }
+        }
+    }
+    let (px, py) = world_to_px(sx, sy);
+    let ix = px.floor() as usize;
+    let iy = py.floor() as usize;
+    if ix >= w || iy >= h { return None; }
+    let seed = iy*w+ix;
+    // Clicking the contour itself is ambiguous. Old contour fill handles it.
+    if wall[seed] { return None; }
+    let mut visited = vec![false; size];
+    let mut queue = VecDeque::new();
+    visited[seed] = true;
+    queue.push_back(seed);
+    let mut hits_edge = false;
+    let mut count = 0usize;
+    while let Some(index) = queue.pop_front() {
+        count += 1;
+        let x = index % w;
+        let y = index / w;
+        if x <= 1 || y <= 1 || x >= w - 2 || y >= h - 2 {
+            hits_edge = true; break;
+        }
+        for next in [index-1,index+1,index-w,index+w] {
+            if !wall[next] && !visited[next] {
+                visited[next] = true;
+                queue.push_back(next);
+            }
+        }
+    }
+    if hits_edge || count < 8 { return None; }
+
+    // Build clockwise edges of the flooded pixels. The topmost edge is on
+    // the outside perimeter; secondary loops (holes) remain undisturbed.
+    type Corner = (i32, i32);
+    let mut edges: HashMap<Corner, Vec<Corner>> = HashMap::new();
+    let mut edge_count = 0usize;
+    for y in 2..h-2 {
+        for x in 2..w-2 {
+            if !visited[y*w+x] { continue; }
+            let x = x as i32;
+            let y = y as i32;
+            let pos = (y as usize)*w+(x as usize);
+            let mut add = |from:Corner, to:Corner| {
+                edges.entry(from).or_default().push(to);
+                edge_count += 1;
+            };
+            if !visited[pos-w] { add((x,y),(x+1,y)); }
+            if !visited[pos+1] { add((x+1,y),(x+1,y+1)); }
+            if !visited[pos+w] { add((x+1,y+1),(x,y+1)); }
+            if !visited[pos-1] { add((x,y+1),(x,y)); }
+        }
+    }
+    if edge_count < 8 || edge_count > 70_000 { return None; }
+    let start = *edges.keys().min_by_key(|(x,y)| (*y,*x))?;
+    let mut at = start;
+    let mut ring = Vec::new();
+    for _ in 0..=edge_count {
+        ring.push(at);
+        let options = edges.get_mut(&at)?;
+        let next = options.pop()?;
+        if options.is_empty() { edges.remove(&at); }
+        at = next;
+        if at == start { break; }
+    }
+    if at != start || ring.len() < 8 { return None; }
+
+    // Remove collinear pixel corners: keep stored vector projects compact.
+    let mut clean = Vec::<Corner>::new();
+    for i in 0..ring.len() {
+        let p = ring[(i+ring.len()-1)%ring.len()];
+        let c = ring[i];
+        let n = ring[(i+1)%ring.len()];
+        if (c.0-p.0)*(n.1-c.1) != (c.1-p.1)*(n.0-c.0) { clean.push(c); }
+    }
+    if clean.len() < 4 || clean.len() > 14_000 { return None; }
+    let mut result: Vec<StrokePoint> = clean.iter().map(|&(x,y)| StrokePoint {
+        x: ((x as f32 - 2.0) * cell).clamp(0.0,cw),
+        y: ((y as f32 - 2.0) * cell).clamp(0.0,ch),
+        pressure: 1.0,
+    }).collect();
+    result.push(result[0].clone());
+    Some(result)
+}
+
+pub fn polygon_fill_stroke(points: Vec<StrokePoint>, color: [u8;4]) -> Stroke {
+    Stroke {
+        points, color: [0,0,0,0], fill_color: Some(color),
+        base_width: 1.0, is_vector: true,
+        brush_preset: KritaBrushPreset::GPenInk, opacity: 1.0,
+        brush_texture_id: None, tip_shape: BrushTipShape::Round,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -263,6 +417,30 @@ mod tests {
         assert!(!apply_contour_fill(&mut segments,35.0,35.0,[200,20,40,255]));
     }
 
+    #[test]
+    fn flood_fill_detects_complex_multi_stroke_square() {
+        let lines = vec![
+            shape(&[(15.,15.),(90.,15.)]),
+            shape(&[(90.,15.),(90.,90.)]),
+            shape(&[(90.,90.),(15.,90.)]),
+            shape(&[(15.,90.),(15.,15.)]),
+            shape(&[(51.,15.),(51.,89.)]),
+        ];
+        let ring = flood_fill_polygon(&lines,(34.,34.),(120.,120.),1.4).expect("closed left half");
+        assert!(ring.len() >= 5);
+        let filled = polygon_fill_stroke(ring,[245,80,20,255]);
+        assert!(contour_contains(&filled,34.,34.));
+        assert!(!contour_contains(&filled,73.,34.));
+    }
+    #[test]
+    fn flood_fill_rejects_unbounded_open_contour() {
+        let lines = vec![
+            shape(&[(15.,15.),(90.,15.)]),
+            shape(&[(90.,15.),(90.,90.)]),
+            shape(&[(15.,90.),(15.,15.)]),
+        ];
+        assert!(flood_fill_polygon(&lines,(34.,34.),(120.,120.),1.0).is_none());
+    }
     #[test]
     fn bucket_chooses_topmost_overlapping_closed_shape() {
         let first = shape(&[(0.0,0.0),(50.0,0.0),(50.0,50.0),(0.0,50.0),(0.0,0.0)]);
