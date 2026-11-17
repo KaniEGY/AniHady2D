@@ -132,7 +132,7 @@ pub fn draw_stroke_pro<F: Fn(egui::Pos2) -> egui::Pos2>(
     }
 
     let c = override_color.unwrap_or(stroke.color);
-    let combined_opacity = stroke.opacity.clamp(0.05, 1.0) * layer_opacity.clamp(0.05, 1.0);
+    let combined_opacity = stroke.opacity.clamp(0.0, 1.0) * layer_opacity.clamp(0.0, 1.0);
     let eff_alpha = ((c[3] as f32) * combined_opacity) as u8;
     let color = egui::Color32::from_rgba_unmultiplied(c[0], c[1], c[2], eff_alpha);
 
