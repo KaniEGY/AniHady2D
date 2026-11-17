@@ -166,7 +166,7 @@ pub fn draw_stroke_pro<F: Fn(egui::Pos2) -> egui::Pos2>(
                 fill_c[0],
                 fill_c[1],
                 fill_c[2],
-                (fill_c[3] as f32 * layer_opacity) as u8,
+                (fill_c[3] as f32 * combined_opacity) as u8,
             ),
             egui::Stroke::NONE,
         ));
