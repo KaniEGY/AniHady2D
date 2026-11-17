@@ -507,6 +507,35 @@ mod tests {
         assert!(flood_fill_polygon(&lines,(34.,34.),(120.,120.),1.0).is_none());
     }
     #[test]
+    fn bucket_fills_one_lobe_of_self_crossing_doodle_only() {
+        // Two touching loops drawn as a single, continuous freehand stroke.
+        let mut doodle=shape(&[
+            (110.,110.),(145.,75.),(180.,110.),(145.,145.),(110.,110.),
+            (75.,75.),(40.,110.),(75.,145.),(110.,110.)
+        ]);
+        doodle.is_vector=false;
+        doodle.base_width=5.0;
+        let polygon=flood_fill_polygon(&[doodle],(155.,110.),(220.,220.),2.0)
+            .expect("right lobe of the doodle is enclosed");
+        let fill=polygon_fill_stroke(polygon,[240,120,40,255]);
+        assert!(contour_contains(&fill,155.,110.));
+        assert!(!contour_contains(&fill,65.,110.),
+            "the crossing must not spill into the second enclosed lobe");
+    }
+
+    #[test]
+    fn bucket_closes_small_brush_gaps_without_flooding_the_canvas() {
+        let outline=vec![
+            shape(&[(24.,25.),(110.,25.),(110.,110.),(25.,110.),(25.,31.)])
+        ];
+        let polygon=flood_fill_polygon(&outline,(65.,60.),(140.,140.),3.5)
+            .expect("a 6px endpoint gap is within closure tolerance");
+        let fill=polygon_fill_stroke(polygon,[40,180,90,255]);
+        assert!(contour_contains(&fill,65.,60.));
+        assert!(!contour_contains(&fill,9.,60.));
+    }
+
+    #[test]
     fn bucket_finds_interior_when_user_clicks_ink_at_small_loop_edge() {
         let mut stroke = shape(&[(35.,35.),(95.,35.),(95.,95.),
                                  (35.,95.),(35.,35.)]);
