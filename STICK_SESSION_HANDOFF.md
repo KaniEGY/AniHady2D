@@ -115,3 +115,11 @@
 - Protocol remains host-based and 8-digit room codes are not global. Tailscale zero peers means no shared/authorized machines visible. Access must be configured outside Stick.
 - CI on latest HEAD and real Windows graphics/multi-PC acceptance must be validated. Full Bézier handles and Blender grease-pencil equivalence are not claimed.
 - User preference: publish complete changes without waiting for green GitHub Action, unless explicitly told not to publish. Maintain historical rollback releases.
+
+
+## 17 Nov 2026 — OLD/NEW Timeline and community feedback
+- Branch: `feat/old-new-timeline-feedback-20261117`; based on main `2416d3c515fdd121cb669af2422991ce9eac29da`.
+- User supplied `AniHady2D_0.1.1_Full_Setup.zip`. Inspected safely without running EXE: exactly `AniHady2D-Setup.exe`, `README_AR.txt`, and `SHA256SUMS.txt`. README states the installed app contains layers/timeline and AV tools and has its own internal README. Archive contains NO source and no screenshot of the old timeline. Do not claim exact visual cloning.
+- `src/timeline_styles.rs`: optional exposure-sheet rendering with frame/timecode ruler, held strips, keyframe diamonds, playhead and tween colors, tests.
+- `src/main.rs`: persisted config `timeline_style` (default 0=OLD), `timeline_new_cell_width` (default 64), `timeline_new_row_height` (default 50), `timeline_show_timecodes` (default true). OLD preserves its prior width/row/layout. NEW shares frame/project operations; controls exposed in timeline gear. `show_feedback_dialog`: main launcher feedback link opens a closable popup with exact user-supplied Instagram URL and GitHub Issues.
+- Validated source archive only. Windows unit tests / UI visual testing still needed before making runtime claims.
