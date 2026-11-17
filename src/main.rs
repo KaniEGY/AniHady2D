@@ -909,7 +909,10 @@ fn draw_tool_ui_icon(painter: &egui::Painter, rect: egui::Rect, tool: ActiveTool
 
 fn draw_gear_icon(painter: &egui::Painter, rect: egui::Rect, scale: f32) {
     let c = rect.center();
-    let color = egui::Color32::from_gray(220);
+    painter.rect_filled(rect.shrink(1.0), 6.0, egui::Color32::from_rgb(115, 75, 19));
+    painter.rect_stroke(rect.shrink(1.0), 6.0,
+        egui::Stroke::new(1.4, egui::Color32::from_rgb(255, 194, 73)));
+    let color = egui::Color32::from_rgb(255, 232, 165);
     painter.circle_stroke(c, 5.5 * scale, egui::Stroke::new(1.8 * scale, color));
     painter.circle_filled(c, 2.0 * scale, color);
     for i in 0..8 {
@@ -1122,6 +1125,8 @@ struct StickApp {
     show_patch_notes_dialog: bool,
     show_settings_dialog: bool,
     cloud_job: Option<std::sync::mpsc::Receiver<cloud_sync::Event>>,
+    profile_sync_pending: bool,
+    last_profile_cloud_sync_time: f64,
     cloud_message: String,
     cloud_files: Vec<cloud_sync::CloudFile>,
     cloud_restore_confirmation: Option<cloud_sync::CloudFile>,
@@ -1269,6 +1274,8 @@ impl StickApp {
             show_patch_notes_dialog: AppConfig::load().last_seen_patch_version != get_installed_version(),
             show_settings_dialog: false,
             cloud_job: None,
+            profile_sync_pending: false,
+            last_profile_cloud_sync_time: 0.0,
             cloud_message: String::new(),
             cloud_files: Vec::new(),
             cloud_restore_confirmation: None,
@@ -1412,10 +1419,27 @@ impl StickApp {
             cloud_sync::backup(&client,&account,profile,paths)
                 .map(cloud_sync::Event::BackedUp)
         }));
+        self.profile_sync_pending = false;
         self.cloud_message="Uploading Google Drive backups...".to_owned();
     }
 
-    fn poll_cloud_job(&mut self) {
+    fn maybe_sync_artist_profile(&mut self, now_time: f64) {
+        if !self.profile_sync_pending || !self.config.cloud_auto_backup
+            || self.cloud_job.is_some() { return; }
+        let Some(account) = self.user_profile.cloud_account_id.clone() else { return; };
+        if self.last_profile_cloud_sync_time > 0.0
+            && now_time - self.last_profile_cloud_sync_time < 90.0 { return; }
+        let client = self.config.cloud_google_client_id.clone();
+        let profile = cloud_sync::CloudProfile::from_user(&self.user_profile);
+        self.cloud_job = Some(cloud_sync::spawn_job(move || {
+            cloud_sync::backup_profile(&client, &account, profile)
+                .map(cloud_sync::Event::BackedUp)
+        }));
+        self.last_profile_cloud_sync_time = now_time;
+        self.profile_sync_pending = false;
+    }
+
+    fn poll_cloud_job(&mut self, ctx: &egui::Context) {
         let event=self.cloud_job.as_ref().and_then(|rx|rx.try_recv().ok());
         if let Some(event)=event {
             self.cloud_job=None;
@@ -1425,6 +1449,8 @@ impl StickApp {
                     self.user_profile.save();
                     self.config.cloud_email=identity.email;
                     self.config.save();
+                    self.profile_sync_pending = true;
+                    self.last_profile_cloud_sync_time = 0.0;
                     self.cloud_message="Google sign-in successful. You can back up your projects.".into();
                 }
                 cloud_sync::Event::BackedUp(n)=>{
@@ -1441,7 +1467,8 @@ impl StickApp {
                 }
                 cloud_sync::Event::RestoredProfile(profile)=>{
                     profile.apply(&mut self.user_profile);
-                    self.cloud_message="Cloud profile restored. The artist level and progress have been updated.".into();
+                    self.artist_avatar = load_artist_avatar(ctx, self.user_profile.avatar_path.as_deref());
+                    self.cloud_message="Cloud profile restored. Artist name, avatar and progress have been updated.".into();
                 }
                 cloud_sync::Event::Error(err)=>self.cloud_message=err,
             }
@@ -1812,6 +1839,7 @@ impl StickApp {
     fn play_sfx(&self, sfx: SfxType) { play_sfx_async(self.config.sound_effects_enabled, sfx, false); }
 
     fn grant_xp(&mut self, amount: u64, now_time: f64) {
+        if amount > 0 { self.profile_sync_pending = true; }
         if self.user_profile.add_xp_check_levelup(amount) {
             let (level, _, _) = self.user_profile.get_level_progress();
             let nanos = std::time::SystemTime::now()
@@ -1848,6 +1876,7 @@ impl StickApp {
         }
         if award > 0 { self.grant_xp(award, now_time); }
         else { self.user_profile.save(); }
+        self.profile_sync_pending = true;
     }
 
     fn take_snapshot(&self) -> HistorySnapshot {
@@ -2773,8 +2802,10 @@ impl eframe::App for StickApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         let lang = self.config.lang;
         self.poll_online_events(ctx);
-        self.poll_cloud_job();
+        self.poll_cloud_job(ctx);
         let now_time = ctx.input(|i| i.time);
+        self.maybe_sync_artist_profile(now_time);
+        if self.profile_sync_pending { ctx.request_repaint_after(Duration::from_secs(4)); }
         apply_user_theme(ctx, &self.config);
         // The shortcut guide is discoverable even when the toolbar is hidden.
         if ctx.input(|i| i.key_pressed(egui::Key::F1)) {
@@ -3468,6 +3499,8 @@ impl eframe::App for StickApp {
                                 if ui.add(egui::TextEdit::singleline(&mut self.user_profile.username)
                                     .desired_width(f32::INFINITY).char_limit(48)).changed() {
                                     self.user_profile.save();
+                                    self.profile_sync_pending = true;
+                                    self.last_profile_cloud_sync_time = 0.0;
                                 }
                                 ui.horizontal(|ui| {
                                     if ui.button(tr(lang, "Choose profile picture", "اختار صورة شخصية")).clicked() {
@@ -3480,6 +3513,8 @@ impl eframe::App for StickApp {
                                                     self.artist_avatar = Some(avatar);
                                                     self.user_profile.avatar_path = Some(path_string.to_owned());
                                                     self.user_profile.save();
+                                                    self.profile_sync_pending = true;
+                                                    self.last_profile_cloud_sync_time = 0.0;
                                                 } else {
                                                     self.status_message = tr(lang, "Can't decode this image format.",
                                                         "تعذر فتح الصورة. جرّب PNG أو JPG أو WebP.");
@@ -3492,6 +3527,8 @@ impl eframe::App for StickApp {
                                         self.artist_avatar = None;
                                         self.user_profile.avatar_path = None;
                                         self.user_profile.save();
+                                        self.profile_sync_pending = true;
+                                        self.last_profile_cloud_sync_time = 0.0;
                                     }
                                 });
                                 ui.add_space(12.0);
@@ -3769,9 +3806,13 @@ impl eframe::App for StickApp {
                             ui.small(tr(lang,"Backups are stored in a private Google Drive app-data folder. Only saved project files are uploaded.",
                                 "النسخ محفوظة بشكل خاص في مساحة التطبيق على Google Drive، والمشاريع اللي اتحفظت محليًا بس هي اللي بتترفع."));
                             if ui.checkbox(&mut self.config.cloud_auto_backup,
-                                tr(lang,"Automatically back up after saving a project",
-                                    "احفظ نسخة سحابية تلقائيًا بعد حفظ المشروع")).changed(){
+                                tr(lang,"Automatically back up projects and artist progress",
+                                    "احفظ المشاريع ومستوى الفنان تلقائيًا على جوجل درايف")).changed(){
                                 self.config.save();
+                                if self.config.cloud_auto_backup {
+                                    self.profile_sync_pending = true;
+                                    self.last_profile_cloud_sync_time = 0.0;
+                                }
                             }
                             ui.horizontal_wrapped(|ui|{
                                 if ui.add_enabled(self.cloud_job.is_none(),
@@ -3800,6 +3841,7 @@ impl eframe::App for StickApp {
                                         self.config.cloud_email.clear();
                                         self.config.save();
                                         self.cloud_files.clear();
+                                        self.profile_sync_pending = false;
                                         self.cloud_message=tr(lang,"Google account disconnected on this computer.",
                                             "تم فصل حساب جوجل عن الجهاز. النسخ الموجودة في Drive لم تُحذف.").to_owned();
                                     }
@@ -4054,8 +4096,10 @@ impl eframe::App for StickApp {
                 );
 
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    let (gr, gresp) = ui.allocate_exact_size(egui::vec2(24.0, 22.0), egui::Sense::click());
-                    draw_gear_icon(ui.painter(), gr, 1.0);
+                    let (gr, gresp) = ui.allocate_exact_size(egui::vec2(34.0, 27.0), egui::Sense::click());
+                    draw_gear_icon(ui.painter(), gr, 1.18);
+                    let gresp = gresp.on_hover_text(tr(lang, "Settings • Google sign-in, appearance and shortcuts",
+                        "الإعدادات • تسجيل جوجل والمظهر والاختصارات"));
                     if gresp.clicked() { self.show_settings_dialog = true; }
                     if ui.small_button("F10 Fullscreen").clicked() {
                         self.is_fullscreen = !self.is_fullscreen;
