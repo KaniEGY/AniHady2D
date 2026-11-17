@@ -1415,6 +1415,25 @@ impl StickApp {
                                 self.online_code_input = room.room_code;
                                 self.online_room_name = room.title;
                                 self.online_mode = room.mode;
+                                if !room.locked && self.online_session.is_none() {
+                                    // Open LAN rooms join with one click; protected rooms
+                                    // instead leave the password field available below.
+                                    self.online_password.clear();
+                                    let nickname = self.user_profile.username.trim().to_owned();
+                                    let level = self.user_profile.get_level_progress().0;
+                                    match OnlineSession::join_room(self.online_address.clone(),
+                                        String::new(),
+                                        if nickname.is_empty() { "Artist".into() } else { nickname },
+                                        level, self.online_mode) {
+                                        Ok(mut session) => {
+                                            session.title = self.online_room_name.clone();
+                                            session.room_code = self.online_code_input.clone();
+                                            self.online_session = Some(session);
+                                            self.online_message = tr(lang, "Connecting to open room...", "جاري الدخول للغرفة المفتوحة...");
+                                        }
+                                        Err(error) => self.online_message = error,
+                                    }
+                                }
                             }
                         }
                         ui.add_space(12.0);
@@ -3622,6 +3641,17 @@ impl eframe::App for StickApp {
                             ui.painter().rect_stroke(rect.shrink(0.7),6.0,
                                 egui::Stroke::new(1.6,get_tool_ui_color(tool)));
                         }
+                        if self.online_session.is_some() {
+                            if let Some(member) = self.online_participants.iter().find(|p|
+                                p.name == self.user_profile.username) {
+                                let rgb = member.color;
+                                ui.painter().rect_filled(
+                                    egui::Rect::from_min_max(
+                                        rect.right_top()+egui::vec2(-4.0,4.0),
+                                        rect.right_bottom()+egui::vec2(-2.0,-4.0)),
+                                    2.0,egui::Color32::from_rgb(rgb[0],rgb[1],rgb[2]));
+                            }
+                        }
                         let icon_rect = egui::Rect::from_min_size(
                             rect.left_top() + egui::vec2(5.0, 2.0), egui::vec2(30.0, 30.0)
                         );
@@ -5017,7 +5047,11 @@ impl eframe::App for StickApp {
                 if let Some(p) = pointer_pos {
                     let rect = egui::Rect::from_min_size(p + egui::vec2(8.0, 7.0),
                         egui::vec2(26.0, 26.0));
-                    let tool_color = get_tool_ui_color(self.active_tool_ui);
+                    let tool_color = self.online_participants.iter()
+                        .find(|participant| self.online_session.is_some()
+                            && participant.name == self.user_profile.username)
+                        .map(|p| egui::Color32::from_rgb(p.color[0],p.color[1],p.color[2]))
+                        .unwrap_or_else(|| get_tool_ui_color(self.active_tool_ui));
                     painter.circle_filled(rect.center(), 14.0,
                         egui::Color32::from_rgba_unmultiplied(24, 27, 36, 180));
                     painter.circle_stroke(rect.center(), 14.0,
