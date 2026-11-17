@@ -31,11 +31,17 @@ jobs:
       - name: Run Compatibility & Unit Tests
         env:
           STICK_BUILD_VERSION: ${{ steps.meta.outputs.version }}.${{ github.run_number }}
+          # Desktop OAuth Client ID is public, never a client secret.
+          # Set repository Actions variable STICK_GOOGLE_CLIENT_ID in Settings.
+          STICK_GOOGLE_CLIENT_ID: ${{ vars.STICK_GOOGLE_CLIENT_ID }}
         run: cargo test
 
       - name: Build Release EXE
         env:
           STICK_BUILD_VERSION: ${{ steps.meta.outputs.version }}.${{ github.run_number }}
+          # Desktop OAuth Client ID is public, never a client secret.
+          # Set repository Actions variable STICK_GOOGLE_CLIENT_ID in Settings.
+          STICK_GOOGLE_CLIENT_ID: ${{ vars.STICK_GOOGLE_CLIENT_ID }}
         run: cargo build --release
 
       - name: Package Clean Folder
