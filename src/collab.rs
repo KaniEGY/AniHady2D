@@ -437,6 +437,52 @@ mod tests {
         assert_eq!(project.total_frames, 2);
     }
     #[test]
+    fn loopback_room_handshake_and_stroke_delivery() {
+        let host = OnlineSession::host_room(
+            "Loopback Test".into(), "unique-test-password".into(), 3,
+            OnlineMode::Drawing, AniProject::default(),
+        ).expect("open local TCP room");
+        let guest = OnlineSession::join_room(
+            format!("127.0.0.1:{}", TCP_PORT),
+            "unique-test-password".into(), "Guest".into(), OnlineMode::Drawing,
+        ).expect("start local TCP join");
+        let deadline = std::time::Instant::now() + Duration::from_secs(8);
+        let mut connected = false;
+        while std::time::Instant::now() < deadline {
+            for event in guest.events() {
+                if let OnlineEvent::Connected(project) = event {
+                    assert_eq!(project.layers.len(), 1);
+                    connected = true;
+                }
+            }
+            if connected { break; }
+            thread::sleep(Duration::from_millis(25));
+        }
+        assert!(connected, "guest must receive an authenticated project snapshot");
+        let stroke = Stroke {
+            points: vec![], color: [1, 2, 3, 255], fill_color: None,
+            base_width: 3.0, is_vector: false,
+            brush_preset: Default::default(), opacity: 1.0,
+            brush_texture_id: None, tip_shape: Default::default(),
+        };
+        guest.send_strokes(0, 1, vec![stroke]);
+        let mut delivered = false;
+        while std::time::Instant::now() < deadline {
+            for event in host.events() {
+                if let OnlineEvent::Strokes { layer, frame, strokes } = event {
+                    assert_eq!((layer, frame, strokes.len()), (0, 1, 1));
+                    delivered = true;
+                }
+            }
+            if delivered { break; }
+            thread::sleep(Duration::from_millis(25));
+        }
+        assert!(delivered, "host must receive guest stroke once");
+        guest.close();
+        host.close();
+    }
+
+    #[test]
     fn packet_roundtrip() {
         let packet = Packet::Members { count: 7 };
         let text = serde_json::to_string(&packet).unwrap();
