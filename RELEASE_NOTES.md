@@ -4,6 +4,12 @@
 
 ## English (US)
 
+### Bugs fixed
+- **Support popup:** bounded window size and scrollable body, with accessible Close/X and Esc; prevents giant fullscreen-height popup caused by unconstrained RTL layout.
+- **Google OAuth:** older settings with an empty client ID now pick up a public Desktop OAuth ID embedded in newer builds; Sign in is disabled with setup guidance until a valid client ID is present. Real Google sign-in still requires app-owner Google Cloud configuration and testing.
+- **Online:** stroke packets now share the host edit-order gate with structural changes; local TCP integration test checks that bad room passwords are rejected. Internet access still requires LAN reachability or Tailscale, and real two-PC QA is outstanding.
+- **Brushes:** removed forced minimum watercolor/airbrush halo alpha when actual stroke opacity is zero, with regression coverage.
+
 ### Artist workspace refresh
 - **Art System / نظام الفنان:** an anime-inspired, bilingual artist profile with editable name, selectable local avatar and rank progress. XP award formulas and rank thresholds are no longer displayed in the settings UI.
 - **Drawing:** improved lasso geometry and drag-to-move; free-rotation selection handle; canvas zoom anchored under mouse; right-drag canvas rotation with the Hand tool; paper, strokes and imported bitmap objects share the view transform.
@@ -100,6 +106,12 @@
 - Added an unsaved-work guard to avoid restarting with an unfinished project.
 
 ## العربية (المصري)
+
+### المشاكل اللي اتصلحت
+- **نافذة الدعم:** حجم ثابت ونص قابل للتمرير وزر إغلاق ظاهر واختصار Esc، لحل مشكلة النافذة الممتدة خارج الشاشة.
+- **تسجيل جوجل:** إصلاح قراءة Client ID من النسخة الجديدة عند وجود إعداد فارغ محفوظ من نسخة قديمة، مع منع فتح تسجيل دخول غير مُعد وإظهار التعليمات. الدخول الفعلي يحتاج إعداد OAuth من المطوّر واختبار حساب حقيقي.
+- **الأونلاين:** توحيد ترتيب إرسال الرسم والتعديلات واختبار رفض كلمة السر الخطأ. الاتصال خارج الشبكة المحلية ما زال يحتاج Tailscale أو عنوانًا متاحًا، واختبار جهازين مطلوب.
+- **الفرش:** تصحيح ظهور أثر لوني للـWatercolor والـAirbrush عند الشفافية صفر.
 
 ### تطوير مساحة الفنان
 - **نظام الفنان:** بروفايل بشكل أنمي واسم قابل للتغيير وصورة من الجهاز وشريط تقدم، من غير عرض معادلات احتساب النقاط.

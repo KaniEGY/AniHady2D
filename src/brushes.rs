@@ -108,6 +108,11 @@ fn may_touch_clip<F: Fn(egui::Pos2) -> egui::Pos2>(
     clip.intersects(bounds)
 }
 
+// Transparent strokes must not manufacture extra opacity in halos.
+fn soft_brush_alpha_layers(alpha: u8) -> (u8, u8) {
+    (alpha / 4, alpha / 2)
+}
+
 /// مصيّر الفرش الاحترافي:
 /// - يرسم الألوان المائية والماركر والبخاخ كمسار واحد متصل (PathShape) بدون دوائر متداخلة أو نقاط متقطعة
 /// - يزيل الذيل المدبب من G-Pen وقلم الفيكتور
@@ -157,6 +162,10 @@ pub fn draw_stroke_pro<F: Fn(egui::Pos2) -> egui::Pos2>(
             painter.add(egui::Shape::mesh(mesh));
         }
     }
+
+    // Optional fills are rendered above. The brush body must not create
+    // an artificial halo when its own combined opacity is zero.
+    if eff_alpha == 0 { return; }
 
     // Polygonal tips share their sampled geometry with PNG/video exports.
     if !stroke.is_vector && stroke.tip_shape != BrushTipShape::Round {
@@ -213,7 +222,7 @@ pub fn draw_stroke_pro<F: Fn(egui::Pos2) -> egui::Pos2>(
             KritaBrushPreset::Watercolor => {
                 // خط ألوان مائية متصل بحافة مائية ناعمة بدون نقاط متقطعة
                 let w = (stroke.base_width * scale).max(2.0);
-                let halo_alpha = (eff_alpha / 3).max(12);
+                let halo_alpha = eff_alpha / 3;
                 let halo_col = egui::Color32::from_rgba_unmultiplied(c[0], c[1], c[2], halo_alpha);
                 painter.add(egui::Shape::line(screen_pts.clone(), egui::Stroke::new(w * 1.25, halo_col)));
                 painter.add(egui::Shape::line(screen_pts, egui::Stroke::new(w * 0.90, color)));
@@ -227,8 +236,9 @@ pub fn draw_stroke_pro<F: Fn(egui::Pos2) -> egui::Pos2>(
             }
             KritaBrushPreset::SoftAirbrush => {
                 let w = (stroke.base_width * scale).max(2.0);
-                let outer = egui::Color32::from_rgba_unmultiplied(c[0], c[1], c[2], (eff_alpha / 4).max(8));
-                let mid = egui::Color32::from_rgba_unmultiplied(c[0], c[1], c[2], (eff_alpha / 2).max(14));
+                let (outer_alpha, mid_alpha) = soft_brush_alpha_layers(eff_alpha);
+                let outer = egui::Color32::from_rgba_unmultiplied(c[0], c[1], c[2], outer_alpha);
+                let mid = egui::Color32::from_rgba_unmultiplied(c[0], c[1], c[2], mid_alpha);
                 painter.add(egui::Shape::line(screen_pts.clone(), egui::Stroke::new(w * 1.55, outer)));
                 painter.add(egui::Shape::line(screen_pts.clone(), egui::Stroke::new(w * 1.05, mid)));
                 painter.add(egui::Shape::line(screen_pts, egui::Stroke::new(w * 0.65, color)));
@@ -266,6 +276,15 @@ mod viewport_tests {
             brush_texture_id: None,
             tip_shape: BrushTipShape::Round,
         }
+    }
+
+    #[test]
+    fn airbrush_alpha_follows_opacity_without_phantom_glow() {
+        assert_eq!(soft_brush_alpha_layers(0), (0, 0));
+        assert_eq!(soft_brush_alpha_layers(1), (0, 0));
+        let (outer, inner) = soft_brush_alpha_layers(100);
+        assert!(outer < inner && inner <= 100);
+        assert_eq!(outer, 25);
     }
 
     #[test]

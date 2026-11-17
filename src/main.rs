@@ -651,6 +651,12 @@ impl AppConfig {
                     // Perspective overlays are tools, not saved project content.
                     // Never silently re-enable guides on the next launch.
                     parsed.perspective_mode = 0;
+                    // Existing installations may persist an empty OAuth ID,
+                    // overriding a newly configured public Desktop client ID
+                    // embedded in updated official releases.
+                    if parsed.cloud_google_client_id.trim().is_empty() {
+                        parsed.cloud_google_client_id = default_google_client_id();
+                    }
                     return parsed;
                 }
             }
@@ -3903,10 +3909,20 @@ impl eframe::App for StickApp {
                         ui.label(tr(lang,
                             "Connect through Google's official browser login. Stick never asks for your Google password.",
                             "سجّل دخولك من متصفح جوجل الرسمي. Stick مش بيطلب كلمة المرور."));
-                        if self.config.cloud_google_client_id.is_empty() {
+                        let oauth_ready = cloud_sync::oauth_client_is_configured(
+                            self.config.cloud_google_client_id.trim());
+                        if !oauth_ready {
+                            // Short lines keep legacy Arabic visual shaping from
+                            // being corrupted by line wrapping in the settings tab.
                             ui.colored_label(egui::Color32::from_rgb(255,194,88),
-                                tr(lang,"Google login needs the app's OAuth Desktop Client ID from the developer.",
-                                    "تسجيل الدخول محتاج Google OAuth Desktop Client ID الخاص بالتطبيق من المطوّر."));
+                                tr(lang, "Google sign-in is not configured for this build.",
+                                    "تسجيل الدخول بجوجل لسه مش متفعّل في النسخة دي."));
+                            ui.small(tr(lang,
+                                "Developer: enable Drive API and configure Desktop OAuth in Google Cloud.",
+                                "المطوّر لازم يفعّل Google Drive API ويجهّز OAuth Desktop."));
+                            ui.small(tr(lang,
+                                "Then set STICK_GOOGLE_CLIENT_ID in GitHub Actions and publish a new build.",
+                                "وبعدين يضيف STICK_GOOGLE_CLIENT_ID في GitHub وينشر نسخة جديدة."));
                         }
                         ui.collapsing(tr(lang,"Developer OAuth setup","إعداد المطوّر لجوجل"),|ui|{
                             if ui.add(egui::TextEdit::singleline(&mut self.config.cloud_google_client_id)
@@ -3969,8 +3985,12 @@ impl eframe::App for StickApp {
                                     Err(err)=>self.cloud_message=err
                                 }
                             }
-                        } else if ui.add_enabled(self.cloud_job.is_none(),
-                            egui::Button::new(tr(lang,"Sign in with Google","تسجيل الدخول باستخدام جوجل"))).clicked(){
+                        } else if ui.add_enabled(self.cloud_job.is_none() && oauth_ready,
+                            egui::Button::new(tr(lang,"Sign in with Google","تسجيل الدخول باستخدام جوجل")))
+                                .on_hover_text(tr(lang,
+                                    "Requires a valid Google Desktop OAuth Client ID; no passwords are collected.",
+                                    "لازم Google OAuth Client ID سليم من نوع Desktop؛ مش بنطلب كلمة المرور."))
+                                .clicked(){
                             let client=self.config.cloud_google_client_id.trim().to_string();
                             self.cloud_job=Some(cloud_sync::spawn_job(move||{
                                 cloud_sync::sign_in(&client).map(cloud_sync::Event::SignedIn)
@@ -4043,53 +4063,68 @@ impl eframe::App for StickApp {
                 if ui.button(tr(lang, "Close", "إغلاق")).clicked() { self.show_credits_dialog = false; }
             });
         }
+        // Escape is always an emergency exit for the support dialog.
+        if self.show_support_dialog && ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+            self.show_support_dialog = false;
+        }
         if self.show_support_dialog {
             let mut open = true;
             let mut close_clicked = false;
-            egui::Window::new(tr(lang, "Support Stick Studio 💛", "💛 ادعم Stick Studio"))
-                .open(&mut open).collapsible(false).resizable(false)
-                .default_width(490.0)
-                .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0]).show(ctx, |ui| {
-                    ui.set_min_width(475.0);
-                    ui.vertical_centered(|ui| {
-                        ui.label(egui::RichText::new("💛")
-                            .size(31.0).color(egui::Color32::from_rgb(255, 208, 66)));
-                        ui.heading(tr(lang, "Optional support", "الدعم اختياري تمامًا"));
+            // A bounded, fixed dialog avoids egui's unconstrained RTL child
+            // layout stretching the popup to the full viewport height.
+            egui::Window::new(tr(lang, "Support Stick Studio", "ادعم Stick Studio"))
+                .open(&mut open)
+                .collapsible(false)
+                .resizable(false)
+                .fixed_size(egui::vec2(525.0, 305.0))
+                .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+                .show(ctx, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new("♥").size(23.0)
+                            .color(egui::Color32::from_rgb(255, 207, 64)));
+                        ui.heading(tr(lang, "Support is completely optional",
+                            "الدعم اختياري تمامًا"));
                     });
-                    ui.add_space(10.0);
+                    ui.separator();
                     egui::Frame::none()
                         .fill(egui::Color32::from_rgb(34, 37, 49))
-                        .rounding(9.0)
-                        .inner_margin(egui::Margin::same(14.0))
+                        .rounding(7.0)
+                        .inner_margin(egui::Margin::same(10.0))
                         .show(ui, |ui| {
-                            for (index, line) in support_message_lines(lang).into_iter().enumerate() {
-                                // Render short pre-shaped Arabic lines separately so
-                                // egui doesn't re-wrap/reorder one long RTL paragraph.
-                                if lang == AppLang::Arabic {
-                                    ui.with_layout(
-                                        egui::Layout::right_to_left(egui::Align::Center),
-                                        |ui| {
-                                            ui.label(egui::RichText::new(line)
-                                                .size(15.0)
-                                                .color(egui::Color32::from_rgb(238, 237, 245)));
-                                        },
-                                    );
-                                } else {
-                                    ui.label(egui::RichText::new(line)
-                                        .size(15.0)
-                                        .color(egui::Color32::from_rgb(238, 237, 245)));
-                                }
-                                if index == 3 { ui.add_space(8.0); }
-                            }
-                            ui.add_space(6.0);
-                            ui.vertical_centered(|ui| {
-                                ui.label(egui::RichText::new("🙂  🥳").size(19.0));
-                            });
+                            egui::ScrollArea::vertical()
+                                .id_source("stick_support_text_scroll")
+                                .max_height(168.0)
+                                .show(ui, |ui| {
+                                    for (index, line) in support_message_lines(lang).into_iter().enumerate() {
+                                        let rich = egui::RichText::new(line)
+                                            .size(15.0)
+                                            .color(egui::Color32::from_rgb(238, 237, 245));
+                                        if lang == AppLang::Arabic {
+                                            // Explicit dimensions prevent each RTL row from
+                                            // consuming all remaining window vertical space.
+                                            ui.allocate_ui_with_layout(
+                                                egui::vec2(475.0, 22.0),
+                                                egui::Layout::right_to_left(egui::Align::Min),
+                                                |ui| { ui.add(egui::Label::new(rich)); },
+                                            );
+                                        } else {
+                                            ui.add(egui::Label::new(rich));
+                                        }
+                                        if index == 3 { ui.add_space(5.0); }
+                                    }
+                                });
                         });
-                    ui.add_space(14.0);
+                    ui.add_space(5.0);
+                    ui.label("🙂  🥳");
+                    ui.separator();
                     ui.horizontal(|ui| {
-                        ui.hyperlink_to(tr(lang, "💛 Support via InstaPay", "💛 رابط المكافأة على إنستا باي"), SUPPORT_URL);
-                        if ui.button(tr(lang, "Close", "إغلاق")).clicked() { close_clicked = true; }
+                        ui.hyperlink_to(
+                            tr(lang, "Optional InstaPay reward", "رابط المكافأة على إنستا باي"),
+                            SUPPORT_URL,
+                        );
+                        if ui.button(tr(lang, "Close", "إغلاق")).clicked() {
+                            close_clicked = true;
+                        }
                     });
                 });
             self.show_support_dialog = open && !close_clicked;

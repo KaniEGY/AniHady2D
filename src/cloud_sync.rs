@@ -159,6 +159,11 @@ fn client_id_check(client_id:&str)->Result<(),String>{
     }
     Ok(())
 }
+/// Public OAuth client IDs are not secrets. A missing or malformed value
+/// should disable the login button instead of opening a doomed browser job.
+pub fn oauth_client_is_configured(client_id: &str) -> bool {
+    client_id_check(client_id).is_ok()
+}
 fn credential_entry(account_id:&str)->Result<keyring::Entry,String>{
     keyring::Entry::new(SERVICE,account_id).map_err(|e|e.to_string())
 }
@@ -397,6 +402,13 @@ mod tests {
         assert!(client_id_check("1234-abc.apps.googleusercontent.com").is_ok());
         assert!(client_id_check("malicious;command").is_err());
     }
+    #[test]
+    fn invalid_or_missing_desktop_oauth_ids_are_rejected_without_opening_browser() {
+        assert!(!oauth_client_is_configured(""));
+        assert!(!oauth_client_is_configured("not-a-google-client"));
+        assert!(oauth_client_is_configured("1234-abc.apps.googleusercontent.com"));
+    }
+
     #[test]
     fn old_cloud_profile_without_avatar_still_deserializes() {
         let record = r#"{"username":"Artist","xp":330,"total_frames_drawn":4,"total_seconds_spent":20,"total_painted_layers":1}"#;

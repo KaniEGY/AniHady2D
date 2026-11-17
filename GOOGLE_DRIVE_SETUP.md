@@ -1,6 +1,8 @@
 # Google Account + Drive Cloud Backups for Stick Studio
 
 ## Status
+An older saved `stick_config.json` may contain an empty `cloud_google_client_id`; updated builds now recover the app owner's embedded public Desktop client ID when that saved value is empty. The login button remains unavailable until a valid client ID is present.
+
 The Windows app has a Google sign-in/Drive backup **implementation**, but production sign-in **requires a Google Cloud OAuth client ID configured by the app owner**. A build without this value must not claim that Google sign-in is live. No Google credentials are shipped or requested from end users.
 
 ## Google Cloud Console setup — required for every public release
