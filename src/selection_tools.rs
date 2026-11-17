@@ -138,7 +138,7 @@ mod tests {
             color: [0,0,0,255], fill_color: None,
             base_width: 2.0, is_vector: true,
             brush_preset: KritaBrushPreset::GPenInk,
-            opacity: 1.0, brush_texture_id: None,
+            opacity: 1.0, brush_texture_id: None, tip_shape: crate::project::BrushTipShape::Round,
         }
     }
     #[test]

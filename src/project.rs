@@ -121,6 +121,16 @@ fn default_pressure() -> f32 {
     1.0
 }
 
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum BrushTipShape {
+    #[default] Round,
+    Square,
+    Triangle,
+    Pentagon,
+    TallRectangle,
+    WideRectangle,
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Stroke {
     #[serde(default)]
@@ -139,6 +149,8 @@ pub struct Stroke {
     pub opacity: f32,
     #[serde(default)]
     pub brush_texture_id: Option<String>,
+    #[serde(default)]
+    pub tip_shape: BrushTipShape,
 }
 
 fn default_black() -> [u8; 4] {
@@ -585,6 +597,7 @@ impl AniProject {
                                     brush_preset: s0.brush_preset,
                                     opacity: s0.opacity + (s1.opacity - s0.opacity) * t,
                                     brush_texture_id: None,
+                                    tip_shape: s0.tip_shape,
                                 });
                             } else {
                                 morphed_strokes.push(s0.clone());
@@ -648,6 +661,7 @@ pub fn parse_svg_to_strokes(svg_path: &Path) -> Result<Vec<Stroke>, String> {
                         brush_preset: KritaBrushPreset::GPenInk,
                         opacity: 1.0,
                         brush_texture_id: None,
+                                    tip_shape: BrushTipShape::Round,
                     });
                 }
             }
@@ -819,6 +833,7 @@ pub fn import_adobe_animate_project(path: &Path) -> Result<AniProject, String> {
                                 brush_preset: KritaBrushPreset::GPenInk,
                                 opacity: 1.0,
                                 brush_texture_id: None,
+                                    tip_shape: BrushTipShape::Round,
                             });
                         }
                     }

@@ -1,4 +1,4 @@
-use crate::project::AniProject;
+use crate::project::{AniProject, BrushTipShape};
 use image::codecs::gif::{GifEncoder, Repeat};
 use image::{Delay, Frame, ImageFormat, RgbaImage};
 use rayon::prelude::*;
@@ -230,6 +230,36 @@ fn draw_skia_stroke(pixmap: &mut Pixmap, s: &crate::project::Stroke, ts: Transfo
     let mut paint = Paint::default();
     paint.set_color_rgba8(s.color[0], s.color[1], s.color[2], alpha);
     paint.anti_alias = true;
+
+    if !s.is_vector && s.tip_shape != BrushTipShape::Round {
+        if let Some(fc) = s.fill_color {
+            if s.points.len() >= 3 {
+                let mut region = PathBuilder::new();
+                region.move_to(s.points[0].x, s.points[0].y);
+                for p in &s.points[1..] { region.line_to(p.x, p.y); }
+                region.close();
+                if let Some(path) = region.finish() {
+                    let mut fill_paint = Paint::default();
+                    fill_paint.set_color_rgba8(fc[0], fc[1], fc[2],
+                        ((fc[3] as f32)*s.opacity.clamp(0.0,1.0)) as u8);
+                    fill_paint.anti_alias = true;
+                    pixmap.fill_path(&path,&fill_paint,tiny_skia::FillRule::Winding,ts,None);
+                }
+            }
+        }
+        for dab in crate::brush_engine::sample_pressure_dabs(&s.points,s.base_width) {
+            let polygon = crate::brush_engine::dab_polygon(s.tip_shape,dab);
+            if polygon.len() < 3 { continue; }
+            let mut path = PathBuilder::new();
+            path.move_to(polygon[0].0,polygon[0].1);
+            for &(x,y) in &polygon[1..] { path.line_to(x,y); }
+            path.close();
+            if let Some(path)=path.finish() {
+                pixmap.fill_path(&path,&paint,tiny_skia::FillRule::Winding,ts,None);
+            }
+        }
+        return;
+    }
 
     // Share the G-Pen pressure sampler with the live canvas preview.
     if !s.is_vector && s.brush_preset == crate::project::KritaBrushPreset::GPenInk {
@@ -630,6 +660,7 @@ mod layer_opacity_tests {
                 brush_preset: KritaBrushPreset::GPenInk,
                 opacity: 1.0,
                 brush_texture_id: None,
+            tip_shape: BrushTipShape::Round,
             });
         project
     }

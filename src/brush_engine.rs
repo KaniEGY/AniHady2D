@@ -4,7 +4,7 @@
 //! claim to embed Krita or libmypaint. The same geometry is consumed by the
 //! interactive preview and the PNG/video exporter; project schema stays v5.
 
-use crate::project::StrokePoint;
+use crate::project::{BrushTipShape, StrokePoint};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct BrushDab {
@@ -14,6 +14,32 @@ pub struct BrushDab {
 }
 
 const MAX_DABS_PER_STROKE: usize = 20_000;
+
+/// The same polygon geometry is used for the canvas and exported images.
+pub fn dab_polygon(tip: BrushTipShape, dab: BrushDab) -> Vec<(f32, f32)> {
+    let r = dab.radius.max(0.25);
+    let (w, h) = match tip {
+        BrushTipShape::TallRectangle => (r * 0.5, r * 1.5),
+        BrushTipShape::WideRectangle => (r * 1.5, r * 0.5),
+        _ => (r, r),
+    };
+    match tip {
+        BrushTipShape::Round => Vec::new(),
+        BrushTipShape::Square | BrushTipShape::TallRectangle | BrushTipShape::WideRectangle => vec![
+            (dab.x-w, dab.y-h), (dab.x+w, dab.y-h),
+            (dab.x+w, dab.y+h), (dab.x-w, dab.y+h),
+        ],
+        BrushTipShape::Triangle | BrushTipShape::Pentagon => {
+            let count = if tip == BrushTipShape::Triangle { 3 } else { 5 };
+            (0..count).map(|i| {
+                let a = -std::f32::consts::FRAC_PI_2 +
+                    std::f32::consts::TAU * i as f32 / count as f32;
+                (dab.x + r*a.cos(), dab.y + r*a.sin())
+            }).collect()
+        }
+    }
+}
+
 
 fn dab_for(p: &StrokePoint, width: f32) -> BrushDab {
     BrushDab {
@@ -97,6 +123,17 @@ mod tests {
 
     fn point(x: f32, y: f32, pressure: f32) -> StrokePoint {
         StrokePoint { x, y, pressure }
+    }
+
+    #[test]
+    fn six_tip_shapes_have_correct_vertex_counts() {
+        let d = BrushDab { x: 10.0, y: 15.0, radius: 5.0 };
+        assert_eq!(dab_polygon(BrushTipShape::Round,d).len(),0);
+        assert_eq!(dab_polygon(BrushTipShape::Square,d).len(),4);
+        assert_eq!(dab_polygon(BrushTipShape::Triangle,d).len(),3);
+        assert_eq!(dab_polygon(BrushTipShape::Pentagon,d).len(),5);
+        assert_eq!(dab_polygon(BrushTipShape::TallRectangle,d).len(),4);
+        assert_eq!(dab_polygon(BrushTipShape::WideRectangle,d).len(),4);
     }
 
     #[test]

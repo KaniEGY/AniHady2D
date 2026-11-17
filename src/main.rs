@@ -23,7 +23,7 @@ use exporter::{ImageExportFormat, VideoExportFormat};
 use profile::UserProfile;
 use project::{
     AniProject, AudioSyncMode, AudioTrack, EasingCurve, FrameData, KritaBrushPreset, Layer, MediaItem, MediaType,
-    Stroke, StrokePoint, Symbol, SymbolInstance, TextItem, TweenMode, PROJECT_SCHEMA_VERSION,
+    BrushTipShape, Stroke, StrokePoint, Symbol, SymbolInstance, TextItem, TweenMode, PROJECT_SCHEMA_VERSION,
 };
 use rodio::source::SineWave;
 use rodio::{Decoder, OutputStream, Sink, Source};
@@ -762,6 +762,7 @@ fn erase_partial_from_strokes(strokes: &mut Vec<Stroke>, center: egui::Pos2, rad
                     brush_preset: s.brush_preset,
                     opacity: s.opacity,
                     brush_texture_id: s.brush_texture_id.clone(),
+                    tip_shape: s.tip_shape,
                 });
             } else {
                 current_seg.clear();
@@ -777,6 +778,7 @@ fn erase_partial_from_strokes(strokes: &mut Vec<Stroke>, center: egui::Pos2, rad
                 brush_preset: s.brush_preset,
                 opacity: s.opacity,
                 brush_texture_id: s.brush_texture_id,
+                tip_shape: s.tip_shape,
             });
         }
     }
@@ -835,7 +837,7 @@ fn build_geometric_stroke(kind: GeometricShapeKind, p0: egui::Pos2, p1: egui::Po
         is_vector: true,
         brush_preset: KritaBrushPreset::GPenInk,
         opacity: 1.0,
-        brush_texture_id: None,
+        brush_texture_id: None, tip_shape: BrushTipShape::Round,
     }
 }
 
@@ -894,6 +896,7 @@ struct StickApp {
     brush_color: [u8; 4],
     stage_bg_color: [u8; 4],
     brush_size: f32,
+    brush_tip_shape: BrushTipShape,
     zoom_level: f32,
     pan_offset: egui::Vec2,
     canvas_rotation_deg: f32,
@@ -1008,6 +1011,7 @@ impl StickApp {
             brush_color: [0, 0, 0, 255],
             stage_bg_color: [255, 255, 255, 255],
             brush_size: 7.0,
+            brush_tip_shape: BrushTipShape::Round,
             zoom_level: 0.75,
             pan_offset: egui::Vec2::ZERO,
             canvas_rotation_deg: 0.0,
@@ -1939,6 +1943,20 @@ impl StickApp {
                 ui.horizontal(|ui| {
                     ui.label(tr(lang, "Stabilizer:", "مثبت اليد:"));
                     ui.add(egui::Slider::new(&mut self.stabilizer_strength, 0.0..=0.75));
+                });
+                ui.separator();
+                ui.strong(tr(lang, "Brush Tip Shape", "شكل الفرشة"));
+                ui.horizontal_wrapped(|ui| {
+                    for (shape, en, ar) in [
+                        (BrushTipShape::Round, "● Circle", "● دائري"),
+                        (BrushTipShape::Square, "■ Square", "■ مربع"),
+                        (BrushTipShape::Triangle, "▲ Triangle", "▲ مثلث"),
+                        (BrushTipShape::Pentagon, "⬟ Pentagon", "⬟ خماسي"),
+                        (BrushTipShape::TallRectangle, "▮ Tall", "▮ مستطيل طويل"),
+                        (BrushTipShape::WideRectangle, "▬ Wide", "▬ مستطيل عريض"),
+                    ] {
+                        ui.selectable_value(&mut self.brush_tip_shape, shape, tr(lang,en,ar));
+                    }
                 });
             }
             ActiveToolUI::ShapeLine => {
@@ -3725,7 +3743,7 @@ impl eframe::App for StickApp {
                                 }
                             } else {
                                 self.save_undo_state();
-                                self.current_stroke = Some(Stroke { points: vec![StrokePoint { x: stage_pos.x, y: stage_pos.y, pressure: 1.0 }], color: self.brush_color, fill_color: None, base_width: self.brush_size, is_vector: true, brush_preset: KritaBrushPreset::GPenInk, opacity: 1.0, brush_texture_id: None });
+                                self.current_stroke = Some(Stroke { points: vec![StrokePoint { x: stage_pos.x, y: stage_pos.y, pressure: 1.0 }], color: self.brush_color, fill_color: None, base_width: self.brush_size, is_vector: true, brush_preset: KritaBrushPreset::GPenInk, opacity: 1.0, brush_texture_id: None, tip_shape: BrushTipShape::Round });
                             }
                         }
                         ActiveToolUI::Brush if pointer_down => {
@@ -3742,7 +3760,7 @@ impl eframe::App for StickApp {
                                 }
                             } else {
                                 self.save_undo_state();
-                                self.current_stroke = Some(Stroke { points: vec![StrokePoint { x: virt.x, y: virt.y, pressure: drawing_pressure }], color: self.brush_color, fill_color: None, base_width: self.brush_size, is_vector: false, brush_preset: self.active_krita_brush, opacity: self.brush_opacity, brush_texture_id: None });
+                                self.current_stroke = Some(Stroke { points: vec![StrokePoint { x: virt.x, y: virt.y, pressure: drawing_pressure }], color: self.brush_color, fill_color: None, base_width: self.brush_size, is_vector: false, brush_preset: self.active_krita_brush, opacity: self.brush_opacity, brush_texture_id: None, tip_shape: self.brush_tip_shape });
                             }
                         }
                         ActiveToolUI::VectorDirectSelect => {

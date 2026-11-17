@@ -1,4 +1,4 @@
-use crate::project::{KritaBrushPreset, Stroke};
+use crate::project::{BrushTipShape, KritaBrushPreset, Stroke};
 use eframe::egui;
 
 /// رسم أيقونة مخصصة لكل فرشة في لوحة الخصائص
@@ -157,6 +157,19 @@ pub fn draw_stroke_pro<F: Fn(egui::Pos2) -> egui::Pos2>(
         ));
     }
 
+    // Polygonal tips share their sampled geometry with PNG/video exports.
+    if !stroke.is_vector && stroke.tip_shape != BrushTipShape::Round {
+        for dab in crate::brush_engine::sample_pressure_dabs(&stroke.points, stroke.base_width) {
+            let verts: Vec<egui::Pos2> = crate::brush_engine::dab_polygon(stroke.tip_shape, dab)
+                .into_iter()
+                .map(|(x,y)| to_screen(egui::pos2(x + ox, y + oy))).collect();
+            if verts.len() >= 3 {
+                painter.add(egui::Shape::convex_polygon(verts, color, egui::Stroke::NONE));
+            }
+        }
+        return;
+    }
+
     // Drawing engine step 1: identical pressure-aware G-Pen geometry on
     // screen and in exports. Existing project files and other brushes remain unchanged.
     if !stroke.is_vector && stroke.brush_preset == KritaBrushPreset::GPenInk {
@@ -236,6 +249,7 @@ mod viewport_tests {
             brush_preset: KritaBrushPreset::GPenInk,
             opacity: 1.0,
             brush_texture_id: None,
+            tip_shape: BrushTipShape::Round,
         }
     }
 
