@@ -73,6 +73,8 @@ enum GeometricShapeKind {
     Circle,
     Square,
     Rectangle,
+    Triangle,
+    Pentagon,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -807,6 +809,21 @@ fn build_geometric_stroke(kind: GeometricShapeKind, p0: egui::Pos2, p1: egui::Po
         GeometricShapeKind::Rectangle => {
             for c in [egui::pos2(p0.x, p0.y), egui::pos2(p1.x, p0.y), egui::pos2(p1.x, p1.y), egui::pos2(p0.x, p1.y), egui::pos2(p0.x, p0.y)] {
                 pts.push(StrokePoint { x: c.x, y: c.y, pressure: 1.0 });
+            }
+        }
+        GeometricShapeKind::Triangle | GeometricShapeKind::Pentagon => {
+            let count = if kind == GeometricShapeKind::Triangle { 3 } else { 5 };
+            let center = p0.lerp(p1, 0.5);
+            let rx = ((p1.x - p0.x) * 0.5).abs();
+            let ry = ((p1.y - p0.y) * 0.5).abs();
+            for i in 0..=count {
+                let theta = -std::f32::consts::FRAC_PI_2
+                    + (i as f32 / count as f32) * std::f32::consts::TAU;
+                pts.push(StrokePoint {
+                    x: center.x + theta.cos() * rx,
+                    y: center.y + theta.sin() * ry,
+                    pressure: 1.0,
+                });
             }
         }
     }
@@ -1930,6 +1947,8 @@ impl StickApp {
                 ui.radio_value(&mut self.selected_shape_kind, GeometricShapeKind::Circle, tr(lang, "Circle", "دائرة"));
                 ui.radio_value(&mut self.selected_shape_kind, GeometricShapeKind::Square, tr(lang, "Square", "مربع"));
                 ui.radio_value(&mut self.selected_shape_kind, GeometricShapeKind::Rectangle, tr(lang, "Rectangle", "مستطيل"));
+                ui.radio_value(&mut self.selected_shape_kind, GeometricShapeKind::Triangle, tr(lang, "Triangle", "مثلث"));
+                ui.radio_value(&mut self.selected_shape_kind, GeometricShapeKind::Pentagon, tr(lang, "Pentagon", "خماسي"));
                 ui.separator();
                 ui.add(egui::Slider::new(&mut self.brush_size, 1.0..=120.0)
                     .text(tr(lang, "Outline Size", "سُمك حدود الشكل")));
@@ -2964,7 +2983,67 @@ impl eframe::App for StickApp {
                             egui::Color32::WHITE,
                         );
                         let shortcut_hint = format!("{}: {}", tr(lang, "Shortcut", "الاختصار"), key);
-                        if response.on_hover_text(format!("{} — {}", name, shortcut_hint)).clicked() {
+                        let response = response.on_hover_text(format!("{} — {}", name, shortcut_hint));
+                        response.context_menu(|ui| {
+                            ui.strong(tr(lang, "Quick tool options", "اختيارات الأداة السريعة"));
+                            ui.separator();
+                            match tool {
+                                ActiveToolUI::ShapeLine => {
+                                    for (kind, en, ar) in [
+                                        (GeometricShapeKind::StraightLine, "Line", "خط"),
+                                        (GeometricShapeKind::Circle, "Circle", "دائرة"),
+                                        (GeometricShapeKind::Square, "Square", "مربع"),
+                                        (GeometricShapeKind::Rectangle, "Rectangle", "مستطيل"),
+                                        (GeometricShapeKind::Triangle, "Triangle", "مثلث"),
+                                        (GeometricShapeKind::Pentagon, "Pentagon", "خماسي"),
+                                    ] {
+                                        if ui.selectable_label(self.selected_shape_kind == kind, tr(lang, en, ar)).clicked() {
+                                            self.selected_shape_kind = kind;
+                                            self.active_tool_ui = ActiveToolUI::ShapeLine;
+                                            ui.close_menu();
+                                        }
+                                    }
+                                }
+                                ActiveToolUI::Brush => {
+                                    for (preset, label) in [
+                                        (KritaBrushPreset::GPenInk, "G-Pen"),
+                                        (KritaBrushPreset::Watercolor, "Watercolor"),
+                                        (KritaBrushPreset::ChiselMarker, "Marker"),
+                                        (KritaBrushPreset::SoftAirbrush, "Airbrush"),
+                                        (KritaBrushPreset::SketchPencil, "Pencil"),
+                                    ] {
+                                        if ui.selectable_label(self.active_krita_brush == preset, label).clicked() {
+                                            self.active_krita_brush = preset;
+                                            self.brush_opacity = preset.default_opacity();
+                                            self.active_tool_ui = ActiveToolUI::Brush;
+                                            ui.close_menu();
+                                        }
+                                    }
+                                }
+                                ActiveToolUI::EraserRed | ActiveToolUI::EraserGreen
+                                | ActiveToolUI::VectorPen => {
+                                    ui.add(egui::Slider::new(&mut self.brush_size, 1.0..=120.0)
+                                        .text(tr(lang, "Size", "الحجم")));
+                                }
+                                ActiveToolUI::HandCanvas => {
+                                    if ui.button(tr(lang, "Reset canvas rotation", "تصفير زاوية اللوحة")).clicked() {
+                                        self.canvas_rotation_deg = 0.0;
+                                        self.canvas_flip_h = false;
+                                        self.canvas_flip_v = false;
+                                        ui.close_menu();
+                                    }
+                                }
+                                _ => {
+                                    if ui.button(tr(lang, "Open tool properties", "افتح خصائص الأداة")).clicked() {
+                                        self.active_tool_ui = tool;
+                                        self.config.show_right_dock = true;
+                                        self.config.save();
+                                        ui.close_menu();
+                                    }
+                                }
+                            }
+                        });
+                        if response.clicked() {
                             self.active_tool_ui = tool;
                             self.play_sfx(SfxType::ToolSelect(tool as u8));
                         }
