@@ -880,3 +880,40 @@ fn parse_animate_edges(edges: &str) -> Vec<StrokePoint> {
     }
     pts
 }
+
+#[cfg(test)]
+mod brush_tip_compat_tests {
+    use super::*;
+
+    #[test]
+    fn legacy_strokes_default_to_round_tip() {
+        let legacy = r#"{
+          "points":[{"x":2.0,"y":3.0}],
+          "color":[12,34,56,255],
+          "fill_color":null,
+          "base_width":7.0,
+          "is_vector":false,
+          "brush_preset":"GPenInk",
+          "opacity":1.0,
+          "brush_texture_id":null
+        }"#;
+        let old: Stroke = serde_json::from_str(legacy).expect("old stroke format");
+        assert_eq!(old.tip_shape, BrushTipShape::Round);
+        let encoded = serde_json::to_string(&old).unwrap();
+        let restored: Stroke = serde_json::from_str(&encoded).unwrap();
+        assert_eq!(restored.tip_shape, BrushTipShape::Round);
+        assert_eq!(restored.points.len(), 1);
+        assert_eq!(restored.color, [12, 34, 56, 255]);
+    }
+
+    #[test]
+    fn polygonal_brush_tips_roundtrip() {
+        let mut stroke: Stroke = serde_json::from_str(
+            r#"{"points":[],"color":[0,0,0,255],"brush_preset":"GPenInk"}"#
+        ).unwrap();
+        stroke.tip_shape = BrushTipShape::Pentagon;
+        let serialized = serde_json::to_string(&stroke).unwrap();
+        let opened: Stroke = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(opened.tip_shape, BrushTipShape::Pentagon);
+    }
+}
