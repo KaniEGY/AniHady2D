@@ -120,6 +120,18 @@ pub fn apply_strokes(project: &mut AniProject, layer: usize, frame: usize, strok
     if let Some(data) = keyframes.get_mut(&frame) { data.strokes.extend(strokes); }
     true
 }
+// Never publish absolute host filesystem paths to other room participants.
+// Media transfer is intentionally outside the first collaboration preview.
+fn public_project(mut project: AniProject) -> AniProject {
+    for track in &mut project.audio_tracks { track.file_path.clear(); }
+    for layer in &mut project.layers {
+        for frame in layer.keyframes.values_mut() {
+            for item in &mut frame.media_items { item.path.clear(); }
+        }
+    }
+    project
+}
+
 fn local_address() -> String {
     UdpSocket::bind("0.0.0.0:0").ok()
         .and_then(|s| { s.connect("8.8.8.8:80").ok()?; s.local_addr().ok() })
@@ -209,7 +221,7 @@ fn host_peer(mut stream: TcpStream, host: Arc<HostShared>) -> io::Result<()> {
         }
         // Snapshot and registration are ordered with subsequent host operations.
         let project = host.project.lock().map_err(|_| io::Error::other("Room project lock poisoned"))?.clone();
-        packet_write(&mut stream, &Packet::Welcome { project: Box::new(project) })?;
+        packet_write(&mut stream, &Packet::Welcome { project: Box::new(public_project(project)) })?;
         peers.insert(id, out_tx);
     }
     host.announce_members();
@@ -371,7 +383,7 @@ impl OnlineSession {
     pub fn resync_from_host(&self, project: AniProject) {
         if let Some(host) = &self.host {
             if let Ok(mut state) = host.project.lock() { *state = project.clone(); }
-            host.broadcast(&Packet::Snapshot { project: Box::new(project) }, None);
+            host.broadcast(&Packet::Snapshot { project: Box::new(public_project(project)) }, None);
         }
     }
     pub fn close(&self) {
