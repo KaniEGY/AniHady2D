@@ -467,21 +467,6 @@ impl OnlineSession {
                 };
                 // All connection attempts use the intended address, never
                 // a public proxy or an untrusted third-party room directory.
-                /*old_error_handler*/ let _ = (|| -> Result<(), String> {
-                    let mut message = String::new();
-                    let mut message = format!("Connection failed: {}", e);
-                    if matches!(addr.ip(), std::net::IpAddr::V4(ip) if ip.is_private()) {
-                        message.push_str(
-                            ". This is a LAN-only address. For a friend on another network, use the host's 100.x Tailscale IP after connecting both devices through Tailscale."
-                        );
-                    } else {
-                        message.push_str(
-                            ". The host must keep the room open. Check access to TCP 47554, firewall rules, and that both devices can reach one another."
-                        );
-                    }
-                    let _ = message;
-                    Ok(())
-                })();
                 stream.set_read_timeout(Some(Duration::from_millis(300))).map_err(|e| e.to_string())?;
                 stream.set_write_timeout(Some(Duration::from_secs(3))).map_err(|e| e.to_string())?;
                 packet_write(&mut stream, &Packet::Hello { name: nickname, level: level.min(1000), protocol: PROTOCOL, mode }).map_err(|e| e.to_string())?;
