@@ -4921,26 +4921,58 @@ impl eframe::App for StickApp {
                         }
                         ActiveToolUI::VectorDirectSelect => {
                             if pointer_pressed {
-                                self.selected_vector_node = self.project.layers.get(self.active_layer_idx)
+                                let picked=self.project.layers.get(self.active_layer_idx)
                                     .and_then(|layer| {
-                                        let frame = self.project.evaluate_layer_at_frame(layer, self.current_frame);
+                                        let frame=self.project.evaluate_layer_at_frame(
+                                            layer,self.current_frame);
                                         selection_tools::nearest_vector_node(
-                                            &frame.strokes, stage_pos, (14.0 / scale).max(2.0)
-                                        )
+                                            &frame.strokes,stage_pos,(13.0/scale).max(2.0))
                                     });
-                                if self.selected_vector_node.is_some() {
+                                let extend=ctx.input(|i|i.modifiers.shift);
+                                if let Some(node)=picked {
+                                    if extend {
+                                        if let Some(i)=self.selected_vector_nodes.iter().position(|&p|p==node){
+                                            self.selected_vector_nodes.remove(i);
+                                        }else{self.selected_vector_nodes.push(node);}
+                                    }else if !self.selected_vector_nodes.contains(&node) {
+                                        self.selected_vector_nodes=vec![node];
+                                    }
+                                    self.selected_vector_node=Some(node);
+                                    self.vector_marquee_start=None;
+                                    self.vector_marquee_current=None;
                                     self.save_undo_state();
+                                } else {
+                                    if !extend {self.selected_vector_nodes.clear();}
+                                    self.selected_vector_node=None;
+                                    self.vector_marquee_start=Some(stage_pos);
+                                    self.vector_marquee_current=Some(stage_pos);
                                 }
-                            } else if pointer_down && delta.length_sq() > 0.0 {
-                                if let Some((stroke_index, node_index)) = self.selected_vector_node {
-                                    self.ensure_editable_keyframe();
-                                    if let Some(layer) = self.project.layers.get_mut(self.active_layer_idx) {
-                                        if let Some(frame) = layer.keyframes.get_mut(&self.current_frame) {
-                                            if let Some(stroke) = frame.strokes.get_mut(stroke_index) {
-                                                if let Some(node) = stroke.points.get_mut(node_index) {
-                                                    node.x += delta.x;
-                                                    node.y += delta.y;
-                                                    self.has_unsaved_changes = true;
+                            } else if pointer_down && self.vector_marquee_start.is_some() {
+                                self.vector_marquee_current=Some(stage_pos);
+                            } else if pointer_down && delta.length_sq()>0.0
+                                && !self.selected_vector_nodes.is_empty()
+                                && !self.is_active_layer_locked() {
+                                let nodes=self.selected_vector_nodes.clone();
+                                self.ensure_editable_keyframe();
+                                if let Some(layer)=self.project.layers.get_mut(self.active_layer_idx){
+                                    if let Some(frame)=layer.keyframes.get_mut(&self.current_frame){
+                                        for (si,pi) in nodes {
+                                            if let Some(stroke)=frame.strokes.get_mut(si){
+                                                let len=stroke.points.len();
+                                                if let Some(point)=stroke.points.get_mut(pi){
+                                                    point.x+=delta.x;
+                                                    point.y+=delta.y;
+                                                    self.has_unsaved_changes=true;
+                                                }
+                                                // A closed contour must stay closed when
+                                                // dragging either coincident endpoint.
+                                                if len>2 && (pi==0||pi==len-1){
+                                                    let first=stroke.points[0].clone();
+                                                    let last=stroke.points[len-1].clone();
+                                                    if (first.x-last.x).hypot(first.y-last.y)<25.0 {
+                                                        if pi==0 {stroke.points[len-1]=first;}
+                                                        else {stroke.points[0]=last;}
+                                                    }
                                                 }
                                             }
                                         }
@@ -5052,6 +5084,28 @@ impl eframe::App for StickApp {
             }
 
             if pointer_released {
+                if let (Some(start),Some(end))=(
+                    self.vector_marquee_start.take(),self.vector_marquee_current.take()){
+                    let rect=egui::Rect::from_two_pos(start,end);
+                    if rect.width()>3.0 || rect.height()>3.0 {
+                        let extend=ctx.input(|i|i.modifiers.shift);
+                        if !extend {self.selected_vector_nodes.clear();}
+                        if let Some(layer)=self.project.layers.get(self.active_layer_idx){
+                            let frame=self.project.evaluate_layer_at_frame(layer,self.current_frame);
+                            for (si,stroke) in frame.strokes.iter().enumerate(){
+                                if !stroke.is_vector {continue;}
+                                for (pi,p) in stroke.points.iter().enumerate(){
+                                    let key=(si,pi);
+                                    if rect.contains(egui::pos2(p.x,p.y))
+                                        && !self.selected_vector_nodes.contains(&key)
+                                        && self.selected_vector_nodes.len()<4_000 {
+                                        self.selected_vector_nodes.push(key);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
                 self.transform_drag_anchor = None;
                 self.transform_rotate_pivot = None;
                 self.lasso_dragging_selection = false;
@@ -5266,6 +5320,10 @@ impl eframe::App for StickApp {
                     }
                 }
             }
+            if let (Some(a),Some(b))=(self.vector_marquee_start,self.vector_marquee_current){
+                painter.rect_stroke(egui::Rect::from_two_pos(to_screen(a),to_screen(b)),0.0,
+                    egui::Stroke::new(1.4,egui::Color32::from_rgb(255,169,75)));
+            }
             if self.active_tool_ui == ActiveToolUI::VectorDirectSelect {
                 if let Some(layer) = self.project.layers.get(self.active_layer_idx) {
                     if layer.visible {
@@ -5277,7 +5335,7 @@ impl eframe::App for StickApp {
                                 if nodes_drawn >= 1_500 { break; }
                                 let p = to_screen(egui::pos2(node.x, node.y));
                                 if canvas_rect.contains(p) {
-                                    let selected = self.selected_vector_node == Some((stroke_index, node_index));
+                                    let selected = self.selected_vector_nodes.contains(&(stroke_index,node_index));
                                     let color = if selected {
                                         egui::Color32::from_rgb(255, 202, 58)
                                     } else {
