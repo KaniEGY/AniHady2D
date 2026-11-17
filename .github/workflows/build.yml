@@ -4,7 +4,7 @@ on:
   push:
     branches: [ "main" ]
   pull_request:
-    branches: [ "main", "feature/pressure-aware-brush-core" ]
+    branches: [ "main", "feature/pressure-aware-brush-core", "feature/tablet-pressure-input" ]
   workflow_dispatch:
 
 permissions:
