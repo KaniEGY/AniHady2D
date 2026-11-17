@@ -823,6 +823,7 @@ struct StickApp {
     layer_rename_index: Option<usize>,
     layer_rename_buffer: String,
     layer_clipboard: Option<Layer>,
+    right_properties_ratio: f32,
     symmetry_mode: SymmetryMode,
     stabilizer_strength: f32,
     stabilized_cursor: Option<egui::Pos2>,
@@ -929,6 +930,7 @@ impl StickApp {
             layer_rename_index: None,
             layer_rename_buffer: String::new(),
             layer_clipboard: None,
+            right_properties_ratio: 0.46,
             symmetry_mode: SymmetryMode::Off,
             stabilizer_strength: 0.30,
             stabilized_cursor: None,
@@ -2062,7 +2064,9 @@ impl eframe::App for StickApp {
 
         let any_modal_open = self.show_symbol_dialog || self.show_text_dialog || self.show_export_studio
             || self.show_command_palette || self.show_exit_dialog || self.show_update_dialog
-            || self.show_settings_dialog || self.show_credits_dialog || self.show_project_notice
+            || self.show_settings_dialog || self.show_credits_dialog
+            || self.show_support_dialog || self.layer_rename_index.is_some()
+            || self.show_timeline_settings || self.show_project_notice
             || self.show_recovery_dialog || self.show_project_details;
         if any_modal_open { typing_in_textbox = true; }
 
@@ -2707,15 +2711,29 @@ impl eframe::App for StickApp {
             });
         });
 
-        // Scrolling the properties panel must scroll PROPERTIES, never the
-        // canvas or artwork. The canvas zoom handler runs only in CentralPanel.
+        // Split dock: tools keep their own scrolling upper section; layers
+        // remain in a dedicated lower section, like a painting editor.
         let mut layer_menu_action: Option<(usize, layer_ops::LayerAction)> = None;
-        egui::SidePanel::right("right_panel").resizable(true).default_width(280.0).show(ctx, |ui| {
-            egui::ScrollArea::vertical()
-                .id_salt("tool_properties_scroll")
-                .auto_shrink([false, false])
-                .show(ui, |ui| {
-            self.render_tool_properties_ui(ui, lang);
+        let mut copy_layer_index: Option<usize> = None;
+        let mut paste_layer_index: Option<usize> = None;
+        let mut rename_layer_index: Option<usize> = None;
+        egui::SidePanel::right("right_panel").resizable(true).default_width(318.0)
+            .min_width(250.0).show(ctx, |ui| {
+            ui.horizontal(|ui| {
+                ui.strong(tr(lang, "Tool Properties", "خصائص الأداة"));
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.add(egui::Slider::new(&mut self.right_properties_ratio, 0.23..=0.75)
+                        .show_value(false).text(tr(lang, "Split", "تقسيم")));
+                });
+            });
+            let tool_height = (ui.available_height() * self.right_properties_ratio).max(160.0);
+            ui.allocate_ui_with_layout(
+                egui::vec2(ui.available_width(), tool_height),
+                egui::Layout::top_down(egui::Align::Min),
+                |ui| {
+                    egui::ScrollArea::vertical().id_salt("tool_properties_scroll")
+                        .auto_shrink([false, false]).show(ui, |ui| {
+                            self.render_tool_properties_ui(ui, lang);
             ui.add_space(8.0);
             ui.separator();
             ui.strong(tr(lang, "Colors", "الألوان"));
@@ -2750,6 +2768,12 @@ impl eframe::App for StickApp {
                 ui.selectable_value(&mut self.symmetry_mode, SymmetryMode::Vertical, "V");
             });
             ui.add_space(6.0);
+                        }); // independent tool-props scroll
+                }); // adjustable upper dock
+            ui.separator();
+            ui.strong(tr(lang, "▤ Layers • Right-click for more", "▤ الطبقات • كليك يمين للخيارات"));
+            egui::ScrollArea::vertical().id_salt("layer_dock_scroll")
+                .auto_shrink([false, false]).show(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.strong(tr(lang, "Layers", "الطبقات"));
                 if ui.small_button("+ Layer").clicked() {
@@ -2793,10 +2817,33 @@ impl eframe::App for StickApp {
                         layer.locked = !layer.locked;
                         self.has_unsaved_changes = true;
                     }
-                    if ui.selectable_label(self.active_layer_idx == idx, &layer.name).clicked() {
+                    let layer_response = ui.selectable_label(self.active_layer_idx == idx, &layer.name);
+                    if layer_response.clicked() {
                         self.active_layer_idx = idx;
                         self.selected_stroke_indices.clear();
                     }
+                    layer_response.context_menu(|ui| {
+                        ui.strong(&layer.name);
+                        ui.separator();
+                        if ui.button(tr(lang, "Rename", "غيّر الاسم")).clicked() {
+                            rename_layer_index = Some(idx); ui.close_menu();
+                        }
+                        if ui.button(tr(lang, "Copy Layer", "انسخ اللير")).clicked() {
+                            copy_layer_index = Some(idx); ui.close_menu();
+                        }
+                        if ui.add_enabled(self.layer_clipboard.is_some(),
+                            egui::Button::new(tr(lang, "Paste Layer", "الصق اللير"))).clicked() {
+                            paste_layer_index = Some(idx); ui.close_menu();
+                        }
+                        if ui.button(tr(lang, "Duplicate", "دبلكيت اللير")).clicked() {
+                            layer_menu_action = Some((idx, layer_ops::LayerAction::Duplicate));
+                            ui.close_menu();
+                        }
+                        if ui.add_enabled(can_delete_layers && !layer.locked,
+                            egui::Button::new(tr(lang, "Delete Layer", "احذف اللير"))).clicked() {
+                            self.pending_delete_layer = Some(idx); ui.close_menu();
+                        }
+                    });
                     if ui.add_enabled(can_delete_layers && !layer.locked,
                         egui::Button::new("×"))
                         .on_hover_text(tr(lang, "Delete Layer", "احذف اللير")).clicked() {
@@ -2804,8 +2851,54 @@ impl eframe::App for StickApp {
                     }
                 });
             }
-                }); // property scroll
+                }); // scrollable layer dock
         });
+        if let Some(idx) = copy_layer_index {
+            self.layer_clipboard = self.project.layers.get(idx).cloned();
+        }
+        if let Some(idx) = paste_layer_index {
+            if let Some(mut cloned) = self.layer_clipboard.clone() {
+                self.save_undo_state();
+                cloned.name = format!("{} Copy", cloned.name);
+                cloned.xp_first_paint_rewarded = false;
+                cloned.locked = false;
+                self.project.layers.insert(idx.min(self.project.layers.len()), cloned);
+                self.active_layer_idx = idx.min(self.project.layers.len() - 1);
+                self.selected_stroke_indices.clear();
+                self.has_unsaved_changes = true;
+            }
+        }
+        if let Some(idx) = rename_layer_index {
+            if let Some(layer) = self.project.layers.get(idx) {
+                self.layer_rename_buffer = layer.name.clone();
+                self.layer_rename_index = Some(idx);
+            }
+        }
+        if let Some(idx) = self.layer_rename_index {
+            egui::Window::new(tr(lang, "Rename Layer", "غيّر اسم اللير"))
+                .collapsible(false).resizable(false)
+                .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+                .show(ctx, |ui| {
+                    ui.add(egui::TextEdit::singleline(&mut self.layer_rename_buffer)
+                        .desired_width(300.0));
+                    ui.horizontal(|ui| {
+                        if ui.button(tr(lang, "Cancel", "إلغاء")).clicked() {
+                            self.layer_rename_index = None;
+                        }
+                        if ui.button(tr(lang, "Rename", "غيّر الاسم")).clicked() {
+                            let new_name = self.layer_rename_buffer.trim().to_owned();
+                            if !new_name.is_empty() && new_name.chars().count() <= 80 {
+                                self.save_undo_state();
+                                if let Some(layer) = self.project.layers.get_mut(idx) {
+                                    layer.name = new_name;
+                                    self.has_unsaved_changes = true;
+                                }
+                                self.layer_rename_index = None;
+                            }
+                        }
+                    });
+                });
+        }
         if let Some(index) = self.pending_delete_layer {
             let layer_name = self.project.layers.get(index).map(|l| l.name.clone()).unwrap_or_default();
             egui::Window::new(tr(lang, "Delete Layer?", "عايز تحذف اللير؟"))
