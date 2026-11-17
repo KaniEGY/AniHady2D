@@ -14,6 +14,10 @@
 - **Known boundaries:** bucket fill operates on recognized closed stroke contours (now with improved near-closure tolerance), not arbitrary raster flood fill. Imported artwork/text still needs further parity tests for every transform. No Krita GPL code is copied into Stick.
 
 ### What's new
+- **OLD / NEW Animation Timeline:** the Timeline gear now lets artists switch between the familiar **OLD Timeline** (unchanged original Stick grid) and **NEW Timeline**, a clearer exposure-sheet layout with colored keyframe diamonds, continuous held drawing strips, a time ruler, taller customizable layer rows and independent horizontal zoom.
+- **Preserved data & workflows:** switching style only changes local UI preferences; frame/keyframe copy, paste, blank keys, deletion, playback, loop range and project file format keep working through the same underlying commands. Existing preferences load with OLD selected by default.
+- **Feedback dialog:** clicking "Report a bug or suggest a feature" on the start screen now opens a closable window with the maintainer's Instagram @ablikash and the project's GitHub Issues page.
+- **Source limitation:** the uploaded AniHady2D 0.1.1 archive contains a Windows installer and setup README, not timeline source code or a screenshot of its timeline. NEW uses exposure-sheet design ideas; it is not claimed to be a pixel-perfect copy of the old app. Other already available capabilities (audio/video export, layers, keyframes) were not duplicated.
 - **Online privacy/diagnostics:** LAN/Tailscale discovery and room connections are now **explicit opt-in per session**, never started merely by opening the online lobby. The "Tailscale connected, 0 peers" case explains that the host must share device access or invite collaborators into the same tailnet. Room codes remain discovery-only; a remote friend can use the host 100.x IP if allowed.
 - **Exit hang:** no synchronous audio-drain on application close. Unsaved documents get Save & Exit / Exit without saving / Cancel.
 - **Brush stability:** G-Pen now draws a continuous pressure-aware outline as one translucent geometry rather than a stack of dark, overlapping circles. PNG/video export uses the same outline where possible. Freehand strokes no longer receive destructive fourfold Catmull-Rom oversampling at release.
@@ -95,6 +99,10 @@
 - **القيود الحالية:** الدلو بيلون المسارات المقفولة اللي بيتعرف عليها، ولسه مش Flood Fill كامل على أي سطح Raster. لم يتم نسخ أكواد Krita الخاضعة لترخيص GPL.
 
 ### إيه الجديد؟
+- **OLD / NEW Timeline:** من ترس التايم لاين تقدر تختار الشكل القديم OLD زي ما هو، أو NEW بتصميم صفوف أوضح، شريط استمرار الرسم بين الفريمات، علامات كي فريم، ومسطرة توقيت. لكل شكل تكبيره الخاص، وطول صف اللير قابل للتعديل.
+- **أمان المشاريع:** تغيير الشكل بيغيّر إعدادات العرض فقط، مش البيانات ولا ملفات المشروع. عمليات النسخ والحذف والكي فريم والتشغيل والتكرار شغالة بنفس المحرك.
+- **التواصل:** زر «بلّغ عن مشكلة أو اقترح ميزة» في الواجهة الرئيسية بيفتح نافذة قابلة للإغلاق فيها إنستجرام @ablikash و GitHub Issues.
+- **ملاحظة مرجعية:** ملف AniHady2D اللي اترفع فيه Setup.exe و README فقط، مش كود أو صورة للتايم لاين. NEW مستوحى من فكرة التايم لاين القديم، مش نسخ مطابق مؤكد.
 - **خصوصية الأونلاين:** مفيش بحث عن غرف أو اتصال غير لما المستخدم يختار تشغيل الأونلاين بنفسه. لو Tailscale متصل لكن 0 جهاز ظاهر، البرنامج بيوضح خطوة مشاركة جهاز الهوست أو دعوة أصحابك للشبكة.
 - **إصلاح الخروج:** إلغاء انتظار مؤثر الصوت عند قفل البرنامج، مع خيارات احفظ واخرج / خروج بدون حفظ / إلغاء.
 - **فرشة G-Pen:** الضربة بقت خط متصل بحساب ضغط القلم بدل دوائر شفافة بتتراكب وتتسبب في البقع السودا. والتصدير يستخدم نفس شكل الضربة. وقفنا التنعيم اللي كان بيخلق نقط زيادة وبيشوّه بعض الزوايا.
