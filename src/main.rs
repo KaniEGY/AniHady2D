@@ -4606,13 +4606,13 @@ impl eframe::App for StickApp {
                             let (can_fill, fallback) = self.project.layers.get(self.active_layer_idx)
                                 .map(|l| {
                                     let evaluated = self.project.evaluate_layer_at_frame(l, self.current_frame);
-                                    let direct = fill_tools::can_fill_contour(
+                                    // The enclosed pixel region takes precedence over a
+                                    // closed outer shape when there are interior dividers.
+                                    let polygon = fill_tools::flood_fill_polygon(
+                                        &evaluated.strokes, (stage_pos.x, stage_pos.y),
+                                        (self.project.width as f32, self.project.height as f32), 1.4);
+                                    let direct = polygon.is_none() && fill_tools::can_fill_contour(
                                         &evaluated.strokes, stage_pos.x, stage_pos.y);
-                                    let polygon = if direct { None } else {
-                                        fill_tools::flood_fill_polygon(
-                                            &evaluated.strokes, (stage_pos.x, stage_pos.y),
-                                            (self.project.width as f32, self.project.height as f32), 1.4)
-                                    };
                                     (direct, polygon)
                                 }).unwrap_or((false, None));
                             if can_fill || fallback.is_some() {
@@ -4620,13 +4620,13 @@ impl eframe::App for StickApp {
                                 self.ensure_editable_keyframe();
                                 if let Some(l) = self.project.layers.get_mut(self.active_layer_idx) {
                                     if let Some(f) = l.keyframes.get_mut(&self.current_frame) {
-                                        if (can_fill && fill_tools::apply_contour_fill(
-                                            &mut f.strokes, stage_pos.x, stage_pos.y, self.brush_color))
-                                            || fallback.map(|points| {
-                                                f.strokes.insert(0, fill_tools::polygon_fill_stroke(
-                                                    points, self.brush_color));
-                                                true
-                                            }).unwrap_or(false) {
+                                        if fallback.map(|points| {
+                                            f.strokes.insert(0, fill_tools::polygon_fill_stroke(
+                                                points, self.brush_color));
+                                            true
+                                        }).unwrap_or(false)
+                                            || (can_fill && fill_tools::apply_contour_fill(
+                                                &mut f.strokes, stage_pos.x, stage_pos.y, self.brush_color)) {
                                             self.has_unsaved_changes = true;
                                         }
                                     }
