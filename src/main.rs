@@ -830,6 +830,8 @@ struct StickApp {
     shape_drag_start: Option<egui::Pos2>,
     shape_drag_current: Option<egui::Pos2>,
     selected_stroke_indices: Vec<usize>,
+    selected_vector_node: Option<(usize, usize)>,
+    transform_drag_anchor: Option<egui::Pos2>,
     selected_text_item_index: Option<usize>,
     selection_rect_start: Option<egui::Pos2>,
     selection_rect_current: Option<egui::Pos2>,
@@ -937,6 +939,8 @@ impl StickApp {
             shape_drag_start: None,
             shape_drag_current: None,
             selected_stroke_indices: Vec::new(),
+            selected_vector_node: None,
+            transform_drag_anchor: None,
             selected_text_item_index: None,
             selection_rect_start: None,
             selection_rect_current: None,
@@ -1108,6 +1112,8 @@ impl StickApp {
         self.current_frame = snap.current_frame.clamp(1, self.timeline_length);
         self.active_layer_idx = snap.active_layer_idx.min(self.project.layers.len().saturating_sub(1));
         self.selected_stroke_indices.clear();
+        self.selected_vector_node = None;
+        self.transform_drag_anchor = None;
         self.selected_text_item_index = None;
         self.selection_rect_start = None;
         self.selection_rect_current = None;
@@ -1188,6 +1194,58 @@ impl StickApp {
             layer.keyframes.entry(self.current_frame).or_default().strokes.extend(strokes_to_add);
             self.has_unsaved_changes = true;
             self.record_frame_drawn_activity(now_time);
+        }
+    }
+
+    fn selected_canvas_bounds(&self) -> Option<egui::Rect> {
+        let layer = self.project.layers.get(self.active_layer_idx)?;
+        let frame = self.project.evaluate_layer_at_frame(layer, self.current_frame);
+        let mut min = egui::pos2(f32::INFINITY, f32::INFINITY);
+        let mut max = egui::pos2(f32::NEG_INFINITY, f32::NEG_INFINITY);
+        let mut found = false;
+        for &index in &self.selected_stroke_indices {
+            if let Some(stroke) = frame.strokes.get(index) {
+                for p in &stroke.points {
+                    min.x = min.x.min(p.x);
+                    min.y = min.y.min(p.y);
+                    max.x = max.x.max(p.x);
+                    max.y = max.y.max(p.y);
+                    found = true;
+                }
+            }
+        }
+        if let Some(index) = self.selected_text_item_index {
+            if let Some(text) = frame.text_items.get(index) {
+                let bounds = selection_tools::text_bounds(text);
+                min = min.min(bounds.min);
+                max = max.max(bounds.max);
+                found = true;
+            }
+        }
+        if found { Some(egui::Rect::from_min_max(min, max).expand(2.0)) }
+        else { None }
+    }
+
+    fn resize_selection_from_corner(&mut self, anchor: egui::Pos2, factor: f32) {
+        if self.is_active_layer_locked() || !factor.is_finite() { return; }
+        let factor = factor.clamp(0.25, 4.0);
+        self.ensure_editable_keyframe();
+        if let Some(layer) = self.project.layers.get_mut(self.active_layer_idx) {
+            if let Some(frame) = layer.keyframes.get_mut(&self.current_frame) {
+                for &index in &self.selected_stroke_indices {
+                    if let Some(stroke) = frame.strokes.get_mut(index) {
+                        selection_tools::scale_points_around(stroke, anchor, factor);
+                    }
+                }
+                if let Some(index) = self.selected_text_item_index {
+                    if let Some(text) = frame.text_items.get_mut(index) {
+                        text.x = anchor.x + (text.x - anchor.x) * factor;
+                        text.y = anchor.y + (text.y - anchor.y) * factor;
+                        text.font_size = (text.font_size * factor).clamp(4.0, 512.0);
+                    }
+                }
+                self.has_unsaved_changes = true;
+            }
         }
     }
 
