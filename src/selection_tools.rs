@@ -104,6 +104,18 @@ pub fn nearest_vector_node(
     nearest
 }
 
+/// Adjust the view offset so the document point under the mouse does not move
+/// when the user zooms. Coordinates are screen-space points.
+pub fn zoom_pan_around_pointer(
+    pan: egui::Vec2, viewport_center: egui::Pos2, pointer: egui::Pos2,
+    old_zoom: f32, new_zoom: f32,
+) -> egui::Vec2 {
+    if !old_zoom.is_finite() || old_zoom <= 0.0 || !new_zoom.is_finite() || new_zoom <= 0.0 {
+        return pan;
+    }
+    pan + (pointer - (viewport_center + pan)) * (1.0 - new_zoom / old_zoom)
+}
+
 /// Geometry-only scaling to keep interactive transform independent of Zoom.
 pub fn scale_points_around(stroke: &mut Stroke, anchor: egui::Pos2, factor: f32) {
     if !factor.is_finite() || factor <= 0.0 { return; }
@@ -173,6 +185,19 @@ mod tests {
         rotate_points_around(&mut line, egui::pos2(10.0, 10.0), std::f32::consts::FRAC_PI_2);
         assert!((line.points[0].x - 10.0).abs() < 0.01);
         assert!((line.points[0].y - 20.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn cursor_anchor_is_unchanged_on_zoom_in_and_out() {
+        let center = egui::pos2(400.0, 300.0);
+        let mouse = egui::pos2(540.0, 450.0);
+        let pan = egui::vec2(10.0, -20.0);
+        let after = zoom_pan_around_pointer(pan, center, mouse, 1.0, 2.0);
+        let old_doc = (mouse - (center + pan)) / 1.0;
+        let new_doc = (mouse - (center + after)) / 2.0;
+        assert!((old_doc - new_doc).length() < 0.001);
+        let back = zoom_pan_around_pointer(after, center, mouse, 2.0, 1.0);
+        assert!((back - pan).length() < 0.001);
     }
 
     #[test]
