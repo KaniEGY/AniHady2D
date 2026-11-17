@@ -2,7 +2,7 @@
 //! No Google passwords, embedded client secrets or unencrypted refresh tokens.
 //! Backups live in Drive's private appDataFolder, not in the user's visible root.
 //! A Google Cloud *Desktop* OAuth client ID must be provided for public releases.
-use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+use base64::{engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD}, Engine as _};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -12,6 +12,8 @@ use std::{io::{Read, Write},net::TcpListener,path::{Path,PathBuf},
 const SERVICE: &str = "StickStudio.GoogleDrive";
 const SCOPES: &str = "openid email https://www.googleapis.com/auth/drive.appdata";
 const MAX_PROJECT_BYTES: u64 = 80 * 1024 * 1024;
+const MAX_AVATAR_FILE_BYTES: u64 = 8 * 1024 * 1024;
+const MAX_PORTABLE_AVATAR_BYTES: usize = 512 * 1024;
 
 #[derive(Debug,Clone)]
 pub struct CloudFile {
@@ -31,22 +33,70 @@ pub struct CloudProfile {
     pub total_frames_drawn: u64,
     pub total_seconds_spent: u64,
     pub total_painted_layers: u64,
+    // Portable thumbnail, never the private filesystem path of the artist.
+    // Legacy backups without this field remain readable.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub avatar_png: Option<String>,
+}
+fn portable_avatar(path: Option<&str>) -> Option<String> {
+    let path = Path::new(path?);
+    if std::fs::metadata(path).ok()?.len() > MAX_AVATAR_FILE_BYTES { return None; }
+    let original = std::fs::read(path).ok()?;
+    let image = image::load_from_memory(&original).ok()?;
+    if image.width() == 0 || image.height() == 0 ||
+        image.width() > 8192 || image.height() > 8192 { return None; }
+    let thumb = image.thumbnail(256, 256);
+    let mut bytes = Vec::new();
+    thumb.write_to(&mut std::io::Cursor::new(&mut bytes), image::ImageFormat::Png).ok()?;
+    if bytes.len() > MAX_PORTABLE_AVATAR_BYTES { return None; }
+    Some(STANDARD.encode(bytes))
+}
+fn save_portable_avatar(encoded: &str) -> Result<PathBuf, String> {
+    if encoded.len() > (MAX_PORTABLE_AVATAR_BYTES * 4 / 3 + 16) {
+        return Err("Cloud artist picture is too large".into());
+    }
+    let bytes = STANDARD.decode(encoded).map_err(|e| format!("Invalid cloud avatar: {e}"))?;
+    if bytes.is_empty() || bytes.len() > MAX_PORTABLE_AVATAR_BYTES {
+        return Err("Cloud avatar exceeds safe size limit".into());
+    }
+    let (width, height) = image::ImageReader::new(std::io::Cursor::new(bytes.as_slice()))
+        .with_guessed_format().map_err(|e| e.to_string())?
+        .into_dimensions().map_err(|e| e.to_string())?;
+    if width == 0 || height == 0 || width > 512 || height > 512 {
+        return Err("Cloud avatar dimensions exceed 512 pixels".into());
+    }
+    image::load_from_memory(&bytes).map_err(|e| format!("Invalid avatar image: {e}"))?;
+    let base = std::env::var_os("LOCALAPPDATA").map(PathBuf::from)
+        .unwrap_or_else(std::env::temp_dir)
+        .join("StickStudio").join("CloudAvatars");
+    std::fs::create_dir_all(&base).map_err(|e| e.to_string())?;
+    let stamp = SystemTime::now().duration_since(UNIX_EPOCH)
+        .unwrap_or_default().as_nanos();
+    let path = base.join(format!("artist_{stamp}.png"));
+    std::fs::write(&path, &bytes).map_err(|e| e.to_string())?;
+    Ok(path)
 }
 impl CloudProfile {
     pub fn from_user(p:&crate::profile::UserProfile)->Self {
         Self { username:p.username.clone(),xp:p.xp,
             total_frames_drawn:p.total_frames_drawn,
             total_seconds_spent:p.total_seconds_spent,
-            total_painted_layers:p.total_painted_layers }
+            total_painted_layers:p.total_painted_layers,
+            avatar_png:portable_avatar(p.avatar_path.as_deref()) }
     }
-    pub fn apply(&self,p:&mut crate::profile::UserProfile) {
-        // Never take over tokens, cloud account or device-specific avatar paths.
-        p.username=self.username.clone();
+    pub fn apply(&self,p:&mut crate::profile::UserProfile) -> Result<(),String> {
+        // Validate and persist the portable thumbnail before changing progress.
+        // Never take over a cloud account, secret, token or remote file path.
+        let avatar = self.avatar_png.as_deref()
+            .map(save_portable_avatar).transpose()?;
+        p.username=self.username.chars().take(48).collect();
         p.xp=self.xp;
         p.total_frames_drawn=self.total_frames_drawn;
         p.total_seconds_spent=self.total_seconds_spent;
         p.total_painted_layers=self.total_painted_layers;
+        if let Some(path) = avatar { p.avatar_path = Some(path.to_string_lossy().into_owned()); }
         p.save();
+        Ok(())
     }
 }
 #[derive(Debug)]
@@ -350,6 +400,21 @@ mod tests {
         assert_eq!(encode("openid email"),"openid%20email");
         assert!(client_id_check("1234-abc.apps.googleusercontent.com").is_ok());
         assert!(client_id_check("malicious;command").is_err());
+    }
+    #[test]
+    fn profile_backup_never_leaks_local_avatar_path() {
+        let mut profile = crate::profile::UserProfile::default();
+        profile.username = "Cloud Artist".into();
+        profile.xp = 458;
+        profile.avatar_path = Some("C:/PRIVATE/Artist/secrets/avatar.png".into());
+        let record = CloudProfile::from_user(&profile);
+        let data = serde_json::to_string(&record).unwrap();
+        assert_eq!(record.xp, 458);
+        assert!(!data.contains("PRIVATE"));
+        assert!(!data.contains("avatar_path"));
+        assert!(serde_json::from_str::<CloudProfile>(
+            r#"{"username":"Old","xp":12,"total_frames_drawn":0,"total_seconds_spent":0,"total_painted_layers":0}"#
+        ).unwrap().avatar_png.is_none());
     }
     #[test]
     fn cloud_names_never_include_local_parent_paths(){
