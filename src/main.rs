@@ -352,6 +352,10 @@ struct AppConfig {
     timeline_cell_color: [u8; 4],
     #[serde(default = "default_tl_head")]
     timeline_playhead_color: [u8; 4],
+    #[serde(default = "default_ui_panel_color")]
+    ui_panel_color: [u8; 4],
+    #[serde(default = "default_ui_accent_color")]
+    ui_accent_color: [u8; 4],
     #[serde(default = "default_autosave_mins")]
     autosave_interval_minutes: u64,
     tool_select: String,
@@ -394,6 +398,8 @@ fn default_autosave_mins() -> u64 { 5 }
 fn default_tl_bg() -> [u8; 4] { [28, 29, 34, 255] }
 fn default_tl_cell() -> [u8; 4] { [40, 42, 48, 255] }
 fn default_tl_head() -> [u8; 4] { [225, 55, 55, 255] }
+fn default_ui_panel_color() -> [u8; 4] { [30, 31, 36, 255] }
+fn default_ui_accent_color() -> [u8; 4] { [0, 122, 204, 255] }
 fn default_lasso_key() -> String { "L".to_string() }
 fn default_free_tr_key() -> String { "Q".to_string() }
 fn default_vec_sel_key() -> String { "G".to_string() }
@@ -414,6 +420,8 @@ impl Default for AppConfig {
             timeline_bg_color: default_tl_bg(),
             timeline_cell_color: default_tl_cell(),
             timeline_playhead_color: default_tl_head(),
+            ui_panel_color: default_ui_panel_color(),
+            ui_accent_color: default_ui_accent_color(),
             autosave_interval_minutes: 5,
             tool_select: "V".to_string(),
             tool_lasso: "L".to_string(),
@@ -503,6 +511,18 @@ fn setup_custom_fonts(ctx: &egui::Context) {
         fonts.families.entry(egui::FontFamily::Proportional).or_default().insert(0, "arabic_font".to_owned());
     }
     ctx.set_fonts(fonts);
+}
+
+fn apply_user_theme(ctx: &egui::Context, config: &AppConfig) {
+    let mut style = (*ctx.style()).clone();
+    let c = config.ui_panel_color;
+    let a = config.ui_accent_color;
+    style.visuals.panel_fill = egui::Color32::from_rgb(c[0], c[1], c[2]);
+    style.visuals.window_fill = egui::Color32::from_rgb(
+        c[0].saturating_add(7), c[1].saturating_add(7), c[2].saturating_add(7)
+    );
+    style.visuals.selection.bg_fill = egui::Color32::from_rgb(a[0], a[1], a[2]);
+    ctx.set_style(style);
 }
 
 fn apply_stick_theme(ctx: &egui::Context) {
@@ -1789,6 +1809,7 @@ impl eframe::App for StickApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         let lang = self.config.lang;
         let now_time = ctx.input(|i| i.time);
+        apply_user_theme(ctx, &self.config);
         // The shortcut guide is discoverable even when the toolbar is hidden.
         if ctx.input(|i| i.key_pressed(egui::Key::F1)) {
             self.show_shortcuts_dialog = !self.show_shortcuts_dialog;
