@@ -2937,8 +2937,18 @@ impl eframe::App for StickApp {
         let mut frame_menu_action: Option<(usize, usize, timeline_ops::FrameAction)> = None;
         // شريط التايم لاين السفلي في وضع الأنيميشن
         if self.workspace_mode == WorkspaceMode::AnimationStudio {
-            egui::TopBottomPanel::bottom("timeline_panel").resizable(true).default_height(200.0).show(ctx, |ui| {
-                ui.horizontal(|ui| {
+            egui::TopBottomPanel::bottom("timeline_panel").resizable(true).default_height(255.0).show(ctx, |ui| {
+                let bg = self.config.timeline_bg_color;
+                ui.painter().rect_filled(ui.max_rect(), 0.0,
+                    egui::Color32::from_rgb(bg[0],bg[1],bg[2]));
+                ui.horizontal_wrapped(|ui| {
+                    ui.strong(tr(lang, "🎬 TIMELINE", "🎬 التايم لاين"));
+                    if ui.button("⚙").on_hover_text(
+                        tr(lang, "Timeline Settings", "إعدادات التايم لاين")
+                    ).clicked() {
+                        self.show_timeline_settings = true;
+                    }
+                    ui.separator();
                     if ui.button("|<").clicked() { self.current_frame = 1; }
                     if ui.button("<").clicked() && self.current_frame > 1 { self.current_frame -= 1; }
                     if ui.button(if self.is_playing { "Pause" } else { "Play" }).clicked() {
@@ -2975,30 +2985,6 @@ impl eframe::App for StickApp {
                         self.loop_end_frame = self.loop_start_frame;
                     }
                 }
-                ui.collapsing(tr(lang, "Onion Skin Options", "إعدادات الفريمات المجاورة"), |ui| {
-                    ui.label(tr(lang, "Preview nearby frames with faded colors.", "عرض الفريمات القريبة بألوان شفافة للمساعدة في رسم الحركة."));
-                    if ui.add(egui::Slider::new(&mut self.project.onion_skin.frames_before, 0..=6)
-                        .text(tr(lang, "Previous frames", "الفريمات السابقة"))).changed() {
-                        self.has_unsaved_changes = true;
-                    }
-                    if ui.add(egui::Slider::new(&mut self.project.onion_skin.frames_after, 0..=6)
-                        .text(tr(lang, "Next frames", "الفريمات التالية"))).changed() {
-                        self.has_unsaved_changes = true;
-                    }
-                    ui.separator();
-                    let mut prev_opacity = self.project.onion_skin.color_before[3] as f32 / 255.0;
-                    if ui.add(egui::Slider::new(&mut prev_opacity, 0.0..=1.0)
-                        .text(tr(lang, "Previous opacity", "شفافية الفريمات السابقة"))).changed() {
-                        self.project.onion_skin.color_before[3] = (prev_opacity * 255.0).round() as u8;
-                        self.has_unsaved_changes = true;
-                    }
-                    let mut next_opacity = self.project.onion_skin.color_after[3] as f32 / 255.0;
-                    if ui.add(egui::Slider::new(&mut next_opacity, 0.0..=1.0)
-                        .text(tr(lang, "Next opacity", "شفافية الفريمات التالية"))).changed() {
-                        self.project.onion_skin.color_after[3] = (next_opacity * 255.0).round() as u8;
-                        self.has_unsaved_changes = true;
-                    }
-                });
                 ui.separator();
                 ui.horizontal(|ui| {
                     ui.label(tr(lang, "Timeline zoom", "تكبير التايم لاين"));
@@ -3015,14 +3001,18 @@ impl eframe::App for StickApp {
                 let cols = self.timeline_length.max(30);
                 egui::ScrollArea::both().id_salt("timeline_frame_scroller").show(ui, |ui| {
                     ui.horizontal(|ui| {
-                        ui.allocate_ui(egui::vec2(140.0, 20.0), |ui| { ui.strong("Timeline"); });
+                        ui.allocate_ui(egui::vec2(140.0, 26.0), |ui| { ui.strong(tr(lang, "Frames", "الفريمات")); });
                         for f in 1..=cols {
                             let is_c = self.current_frame == f;
-                            let (r, resp) = ui.allocate_exact_size(egui::vec2(cell_w, 20.0), egui::Sense::click_and_drag());
+                            let (r, resp) = ui.allocate_exact_size(egui::vec2(cell_w, 26.0), egui::Sense::click_and_drag());
                             if self.loop_enabled && f >= self.loop_start_frame && f <= self.loop_end_frame {
                                 ui.painter().rect_filled(r.shrink(1.0), 2.0, egui::Color32::from_rgb(57, 103, 83));
                             }
-                            if is_c { ui.painter().rect_filled(r, 2.0, egui::Color32::from_rgb(225, 55, 55)); }
+                            if is_c {
+                                let h = self.config.timeline_playhead_color;
+                                ui.painter().rect_filled(r, 3.0,
+                                    egui::Color32::from_rgb(h[0], h[1], h[2]));
+                            }
                             if is_c || f == 1 || f % 5 == 0 {
                                 ui.painter().text(r.center(), egui::Align2::CENTER_CENTER, format!("{}", f), egui::FontId::proportional(11.0), egui::Color32::WHITE);
                             }
@@ -3034,16 +3024,29 @@ impl eframe::App for StickApp {
                     });
                     for (l_idx, layer) in self.project.layers.iter().enumerate() {
                         ui.horizontal(|ui| {
-                            ui.allocate_ui(egui::vec2(140.0, 22.0), |ui| { ui.label(&layer.name); });
+                            ui.allocate_ui(egui::vec2(140.0, 30.0), |ui| {
+                                ui.label(egui::RichText::new(&layer.name).strong());
+                            });
                             for f in 1..=cols {
                                 let is_b = f > self.timeline_length;
                                 let is_kf = !is_b && layer.keyframes.contains_key(&f);
                                 let eff = if is_b { None } else { Self::get_effective_frame_data(layer, f) };
                                 let has_d = eff.map_or(false, |fd| !fd.strokes.is_empty() || !fd.media_items.is_empty());
                                 let tw = eff.map(|fd| fd.tween_mode).unwrap_or(TweenMode::None);
-                                let (cr, cresp) = ui.allocate_exact_size(egui::vec2(cell_w, 22.0), egui::Sense::click());
-                                let bg = if self.active_layer_idx == l_idx && self.current_frame == f { egui::Color32::from_rgb(0, 122, 204) } else if has_d { egui::Color32::from_rgb(65, 68, 76) } else { egui::Color32::from_rgb(40, 42, 48) };
-                                ui.painter().rect_filled(cr, 2.0, bg);
+                                let (cr, cresp) = ui.allocate_exact_size(egui::vec2(cell_w, 30.0), egui::Sense::click());
+                                let cell = self.config.timeline_cell_color;
+                                let accent = self.config.ui_accent_color;
+                                let bg = if self.active_layer_idx == l_idx && self.current_frame == f {
+                                    egui::Color32::from_rgb(accent[0], accent[1], accent[2])
+                                } else if has_d {
+                                    egui::Color32::from_rgb(
+                                        cell[0].saturating_add(30),
+                                        cell[1].saturating_add(30),
+                                        cell[2].saturating_add(30))
+                                } else {
+                                    egui::Color32::from_rgb(cell[0], cell[1], cell[2])
+                                };
+                                ui.painter().rect_filled(cr.shrink2(egui::vec2(1.0, 2.0)), 4.0, bg);
                                 if !is_b { draw_anicraft_timeline_cell(ui.painter(), cr, is_kf, has_d, tw); }
                                 if cresp.clicked() {
                                     if is_b { self.timeline_length = f; self.project.total_frames = f; }
@@ -3100,6 +3103,53 @@ impl eframe::App for StickApp {
                     }
                 });
             });
+        }
+
+        if self.show_timeline_settings && self.workspace_mode == WorkspaceMode::AnimationStudio {
+            let mut open = self.show_timeline_settings;
+            egui::Window::new(tr(lang, "⚙ Timeline Preferences", "⚙ إعدادات التايم لاين"))
+                .open(&mut open).resizable(true).default_width(430.0)
+                .show(ctx, |ui| {
+                    ui.heading(tr(lang, "Onion Skin", "الأونين سكين"));
+                    if ui.checkbox(&mut self.project.onion_skin.enabled,
+                        tr(lang, "Enable Onion Skin", "تشغيل عرض الفريمات المجاورة")).changed() {
+                        self.has_unsaved_changes = true;
+                    }
+                    ui.separator();
+                    ui.strong(tr(lang, "Previous frames", "الفريمات اللي ورا"));
+                    if ui.add(egui::Slider::new(&mut self.project.onion_skin.frames_before, 0..=12)
+                        .text(tr(lang, "Count", "العدد"))).changed() { self.has_unsaved_changes = true; }
+                    let mut prev_alpha = self.project.onion_skin.color_before[3] as f32 / 255.0;
+                    if ui.add(egui::Slider::new(&mut prev_alpha, 0.0..=1.0)
+                        .text(tr(lang, "Opacity", "الشفافية"))).changed() {
+                        self.project.onion_skin.color_before[3] = (prev_alpha * 255.0).round() as u8;
+                        self.has_unsaved_changes = true;
+                    }
+                    ui.label(tr(lang, "Ghost tint", "لون الفريمات القديمة"));
+                    if ui.color_edit_button_srgba_unmultiplied(&mut self.project.onion_skin.color_before).changed() {
+                        self.has_unsaved_changes = true;
+                    }
+                    ui.separator();
+                    ui.strong(tr(lang, "Next frames", "الفريمات اللي قدام"));
+                    if ui.add(egui::Slider::new(&mut self.project.onion_skin.frames_after, 0..=12)
+                        .text(tr(lang, "Count", "العدد"))).changed() { self.has_unsaved_changes = true; }
+                    let mut next_alpha = self.project.onion_skin.color_after[3] as f32 / 255.0;
+                    if ui.add(egui::Slider::new(&mut next_alpha, 0.0..=1.0)
+                        .text(tr(lang, "Opacity", "الشفافية"))).changed() {
+                        self.project.onion_skin.color_after[3] = (next_alpha * 255.0).round() as u8;
+                        self.has_unsaved_changes = true;
+                    }
+                    ui.label(tr(lang, "Ghost tint", "لون الفريمات الجاية"));
+                    if ui.color_edit_button_srgba_unmultiplied(&mut self.project.onion_skin.color_after).changed() {
+                        self.has_unsaved_changes = true;
+                    }
+                    ui.separator();
+                    ui.label(tr(lang, "Timeline cell width", "عرض الفريم في التايم لاين"));
+                    ui.add(egui::Slider::new(&mut self.timeline_cell_width, 20.0..=90.0));
+                    ui.small(tr(lang, "Drag the Timeline's top border to resize it vertically.",
+                        "اسحب الحافة اللي فوق للتايم لاين عشان تكبره أو تصغّره."));
+                });
+            self.show_timeline_settings = open;
         }
 
         if let Some((layer_index, frame_index, action)) = frame_menu_action {
