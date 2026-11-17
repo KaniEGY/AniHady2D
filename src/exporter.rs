@@ -589,3 +589,66 @@ pub fn extract_video_frames(video_path: &Path, fps: u32) -> Result<Vec<PathBuf>,
     files.sort();
     Ok(files)
 }
+
+#[cfg(test)]
+mod layer_opacity_tests {
+    use super::*;
+    use crate::project::{KritaBrushPreset, Stroke as ProjectStroke, StrokePoint};
+
+    fn project_with_solid_dab(opacity: f32) -> AniProject {
+        let mut project = AniProject::default();
+        project.width = 48;
+        project.height = 48;
+        project.layers[0].opacity = opacity;
+        project.layers[0]
+            .keyframes
+            .get_mut(&1)
+            .unwrap()
+            .strokes
+            .push(ProjectStroke {
+                points: vec![StrokePoint { x: 24.0, y: 24.0, pressure: 1.0 }],
+                color: [240, 30, 20, 255],
+                fill_color: None,
+                base_width: 16.0,
+                is_vector: false,
+                brush_preset: KritaBrushPreset::GPenInk,
+                opacity: 1.0,
+                brush_texture_id: None,
+            });
+        project
+    }
+
+    fn center_alpha(project: &AniProject) -> u8 {
+        render_frame_pixmap(project, 1, true, [0, 0, 0, 0])
+            .pixel(24, 24)
+            .expect("center pixel")
+            .alpha()
+    }
+
+    #[test]
+    fn layer_opacity_changes_export_alpha() {
+        assert_eq!(center_alpha(&project_with_solid_dab(0.0)), 0);
+        assert_eq!(center_alpha(&project_with_solid_dab(1.0)), 255);
+        let half = center_alpha(&project_with_solid_dab(0.5));
+        assert!((125..=130).contains(&half), "expected about 128, got {half}");
+    }
+
+    #[test]
+    fn overlapping_strokes_do_not_square_layer_opacity() {
+        let mut project = project_with_solid_dab(0.5);
+        let duplicate = project.layers[0].keyframes[&1].strokes[0].clone();
+        project.layers[0].keyframes.get_mut(&1).unwrap().strokes.push(duplicate);
+        let alpha = center_alpha(&project);
+        assert!((125..=130).contains(&alpha), "unexpected accumulated layer alpha: {alpha}");
+    }
+
+    #[test]
+    fn hidden_and_guide_layers_do_not_export() {
+        let mut project = project_with_solid_dab(1.0);
+        project.layers[0].visible = false;
+        assert_eq!(center_alpha(&project), 0);
+        project.layers[0].visible = true;
+        project.layers[0].is_guide = true;
+        assert_eq!(center_alpha(&project), 0);
+    }
+}
