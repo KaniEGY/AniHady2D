@@ -611,6 +611,20 @@ mod tests {
             thread::sleep(Duration::from_millis(25));
         }
         assert!(connected, "guest must receive an authenticated project snapshot");
+        let guest_two = OnlineSession::join_room(
+            format!("127.0.0.1:{}", TCP_PORT),
+            "unique-test-password".into(), "Guest Two".into(), 6, OnlineMode::Drawing,
+        ).expect("start second guest");
+        let peer_deadline = std::time::Instant::now() + Duration::from_secs(8);
+        let mut peer_connected = false;
+        while std::time::Instant::now() < peer_deadline {
+            for event in guest_two.events() {
+                if matches!(event, OnlineEvent::Connected(_)) { peer_connected = true; }
+            }
+            if peer_connected { break; }
+            thread::sleep(Duration::from_millis(25));
+        }
+        assert!(peer_connected, "second guest must join the same host room");
         let stroke = Stroke {
             points: vec![], color: [1, 2, 3, 255], fill_color: None,
             base_width: 3.0, is_vector: false,
@@ -654,11 +668,24 @@ mod tests {
             thread::sleep(Duration::from_millis(25));
         }
         assert!(received_edits, "the host must see layer/frame changes");
+        let peer_deadline = std::time::Instant::now() + Duration::from_secs(8);
+        let mut forwarded = false;
+        while std::time::Instant::now() < peer_deadline {
+            for event in guest_two.events() {
+                if let OnlineEvent::Edits(edits) = event {
+                    forwarded = !edits.is_empty();
+                }
+            }
+            if forwarded { break; }
+            thread::sleep(Duration::from_millis(25));
+        }
+        assert!(forwarded, "a layer/frame edit must also reach the OTHER guest");
         let host_document = host.host.as_ref().unwrap().project.lock().unwrap().clone();
         assert_eq!(host_document.layers.len(), 2);
         assert_eq!(host_document.layers[0].name, "Guest's new layer");
         assert!(host_document.layers[0].keyframes.contains_key(&4));
         guest.close();
+        guest_two.close();
         host.close();
     }
 
