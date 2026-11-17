@@ -208,6 +208,18 @@ fn draw_skia_stroke(pixmap: &mut Pixmap, s: &crate::project::Stroke, ts: Transfo
     paint.set_color_rgba8(s.color[0], s.color[1], s.color[2], alpha);
     paint.anti_alias = true;
 
+    // Share the G-Pen pressure sampler with the live canvas preview.
+    if !s.is_vector && s.brush_preset == crate::project::KritaBrushPreset::GPenInk {
+        for dab in crate::brush_engine::sample_pressure_dabs(&s.points, s.base_width) {
+            let mut pb = PathBuilder::new();
+            pb.push_circle(dab.x, dab.y, dab.radius);
+            if let Some(path) = pb.finish() {
+                pixmap.fill_path(&path, &paint, tiny_skia::FillRule::Winding, ts, None);
+            }
+        }
+        return;
+    }
+
     if s.points.len() == 1 {
         let mut pb = PathBuilder::new();
         pb.push_circle(
