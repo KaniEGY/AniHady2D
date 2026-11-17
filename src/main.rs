@@ -2650,11 +2650,7 @@ impl eframe::App for StickApp {
                 if h_resp.clicked() { self.show_credits_dialog = true; }
                 ui.colored_label(egui::Color32::from_rgb(255, 215, 25), "Stick");
                 ui.separator();
-                if ui.add(egui::Button::new(egui::RichText::new("💛").size(18.0))
-                    .frame(false)).on_hover_text(tr(lang, "Support the creator (optional)", "دعم صاحب البرنامج (اختياري)")).clicked() {
-                    self.show_support_dialog = true;
-                }
-                ui.separator();
+
                 let m_lbl = if self.workspace_mode == WorkspaceMode::DrawingOnly { tr(lang, "Switch to Animation", "التبديل للأنيميشن") } else { tr(lang, "Switch to Drawing", "التبديل للرسم") };
                 if ui.button(m_lbl).clicked() {
                     self.workspace_mode = if self.workspace_mode == WorkspaceMode::DrawingOnly { WorkspaceMode::AnimationStudio } else { WorkspaceMode::DrawingOnly };
@@ -3777,6 +3773,24 @@ impl eframe::App for StickApp {
                 }
             }
         });
+
+        // Positioned relative to the full window, not just remaining menu
+        // space: the optional-support heart stays in the TOP CENTER.
+        if !self.show_support_dialog && !self.show_settings_dialog {
+            egui::Area::new(egui::Id::new("center_gold_support_heart"))
+                .anchor(egui::Align2::CENTER_TOP, egui::vec2(0.0, 5.0))
+                .order(egui::Order::Foreground)
+                .show(ctx, |ui| {
+                    let button = egui::Button::new(
+                        egui::RichText::new("♥").size(21.0).strong()
+                            .color(egui::Color32::from_rgb(255, 206, 53))
+                    ).fill(egui::Color32::from_rgb(50, 44, 29));
+                    if ui.add(button).on_hover_text(tr(lang,
+                        "Support Stick (optional)", "دعم البرنامج (اختياري)")).clicked() {
+                        self.show_support_dialog = true;
+                    }
+                });
+        }
     }
 }
 
