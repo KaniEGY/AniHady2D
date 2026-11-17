@@ -197,13 +197,17 @@ fn fix_ar(text: &str) -> String {
     if !text.chars().any(|c| ('\u{0600}'..='\u{06FF}').contains(&c)) {
         return text.to_string();
     }
-    let reshaped = arabic_reshape(text);
-    let bidi_info = BidiInfo::new(&reshaped, None);
-    if bidi_info.paragraphs.is_empty() {
-        return reshaped;
-    }
-    let para = &bidi_info.paragraphs[0];
-    bidi_info.reorder_line(para, para.range.clone()).into_owned()
+    // Shape each line independently: a multiline TextItem must not lose
+    // right-to-left ordering after the first paragraph.
+    text.split('\n').map(|line| {
+        let reshaped = arabic_reshape(line);
+        let bidi_info = BidiInfo::new(&reshaped, None);
+        if let Some(para) = bidi_info.paragraphs.first() {
+            bidi_info.reorder_line(para, para.range.clone()).into_owned()
+        } else {
+            reshaped
+        }
+    }).collect::<Vec<_>>().join("\n")
 }
 
 fn tr(lang: AppLang, en: &str, ar: &str) -> String {
@@ -4244,6 +4248,13 @@ fn main() -> eframe::Result<()> {
 #[cfg(test)]
 mod tool_discovery_tests {
     use super::*;
+
+    #[test]
+    fn arabic_text_keeps_multiple_lines_without_dropping_content() {
+        let joined = fix_ar("مرحبا يا فنان\nمرحبا يا مبدع");
+        assert_eq!(joined.split('\n').count(), 2);
+        assert!(joined.chars().any(|c| ('\u{FB50}'..='\u{FEFF}').contains(&c)));
+    }
 
     #[test]
     fn updater_notice_keeps_arabic_unshaped_until_one_render_pass() {
