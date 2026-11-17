@@ -1022,22 +1022,41 @@ impl StickApp {
 
     fn grant_xp(&mut self, amount: u64, now_time: f64) {
         if self.user_profile.add_xp_check_levelup(amount) {
-            let (new_lvl, _, _) = self.user_profile.get_level_progress();
-            self.level_up_custom_msg = UserProfile::get_level_up_system_message(new_lvl).to_string();
-            self.level_up_banner_timer = now_time + 5.5;
-            self.play_sfx(SfxType::LevelUpFanfare(0));
+            let (level, _, _) = self.user_profile.get_level_progress();
+            let nanos = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos() as u64;
+            let seed = nanos ^ self.user_profile.xp.rotate_left(17) ^ (level as u64 * 31337);
+            self.level_up_custom_msg = profile::level_up_message(
+                (seed % 1000) as usize, self.config.lang == AppLang::Arabic
+            );
+            self.level_up_banner_timer = now_time + 10.0;
+            let sound = profile::level_up_sound_variant(level, self.user_profile.xp, seed);
+            self.play_sfx(SfxType::LevelUpFanfare(sound));
         }
     }
 
     fn record_frame_drawn_activity(&mut self, now_time: f64) {
-        self.user_profile.total_frames_drawn += 1;
-        self.frames_drawn_counter += 1;
-        if self.frames_drawn_counter >= 20 {
-            self.frames_drawn_counter = 0;
-            self.grant_xp(35, now_time);
-        } else {
-            self.user_profile.save();
+        let mut award = 0u64;
+        // Count a unique frame only once within the same project, even if
+        // artists redraw it many times. Persist the marker in the project.
+        if !self.project.xp_credited_frames.contains(&self.current_frame) {
+            self.project.xp_credited_frames.push(self.current_frame);
+            self.user_profile.total_frames_drawn += 1;
+            if self.user_profile.total_frames_drawn % 20 == 0 { award += 50; }
+            self.has_unsaved_changes = true;
         }
+        // Count a layer only when it receives a genuine stroke for the first
+        // time. Duplicates and imported layers are not awarded automatically.
+        if let Some(layer) = self.project.layers.get_mut(self.active_layer_idx) {
+            if !layer.xp_first_paint_rewarded {
+                layer.xp_first_paint_rewarded = true;
+                self.user_profile.total_painted_layers += 1;
+                if self.user_profile.total_painted_layers % 5 == 0 { award += 20; }
+                self.has_unsaved_changes = true;
+            }
+        }
+        if award > 0 { self.grant_xp(award, now_time); }
+        else { self.user_profile.save(); }
     }
 
     fn take_snapshot(&self) -> HistorySnapshot {
@@ -1413,7 +1432,7 @@ impl StickApp {
             let mut fd = FrameData::default();
             fd.media_items.push(MediaItem { path: path.to_string_lossy().to_string(), media_type: MediaType::Image, x: 100.0, y: 50.0, width: 400.0, height: 300.0 });
             kf.insert(self.current_frame, fd);
-            self.project.layers.insert(0, Layer { name: format!("Img_{}", img_name), visible: true, locked: false, is_guide: false, opacity: 1.0, keyframes: kf });
+            self.project.layers.insert(0, Layer { name: format!("Img_{}", img_name), visible: true, locked: false, is_guide: false, xp_first_paint_rewarded: false, opacity: 1.0, keyframes: kf });
             self.active_layer_idx = 0;
             self.has_unsaved_changes = true;
             self.play_sfx(SfxType::NewFrame);
@@ -1463,7 +1482,7 @@ impl StickApp {
                     fd.media_items.push(MediaItem { path: f_path.to_string_lossy().to_string(), media_type: MediaType::VideoFrame, x: 0.0, y: 0.0, width: self.project.width as f32, height: self.project.height as f32 });
                     kf.insert(self.current_frame + i, fd);
                 }
-                self.project.layers.insert(0, Layer { name: "Video_Layer".to_string(), visible: true, locked: false, is_guide: false, opacity: 1.0, keyframes: kf });
+                self.project.layers.insert(0, Layer { name: "Video_Layer".to_string(), visible: true, locked: false, is_guide: false, xp_first_paint_rewarded: false, opacity: 1.0, keyframes: kf });
                 self.active_layer_idx = 0;
                 self.has_unsaved_changes = true;
                 self.play_sfx(SfxType::NewFrame);
@@ -1810,7 +1829,7 @@ impl eframe::App for StickApp {
             let mins = ((now_time - self.last_xp_tick_time) / 60.0).floor() as u64;
             self.last_xp_tick_time += (mins as f64) * 60.0;
             self.user_profile.total_seconds_spent += mins * 60;
-            self.grant_xp(mins, now_time);
+            self.grant_xp(mins.saturating_mul(5), now_time);
         }
 
         if self.current_frame != self.last_scrubbed_frame {
@@ -1821,9 +1840,22 @@ impl eframe::App for StickApp {
         if now_time < self.level_up_banner_timer {
             let (lvl, _, _) = self.user_profile.get_level_progress();
             let rank = self.user_profile.get_hunter_rank();
-            egui::Window::new("SYSTEM_ALERT").title_bar(false).collapsible(false).resizable(false).anchor(egui::Align2::CENTER_TOP, [0.0, 48.0]).show(ctx, |ui| {
+            egui::Window::new("HUNTER_SYSTEM_LEVEL_UP")
+                .title_bar(false).collapsible(false).resizable(false)
+                .anchor(egui::Align2::CENTER_CENTER, [0.0, -22.0])
+                .min_width(360.0)
+                .frame(egui::Frame::window(&ctx.style())
+                    .fill(egui::Color32::from_rgb(14, 20, 33))
+                    .stroke(egui::Stroke::new(2.0, egui::Color32::from_rgb(79, 159, 255)))
+                    .rounding(10.0).inner_margin(22.0))
+                .show(ctx, |ui| {
                 ui.vertical_centered(|ui| {
-                    ui.heading(egui::RichText::new(format!("LEVEL {} ({})", lvl, rank)).size(22.0).color(egui::Color32::from_rgb(250, 204, 21)));
+                    ui.label(egui::RichText::new(tr(lang, "✦ LEVEL UP ✦", "✦ مستوى جديد ✦"))
+                        .size(18.0).strong().color(egui::Color32::from_rgb(88, 205, 255)));
+                    ui.add_space(8.0);
+                    ui.heading(egui::RichText::new(format!("LEVEL {} — {}-Rank", lvl, rank))
+                        .size(26.0).color(egui::Color32::from_rgb(250, 204, 21)));
+                    ui.add_space(6.0);
                     ui.label(egui::RichText::new(fix_ar(&self.level_up_custom_msg)).size(16.0).color(egui::Color32::WHITE));
                 });
             });
@@ -2563,7 +2595,7 @@ impl eframe::App for StickApp {
                     self.save_undo_state();
                     let mut kf = HashMap::new();
                     kf.insert(1, Default::default());
-                    self.project.layers.insert(0, Layer { name: format!("Layer_{}", self.project.layers.len() + 1), visible: true, locked: false, is_guide: false, opacity: 1.0, keyframes: kf });
+                    self.project.layers.insert(0, Layer { name: format!("Layer_{}", self.project.layers.len() + 1), visible: true, locked: false, is_guide: false, xp_first_paint_rewarded: false, opacity: 1.0, keyframes: kf });
                     self.active_layer_idx = 0;
                     self.has_unsaved_changes = true;
                 }
