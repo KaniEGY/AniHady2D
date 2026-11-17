@@ -104,3 +104,14 @@
 - `TOOLS_AUDIT_2026_11_17.md`: table covering all 13 tool paths, automation and Windows GUI follow-up, plus explicit known boundaries.
 - User's standing release preference: publish every tested update by default, unless explicitly told not to. Always keep old releases and rollback; no known-failing build on main.
 - QA: latest PR Windows cargo test/release build plus manual painting/old-project/save/export/2 PC still need verification before stating complete acceptance.
+
+
+## 17 Nov 2026 — online opt-in, brush continuity, vector points and sculpt
+- Branch `fix/online-vector-brush-sculpt-customization-20261117`, starting at `61f26cbe0c0c0390c08d8e85b900b2458092776c`.
+- `src/main.rs`: opt-in network use in lobby (offline by default), no automatic Tailscale discovery on entering lobby, truthful diagnostic for zero permitted Tailscale devices; nonblocking exit dialog; 14-tool toolbar with new Sculpt, configurable vector decimation, selected points via Shift/box, axis translate gizmos, cursor personalization persisted with serde-compatible defaults.
+- `src/stroke_geometry.rs`/`src/brushes.rs`/`src/exporter.rs`: connected pressure-aware G-Pen outline instead of translucent overlapping dabs; removed destructive 4x freehand and 8x vector interpolation at commit. PNG export uses same shape and safe long-line fallback.
+- `src/sculpt_tools.rs`: local radial falloff deformation with bounded point insertion; tests; `src/transform_handles.rs`: axis arrow hitboxes and tests.
+- Source references: AniCraft `src/pathtools.rs` for knot and sub-selection workflow; `src/erasertool.rs` for gesture-based edits; Blender 4.x user screenshots for point select and axis arrows. No third-party code copied.
+- Protocol remains host-based and 8-digit room codes are not global. Tailscale zero peers means no shared/authorized machines visible. Access must be configured outside Stick.
+- CI on latest HEAD and real Windows graphics/multi-PC acceptance must be validated. Full Bézier handles and Blender grease-pencil equivalence are not claimed.
+- User preference: publish complete changes without waiting for green GitHub Action, unless explicitly told not to publish. Maintain historical rollback releases.

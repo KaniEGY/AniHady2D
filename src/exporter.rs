@@ -342,11 +342,33 @@ fn draw_skia_stroke(pixmap: &mut Pixmap, s: &crate::project::Stroke, ts: Transfo
                 }
             }
         }
-        for dab in crate::brush_engine::sample_pressure_dabs(&s.points, s.base_width) {
-            let mut pb = PathBuilder::new();
-            pb.push_circle(dab.x, dab.y, dab.radius);
-            if let Some(path) = pb.finish() {
-                pixmap.fill_path(&path, &paint, tiny_skia::FillRule::Winding, ts, None);
+        let contour=crate::stroke_geometry::pressure_outline(&s.points,s.base_width);
+        if contour.len()>=3 {
+            let mut pb=PathBuilder::new();
+            pb.move_to(contour[0].0,contour[0].1);
+            for &(x,y) in contour.iter().skip(1) { pb.line_to(x,y); }
+            pb.close();
+            if let Some(path)=pb.finish() {
+                pixmap.fill_path(&path,&paint,tiny_skia::FillRule::Winding,ts,None);
+            }
+        } else if s.points.len()==1 {
+            let point=&s.points[0];
+            let mut pb=PathBuilder::new();
+            pb.push_circle(point.x,point.y,(s.base_width*0.5*point.pressure).max(0.25));
+            if let Some(path)=pb.finish() {
+                pixmap.fill_path(&path,&paint,tiny_skia::FillRule::Winding,ts,None);
+            }
+        } else if s.points.len()>=2 {
+            // Very long or self-degenerate paths must still export.
+            let mut pb=PathBuilder::new();
+            pb.move_to(s.points[0].x,s.points[0].y);
+            for p in s.points.iter().skip(1){pb.line_to(p.x,p.y);}
+            if let Some(path)=pb.finish(){
+                let mut brush=Stroke::default();
+                brush.width=s.base_width.max(0.25)*width_scale;
+                brush.line_cap=tiny_skia::LineCap::Round;
+                brush.line_join=tiny_skia::LineJoin::Round;
+                pixmap.stroke_path(&path,&paint,&brush,ts,None);
             }
         }
         return;

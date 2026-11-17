@@ -2,6 +2,8 @@
 
 mod brushes;
 mod brush_engine;
+mod stroke_geometry;
+mod sculpt_tools;
 mod stylus;
 mod updater;
 mod changelog;
@@ -72,6 +74,7 @@ enum ActiveToolUI {
     SelectLasso,
     FreeTransform,
     VectorDirectSelect,
+    Sculpt,
     VectorPen,
     Brush,
     EraserRed,
@@ -258,11 +261,12 @@ fn tr_notice(lang: AppLang, en: &str, ar: &str) -> String {
 }
 
 
-const TOOLBAR_ITEMS: [ActiveToolUI; 13] = [
+const TOOLBAR_ITEMS: [ActiveToolUI; 14] = [
     ActiveToolUI::SelectNormal,
     ActiveToolUI::SelectLasso,
     ActiveToolUI::FreeTransform,
     ActiveToolUI::VectorDirectSelect,
+    ActiveToolUI::Sculpt,
     ActiveToolUI::VectorPen,
     ActiveToolUI::Brush,
     ActiveToolUI::EraserRed,
@@ -280,6 +284,7 @@ fn tool_display_name(tool: ActiveToolUI, lang: AppLang) -> String {
         ActiveToolUI::SelectLasso => ("Lasso", "تحديد حر"),
         ActiveToolUI::FreeTransform => ("Transform", "تحويل"),
         ActiveToolUI::VectorDirectSelect => ("Vector Nodes", "نقاط الفيكتور"),
+        ActiveToolUI::Sculpt => ("Sculpt / Finger", "نحت / صباع"),
         ActiveToolUI::VectorPen => ("Ink Pen", "قلم حبر"),
         ActiveToolUI::Brush => ("Brush", "فرشاة"),
         ActiveToolUI::EraserRed => ("Eraser", "ممحاة"),
@@ -299,6 +304,7 @@ fn tool_shortcut<'a>(tool: ActiveToolUI, config: &'a AppConfig) -> &'a str {
         ActiveToolUI::SelectLasso => &config.tool_lasso,
         ActiveToolUI::FreeTransform => &config.tool_free_transform,
         ActiveToolUI::VectorDirectSelect => &config.tool_vector_select,
+        ActiveToolUI::Sculpt => &config.tool_sculpt,
         ActiveToolUI::VectorPen => &config.tool_pen,
         ActiveToolUI::Brush => &config.tool_brush,
         ActiveToolUI::EraserRed => &config.tool_eraser,
@@ -431,6 +437,12 @@ struct AppConfig {
     ui_accent_color: [u8; 4],
     #[serde(default = "default_autosave_mins")]
     autosave_interval_minutes: u64,
+    #[serde(default = "default_cursor_scale")]
+    brush_cursor_scale: f32,
+    #[serde(default = "default_cursor_scale")]
+    tool_icon_scale: f32,
+    #[serde(default)]
+    icon_cursor_ring: bool,
     tool_select: String,
     #[serde(default = "default_lasso_key")]
     tool_lasso: String,
@@ -439,6 +451,8 @@ struct AppConfig {
     #[serde(default = "default_vec_sel_key")]
     tool_vector_select: String,
     tool_pen: String,
+    #[serde(default = "default_sculpt_key")]
+    tool_sculpt: String,
     tool_brush: String,
     tool_eraser: String,
     #[serde(default = "default_partial_eraser_key")]
@@ -476,6 +490,7 @@ fn default_timeline_height() -> f32 { 310.0 }
 fn default_right_split() -> f32 { 0.45 }
 fn default_grid_size() -> f32 { 40.0 }
 fn default_autosave_mins() -> u64 { 5 }
+fn default_cursor_scale() -> f32 { 1.0 }
 fn default_tl_bg() -> [u8; 4] { [28, 29, 34, 255] }
 fn default_tl_cell() -> [u8; 4] { [40, 42, 48, 255] }
 fn default_tl_head() -> [u8; 4] { [225, 55, 55, 255] }
@@ -484,6 +499,7 @@ fn default_ui_accent_color() -> [u8; 4] { [0, 122, 204, 255] }
 fn default_lasso_key() -> String { "L".to_string() }
 fn default_free_tr_key() -> String { "Q".to_string() }
 fn default_vec_sel_key() -> String { "G".to_string() }
+fn default_sculpt_key() -> String { "J".to_string() }
 fn default_partial_eraser_key() -> String { "T".to_string() }
 fn default_text_key() -> String { "N".to_string() }
 fn default_shape_key() -> String { "U".to_string() }
@@ -518,11 +534,15 @@ impl Default for AppConfig {
             ui_panel_color: default_ui_panel_color(),
             ui_accent_color: default_ui_accent_color(),
             autosave_interval_minutes: 5,
+            brush_cursor_scale: 1.0,
+            tool_icon_scale: 1.0,
+            icon_cursor_ring: false,
             tool_select: "V".to_string(),
             tool_lasso: "L".to_string(),
             tool_free_transform: "Q".to_string(),
             tool_vector_select: "G".to_string(),
             tool_pen: "P".to_string(),
+            tool_sculpt: default_sculpt_key(),
             tool_brush: "B".to_string(),
             tool_eraser: "E".to_string(),
             tool_eraser_partial: "T".to_string(),
@@ -704,6 +724,7 @@ fn get_tool_ui_color(tool: ActiveToolUI) -> egui::Color32 {
         ActiveToolUI::SelectNormal | ActiveToolUI::SelectLasso => egui::Color32::from_rgb(56, 189, 248),
         ActiveToolUI::FreeTransform => egui::Color32::from_rgb(245, 158, 11),
         ActiveToolUI::VectorDirectSelect => egui::Color32::from_rgb(192, 132, 252),
+        ActiveToolUI::Sculpt => egui::Color32::from_rgb(250, 136, 185),
         ActiveToolUI::VectorPen => egui::Color32::from_rgb(139, 92, 246),
         ActiveToolUI::Brush => egui::Color32::from_rgb(249, 115, 22),
         ActiveToolUI::EraserRed => egui::Color32::from_rgb(239, 68, 68),
@@ -724,7 +745,8 @@ fn draw_tool_ui_icon(painter: &egui::Painter, rect: egui::Rect, tool: ActiveTool
     let pale = egui::Color32::from_rgb(234, 245, 255);
     let deep = egui::Color32::from_rgb(39, 43, 62);
     let line = egui::Stroke::new(2.2, primary);
-    let p = |x:f32,y:f32| c+egui::vec2(x,y);
+    let icon_scale=(rect.width()/26.0).clamp(0.6,2.0);
+    let p = |x:f32,y:f32| c+egui::vec2(x*icon_scale,y*icon_scale);
     match tool {
         ActiveToolUI::SelectNormal => {
             painter.add(egui::Shape::convex_polygon(
@@ -759,6 +781,11 @@ fn draw_tool_ui_icon(painter: &egui::Painter, rect: egui::Rect, tool: ActiveTool
                 painter.circle_filled(*point,1.0,pale);
             }
             painter.line_segment([p(-5.,9.),p(9.,-9.)],egui::Stroke::new(1.0,primary));
+        }
+        ActiveToolUI::Sculpt => {
+            painter.circle_stroke(p(-3.,-2.),8.0,egui::Stroke::new(2.0,primary));
+            painter.line_segment([p(-8.,7.),p(7.,-8.)],egui::Stroke::new(3.4,primary));
+            painter.circle_filled(p(7.,-8.),3.0,pale);
         }
         ActiveToolUI::VectorPen => {
             painter.add(egui::Shape::convex_polygon(
@@ -943,6 +970,7 @@ fn build_geometric_stroke(kind: GeometricShapeKind, p0: egui::Pos2, p1: egui::Po
 struct StickApp {
     workspace_mode: WorkspaceMode,
     online_page: OnlinePage,
+    online_enabled: bool,
     online_mode: OnlineMode,
     online_room_name: String,
     online_password: String,
@@ -998,8 +1026,16 @@ struct StickApp {
     shape_drag_current: Option<egui::Pos2>,
     selected_stroke_indices: Vec<usize>,
     selected_vector_node: Option<(usize, usize)>,
+    selected_vector_nodes: Vec<(usize,usize)>,
+    vector_marquee_start: Option<egui::Pos2>,
+    vector_marquee_current: Option<egui::Pos2>,
+    vector_axis_drag: Option<char>,
+    vector_tolerance: f32,
+    sculpt_radius: f32,
+    sculpt_strength: f32,
     transform_drag_anchor: Option<egui::Pos2>,
     transform_rotate_pivot: Option<egui::Pos2>,
+    transform_axis: Option<char>,
     lasso_dragging_selection: bool,
     selected_text_item_index: Option<usize>,
     selection_rect_start: Option<egui::Pos2>,
@@ -1076,6 +1112,7 @@ impl StickApp {
         Self {
             workspace_mode: initial_mode,
             online_page: OnlinePage::ChooseMode,
+            online_enabled: false,
             online_mode: OnlineMode::Drawing,
             online_room_name: "My Studio".to_owned(),
             online_password: String::new(),
@@ -1131,8 +1168,16 @@ impl StickApp {
             shape_drag_current: None,
             selected_stroke_indices: Vec::new(),
             selected_vector_node: None,
+            selected_vector_nodes: Vec::new(),
+            vector_marquee_start: None,
+            vector_marquee_current: None,
+            vector_axis_drag: None,
+            vector_tolerance: 2.7,
+            sculpt_radius: 64.0,
+            sculpt_strength: 0.65,
             transform_drag_anchor: None,
             transform_rotate_pivot: None,
+            transform_axis: None,
             lasso_dragging_selection: false,
             selected_text_item_index: None,
             selection_rect_start: None,
@@ -1309,6 +1354,26 @@ impl StickApp {
                 ui.add_space(10.0);
                 ui.label(tr(lang, "Your computer hosts the room. No dedicated Stick server.",
                     "جهاز صاحب الغرفة هو الهوست، بدون سيرفر مخصص للبرنامج."));
+                ui.add_space(12.0);
+                if ui.checkbox(&mut self.online_enabled,
+                    tr(lang, "Enable online networking for this session",
+                        "تشغيل اتصال الأونلاين للجلسة دي فقط")).changed() {
+                    if !self.online_enabled {
+                        if let Some(session)=self.online_session.take(){session.close();}
+                        self.online_discovery=None;
+                        self.online_remote_info=None;
+                        self.online_rooms.clear();
+                    }
+                }
+                if !self.online_enabled {
+                    ui.colored_label(egui::Color32::from_rgb(238,192,110),
+                        tr(lang, "Offline mode. No room discovery or host connection runs until you enable online.",
+                            "وضع أوفلاين: لا بحث عن غرف ولا اتصال بسيرفر قبل ما تشغّل الأونلاين بنفسك."));
+                    if ui.button(tr(lang, "Back to start", "الرجوع للرئيسية")).clicked(){
+                        self.workspace_mode=WorkspaceMode::Launcher;
+                    }
+                    return;
+                }
                 ui.add_space(18.0);
                 match self.online_page {
                     OnlinePage::ChooseMode => {
@@ -1422,6 +1487,11 @@ impl StickApp {
                             if info.connected {
                                 ui.colored_label(egui::Color32::LIGHT_GREEN,
                                     format!("Tailscale connected • {} visible friend devices", info.peers.len()));
+                                if info.peers.is_empty() {
+                                    ui.colored_label(egui::Color32::from_rgb(255,192,104),
+                                        tr(lang, "No permitted Tailscale peers. Share the host device with your friend or invite them to the same tailnet, then refresh.",
+                                            "Tailscale متصل لكن مفيش أجهزة أصحاب مسموح لها تظهر. شارك جهاز الهوست مع صاحبك أو ضيفه لنفس الشبكة، وبعدين حدث الغرف."));
+                                }
                             } else {
                                 ui.label(tr(lang,
                                     "Internet friends: install Tailscale, sign in and share the host device or join the same tailnet.",
@@ -1530,7 +1600,10 @@ impl StickApp {
                 ui.add_space(20.0);
                 if ui.button(tr(lang, "Back", "رجوع")).clicked() {
                     match self.online_page {
-                        OnlinePage::ChooseMode => self.workspace_mode = WorkspaceMode::Launcher,
+                        OnlinePage::ChooseMode => {
+                            self.workspace_mode = WorkspaceMode::Launcher;
+                            self.online_enabled = false;
+                        },
                         OnlinePage::ChooseAction => self.online_page = OnlinePage::ChooseMode,
                         OnlinePage::CreateRoom | OnlinePage::JoinRoom => {
                             if let Some(session) = self.online_session.take() { session.close(); }
@@ -2392,6 +2465,15 @@ impl StickApp {
                     if ui.button(" ↺ 15° ").clicked() { self.save_undo_state(); self.transform_selected_items(1.0, -15.0, false, false); }
                 });
             }
+            ActiveToolUI::Sculpt => {
+                ui.strong(tr(lang,"Sculpt / Finger (J)","النحت / الصباع (J)"));
+                ui.label(tr(lang,"Drag nearby linework to reshape it with soft falloff.",
+                    "اسحب جزء من الخط لتحريكه بنعومة من غير تحريك الرسمة كلها."));
+                ui.add(egui::Slider::new(&mut self.sculpt_radius,8.0..=360.0)
+                    .text(tr(lang,"Radius","حجم التأثير")));
+                ui.add(egui::Slider::new(&mut self.sculpt_strength,0.05..=1.0)
+                    .text(tr(lang,"Strength","قوة التأثير")));
+            }
             ActiveToolUI::VectorPen => {
                 ui.strong(tr(lang, "Vector Ink Pen (P)", "قلم الفيكتور الثابت (بدون ذيل)"));
                 ui.horizontal(|ui| {
@@ -2401,6 +2483,10 @@ impl StickApp {
                 ui.add(egui::Slider::new(&mut self.brush_size, 1.0..=100.0).show_value(false));
                 ui.add(egui::Slider::new(&mut self.brush_opacity, 0.0..=1.0)
                     .text(tr(lang, "Opacity", "الشفافية")));
+                ui.add(egui::Slider::new(&mut self.vector_tolerance,0.4..=8.0)
+                    .text(tr(lang,"Node reduction","تقليل النقاط")));
+                ui.small(tr(lang,"Right-click the Vector Pen for advanced options.",
+                    "كلك يمين على قلم الفيكتور هتلاقي إعدادات متقدمة."));
             }
             ActiveToolUI::Brush => {
                 ui.strong(tr(lang, "Brushes (Icon Presets)", "اختر الفرشة بالأيقونة"));
@@ -2636,7 +2722,8 @@ impl eframe::App for StickApp {
                         self.online_page = OnlinePage::ChooseMode;
                         self.online_message.clear();
                         self.workspace_mode = WorkspaceMode::OnlineLobby;
-                        self.refresh_online_rooms();
+                        // Merely viewing the lobby must not probe the network.
+                        // Networking starts only after explicit opt-in.
                     }
                 });
                 ui.add_space(16.0);
@@ -2707,7 +2794,7 @@ impl eframe::App for StickApp {
             now, ctrl_z, ctrl_y, ctrl_s, ctrl_shift_s, ctrl_c, ctrl_v, ctrl_k, shift_f5, del_pressed, f10_pressed,
             space_down, ctrl_down, alt_down, zoom_in_nav, zoom_out_nav, pan_right_nav, pan_left_nav,
             scroll_y, close_req, pointer_down, pointer_pressed, pointer_released, pointer_pos,
-            sc_select, sc_lasso, sc_free_tr, sc_vec_sel, sc_pen, sc_brush, sc_eraser, sc_eraser_partial,
+            sc_select, sc_lasso, sc_free_tr, sc_vec_sel, sc_sculpt, sc_pen, sc_brush, sc_eraser, sc_eraser_partial,
             sc_bucket, sc_eyedropper, sc_text, sc_shape, sc_hand, sc_del_frame, sc_f5, sc_f6, sc_f7, sc_f8,
             sc_play, sc_prev, sc_next, sc_smaller, sc_larger, sc_reset_canvas, pressed_key_name,
         ) = ctx.input(|i| {
@@ -2748,6 +2835,7 @@ impl eframe::App for StickApp {
                 is_shortcut_pressed(i, &self.config.tool_lasso),
                 is_shortcut_pressed(i, &self.config.tool_free_transform),
                 is_shortcut_pressed(i, &self.config.tool_vector_select),
+                is_shortcut_pressed(i, &self.config.tool_sculpt),
                 is_shortcut_pressed(i, &self.config.tool_pen),
                 is_shortcut_pressed(i, &self.config.tool_brush),
                 is_shortcut_pressed(i, &self.config.tool_eraser),
@@ -2790,15 +2878,16 @@ impl eframe::App for StickApp {
                 1 => self.config.tool_lasso = k_name,
                 2 => self.config.tool_free_transform = k_name,
                 3 => self.config.tool_vector_select = k_name,
-                4 => self.config.tool_pen = k_name,
-                5 => self.config.tool_brush = k_name,
-                6 => self.config.tool_eraser = k_name,
-                7 => self.config.tool_eraser_partial = k_name,
-                8 => self.config.tool_bucket = k_name,
-                9 => self.config.tool_eyedropper = k_name,
-                10 => self.config.tool_text = k_name,
-                11 => self.config.tool_shape = k_name,
-                12 => self.config.tool_hand = k_name,
+                4 => self.config.tool_sculpt = k_name,
+                5 => self.config.tool_pen = k_name,
+                6 => self.config.tool_brush = k_name,
+                7 => self.config.tool_eraser = k_name,
+                8 => self.config.tool_eraser_partial = k_name,
+                9 => self.config.tool_bucket = k_name,
+                10 => self.config.tool_eyedropper = k_name,
+                11 => self.config.tool_text = k_name,
+                12 => self.config.tool_shape = k_name,
+                13 => self.config.tool_hand = k_name,
                 _ => {}
             }
             self.config.save();
@@ -2846,6 +2935,7 @@ impl eframe::App for StickApp {
             if sc_lasso { self.active_tool_ui = ActiveToolUI::SelectLasso; }
             if sc_free_tr { self.active_tool_ui = ActiveToolUI::FreeTransform; }
             if sc_vec_sel { self.active_tool_ui = ActiveToolUI::VectorDirectSelect; }
+            if sc_sculpt { self.active_tool_ui = ActiveToolUI::Sculpt; }
             if sc_pen { self.active_tool_ui = ActiveToolUI::VectorPen; }
             if sc_brush { self.active_tool_ui = ActiveToolUI::Brush; }
             if sc_eraser { self.active_tool_ui = ActiveToolUI::EraserRed; }
@@ -3320,6 +3410,15 @@ impl eframe::App for StickApp {
                         ui.small(tr(lang, "Hide panels to maximize canvas space. Your choices are saved.",
                             "اخفي اللي مش محتاجه عشان تكبر مساحة الرسم. الاختيارات بتتحفظ."));
                         let mut changed = false;
+                        ui.separator();
+                        ui.strong(tr(lang,"Tool cursor personalization","تخصيص مؤشر أدوات الرسم"));
+                        changed |= ui.add(egui::Slider::new(&mut self.config.brush_cursor_scale,0.4..=2.5)
+                            .text(tr(lang,"Brush cursor size","حجم مؤشر الفرشة"))).changed();
+                        changed |= ui.add(egui::Slider::new(&mut self.config.tool_icon_scale,0.6..=2.0)
+                            .text(tr(lang,"Tool icon under cursor","حجم أيقونة الأداة جنب الماوس"))).changed();
+                        changed |= ui.checkbox(&mut self.config.icon_cursor_ring,
+                            tr(lang,"Show circle around tool cursor icon","إظهار الدائرة حول أيقونة الأداة")).changed();
+                        ui.separator();
                         changed |= ui.checkbox(&mut self.config.show_left_dock,
                             tr(lang, "Left tools panel", "قائمة الأدوات على الشمال")).changed();
                         changed |= ui.checkbox(&mut self.config.show_right_dock,
@@ -3523,15 +3622,28 @@ impl eframe::App for StickApp {
                 ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
                 self.show_exit_dialog = true;
             } else {
-                play_sfx_async(self.config.sound_effects_enabled, SfxType::ExitFarewell, true);
+                // Never block window teardown on an audio device/worker.
+                // The old wait_finish=true could keep Windows waiting forever.
+                self.allow_close = true;
             }
         }
 
         if self.show_exit_dialog {
             egui::Window::new("Exit").collapsible(false).resizable(false).anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0]).show(ctx, |ui| {
                 ui.horizontal(|ui| {
-                    if ui.button("Save & Exit").clicked() && self.trigger_save() { self.allow_close = true; ctx.send_viewport_cmd(egui::ViewportCommand::Close); }
-                    if ui.button("Exit").clicked() { self.allow_close = true; ctx.send_viewport_cmd(egui::ViewportCommand::Close); }
+                    if ui.button(tr(lang,"Save & Exit","احفظ واخرج")).clicked() && self.trigger_save() {
+                        self.show_exit_dialog=false;
+                        self.allow_close = true;
+                        if let Some(session)=self.online_session.take(){session.close();}
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                    }
+                    if ui.button(tr(lang,"Exit without saving","اخرج من غير حفظ")).clicked() {
+                        self.show_exit_dialog=false;
+                        self.allow_close = true;
+                        if let Some(session)=self.online_session.take(){session.close();}
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                    }
+                    if ui.button(tr(lang,"Cancel","إلغاء")).clicked(){self.show_exit_dialog=false;}
                 });
             });
         }
@@ -3576,6 +3688,10 @@ impl eframe::App for StickApp {
             if leave {
                 if let Some(session) = self.online_session.take() { session.close(); }
                 self.online_participants.clear();
+                self.online_enabled = false;
+                self.online_discovery = None;
+                self.online_remote_info = None;
+                self.online_rooms.clear();
                 self.workspace_mode = WorkspaceMode::Launcher;
             }
         }
@@ -3721,6 +3837,35 @@ impl eframe::App for StickApp {
                             ui.strong(tr(lang, "Quick tool options", "اختيارات الأداة السريعة"));
                             ui.separator();
                             match tool {
+                                ActiveToolUI::Sculpt => {
+                                    ui.add(egui::Slider::new(&mut self.sculpt_radius,8.0..=360.0)
+                                        .text(tr(lang,"Radius","حجم الصباع")));
+                                    ui.add(egui::Slider::new(&mut self.sculpt_strength,0.05..=1.0)
+                                        .text(tr(lang,"Strength","القوة")));
+                                }
+                                ActiveToolUI::VectorDirectSelect | ActiveToolUI::VectorPen => {
+                                    ui.label(tr(lang,"Editable Vector Nodes","نقاط الفيكتور القابلة للتعديل"));
+                                    ui.add(egui::Slider::new(&mut self.vector_tolerance,0.4..=8.0)
+                                        .text(tr(lang,"Simplify amount","تقليل النقط")));
+                                    if ui.button(tr(lang,"Simplify selected strokes","قلل نقاط الخطوط المحددة")).clicked(){
+                                        self.save_undo_state();
+                                        self.ensure_editable_keyframe();
+                                        if let Some(layer)=self.project.layers.get_mut(self.active_layer_idx){
+                                            if let Some(frame)=layer.keyframes.get_mut(&self.current_frame){
+                                                for (idx,stroke) in frame.strokes.iter_mut().enumerate(){
+                                                    if stroke.is_vector && (self.selected_stroke_indices.is_empty()
+                                                        || self.selected_stroke_indices.contains(&idx)){
+                                                        stroke.simplify_vector_nodes(self.vector_tolerance);
+                                                        self.has_unsaved_changes=true;
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        self.selected_vector_nodes.clear();
+                                        self.selected_vector_node=None;
+                                        ui.close_menu();
+                                    }
+                                }
                                 ActiveToolUI::ShapeLine => {
                                     for (kind, en, ar) in [
                                         (GeometricShapeKind::StraightLine, "Line", "خط"),
@@ -3753,8 +3898,7 @@ impl eframe::App for StickApp {
                                         }
                                     }
                                 }
-                                ActiveToolUI::EraserRed | ActiveToolUI::EraserGreen
-                                | ActiveToolUI::VectorPen => {
+                                ActiveToolUI::EraserRed | ActiveToolUI::EraserGreen => {
                                     ui.add(egui::Slider::new(&mut self.brush_size, 1.0..=120.0)
                                         .text(tr(lang, "Size", "الحجم")));
                                 }
@@ -4479,7 +4623,8 @@ impl eframe::App for StickApp {
 
             let is_inside_stage = pointer_pos.map_or(false, |p| stage_rect.contains(p) && canvas_rect.contains(p));
             let custom_brush_cursor = matches!(self.active_tool_ui,
-                ActiveToolUI::Brush | ActiveToolUI::VectorPen | ActiveToolUI::EraserRed | ActiveToolUI::EraserGreen);
+                ActiveToolUI::Brush | ActiveToolUI::VectorPen | ActiveToolUI::Sculpt
+                    | ActiveToolUI::EraserRed | ActiveToolUI::EraserGreen);
             let show_dot = is_inside_stage && !any_modal_open && !space_down && !alt_down && custom_brush_cursor;
             let show_tool_icon = is_inside_stage && !any_modal_open && !space_down
                 && !alt_down && !custom_brush_cursor && self.active_tool_ui != ActiveToolUI::HandCanvas;
@@ -4727,6 +4872,29 @@ impl eframe::App for StickApp {
                                 self.brush_color = color;
                             }
                         }
+                        ActiveToolUI::Sculpt if pointer_down => {
+                            if pointer_pressed { self.save_undo_state(); }
+                            if !pointer_pressed && !self.is_active_layer_locked() {
+                                if let Some(previous)=self.last_pointer_pos {
+                                    let previous=to_stage(previous);
+                                    let movement=stage_pos-previous;
+                                    if movement.length_sq()>0.00001 {
+                                        self.ensure_editable_keyframe();
+                                        if let Some(layer)=self.project.layers.get_mut(self.active_layer_idx){
+                                            if let Some(frame)=layer.keyframes.get_mut(&self.current_frame){
+                                                if sculpt_tools::sculpt(
+                                                    &mut frame.strokes,
+                                                    (previous.x,previous.y),
+                                                    (movement.x,movement.y),
+                                                    self.sculpt_radius,self.sculpt_strength){
+                                                    self.has_unsaved_changes=true;
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
                         ActiveToolUI::VectorPen if pointer_down => {
                             if let Some(stroke) = &mut self.current_stroke {
                                 if let Some(last) = stroke.points.last() {
@@ -4758,26 +4926,84 @@ impl eframe::App for StickApp {
                         }
                         ActiveToolUI::VectorDirectSelect => {
                             if pointer_pressed {
-                                self.selected_vector_node = self.project.layers.get(self.active_layer_idx)
+                                let vector_pivot=self.project.layers.get(self.active_layer_idx)
                                     .and_then(|layer| {
-                                        let frame = self.project.evaluate_layer_at_frame(layer, self.current_frame);
-                                        selection_tools::nearest_vector_node(
-                                            &frame.strokes, stage_pos, (14.0 / scale).max(2.0)
-                                        )
+                                        let frame=self.project.evaluate_layer_at_frame(layer,self.current_frame);
+                                        let pts:Vec<_>=self.selected_vector_nodes.iter().filter_map(|&(si,pi)|
+                                            frame.strokes.get(si)?.points.get(pi)).collect();
+                                        (!pts.is_empty()).then(|| {
+                                            let x=pts.iter().map(|p|p.x).sum::<f32>()/pts.len() as f32;
+                                            let y=pts.iter().map(|p|p.y).sum::<f32>()/pts.len() as f32;
+                                            egui::pos2(x,y)
+                                        })
                                     });
-                                if self.selected_vector_node.is_some() {
+                                let axis=vector_pivot.and_then(|pivot|
+                                    transform_handles::translation_axis(
+                                        egui::Rect::from_center_size(pivot,egui::vec2(1.,1.)),
+                                        stage_pos,scale));
+                                if let Some(axis)=axis {
+                                    self.vector_axis_drag=Some(axis);
                                     self.save_undo_state();
+                                } else {
+                                self.vector_axis_drag=None;
+                                let picked=self.project.layers.get(self.active_layer_idx)
+                                    .and_then(|layer| {
+                                        let frame=self.project.evaluate_layer_at_frame(
+                                            layer,self.current_frame);
+                                        selection_tools::nearest_vector_node(
+                                            &frame.strokes,stage_pos,(13.0/scale).max(2.0))
+                                    });
+                                let extend=ctx.input(|i|i.modifiers.shift);
+                                if let Some(node)=picked {
+                                    if extend {
+                                        if let Some(i)=self.selected_vector_nodes.iter().position(|&p|p==node){
+                                            self.selected_vector_nodes.remove(i);
+                                        }else{self.selected_vector_nodes.push(node);}
+                                    }else if !self.selected_vector_nodes.contains(&node) {
+                                        self.selected_vector_nodes=vec![node];
+                                    }
+                                    self.selected_vector_node=Some(node);
+                                    self.vector_marquee_start=None;
+                                    self.vector_marquee_current=None;
+                                    self.save_undo_state();
+                                } else {
+                                    if !extend {self.selected_vector_nodes.clear();}
+                                    self.selected_vector_node=None;
+                                    self.vector_marquee_start=Some(stage_pos);
+                                    self.vector_marquee_current=Some(stage_pos);
                                 }
-                            } else if pointer_down && delta.length_sq() > 0.0 {
-                                if let Some((stroke_index, node_index)) = self.selected_vector_node {
-                                    self.ensure_editable_keyframe();
-                                    if let Some(layer) = self.project.layers.get_mut(self.active_layer_idx) {
-                                        if let Some(frame) = layer.keyframes.get_mut(&self.current_frame) {
-                                            if let Some(stroke) = frame.strokes.get_mut(stroke_index) {
-                                                if let Some(node) = stroke.points.get_mut(node_index) {
-                                                    node.x += delta.x;
-                                                    node.y += delta.y;
-                                                    self.has_unsaved_changes = true;
+                                } // regular vertex selection, not the axis gizmo
+                            } else if pointer_down && self.vector_marquee_start.is_some() {
+                                self.vector_marquee_current=Some(stage_pos);
+                            } else if pointer_down && delta.length_sq()>0.0
+                                && !self.selected_vector_nodes.is_empty()
+                                && !self.is_active_layer_locked() {
+                                let nodes=self.selected_vector_nodes.clone();
+                                let constrained=match self.vector_axis_drag {
+                                    Some('x')=>egui::vec2(delta.x,0.),
+                                    Some('y')=>egui::vec2(0.,delta.y),
+                                    _=>delta,
+                                };
+                                self.ensure_editable_keyframe();
+                                if let Some(layer)=self.project.layers.get_mut(self.active_layer_idx){
+                                    if let Some(frame)=layer.keyframes.get_mut(&self.current_frame){
+                                        for (si,pi) in nodes {
+                                            if let Some(stroke)=frame.strokes.get_mut(si){
+                                                let len=stroke.points.len();
+                                                if let Some(point)=stroke.points.get_mut(pi){
+                                                    point.x+=constrained.x;
+                                                    point.y+=constrained.y;
+                                                    self.has_unsaved_changes=true;
+                                                }
+                                                // A closed contour must stay closed when
+                                                // dragging either coincident endpoint.
+                                                if len>2 && (pi==0||pi==len-1){
+                                                    let first=stroke.points[0].clone();
+                                                    let last=stroke.points[len-1].clone();
+                                                    if (first.x-last.x).hypot(first.y-last.y)<25.0 {
+                                                        if pi==0 {stroke.points[len-1]=first;}
+                                                        else {stroke.points[0]=last;}
+                                                    }
                                                 }
                                             }
                                         }
@@ -4795,9 +5021,16 @@ impl eframe::App for StickApp {
                                 let resize_anchor = if self.active_tool_ui == ActiveToolUI::FreeTransform {
                                     bounds.and_then(|rect| transform_handles::resize_anchor(rect, stage_pos, scale))
                                 } else { None };
+                                let move_axis = bounds.and_then(|rect|
+                                    transform_handles::translation_axis(rect, stage_pos, scale));
                                 let reuse_selection = bounds.is_some_and(|rect| rect.contains(stage_pos))
                                     && (!self.selected_stroke_indices.is_empty() || self.selected_text_item_index.is_some());
-                                if let Some(pivot) = rotate_pivot {
+                                if let Some(axis)=move_axis {
+                                    self.save_undo_state();
+                                    self.transform_axis=Some(axis);
+                                    self.transform_drag_anchor=None;
+                                    self.transform_rotate_pivot=None;
+                                } else if let Some(pivot) = rotate_pivot {
                                     self.save_undo_state();
                                     self.transform_rotate_pivot = Some(pivot);
                                     self.transform_drag_anchor = None;
@@ -4806,10 +5039,12 @@ impl eframe::App for StickApp {
                                     self.transform_drag_anchor = Some(anchor);
                                     self.transform_rotate_pivot = None;
                                 } else if reuse_selection {
+                                    self.transform_axis=None;
                                     self.save_undo_state();
                                     self.transform_drag_anchor = None;
                                     self.transform_rotate_pivot = None;
                                 } else {
+                                self.transform_axis=None;
                                 self.transform_drag_anchor = None;
                                 self.transform_rotate_pivot = None;
                                 self.selected_stroke_indices.clear();
@@ -4838,7 +5073,12 @@ impl eframe::App for StickApp {
                                 }
                                 } // finished regular selection; otherwise grabbed transform handle
                             } else if pointer_down {
-                                if let Some(pivot) = self.transform_rotate_pivot {
+                                if let Some(axis)=self.transform_axis {
+                                    let movement=if axis=='x'{
+                                        egui::vec2(delta.x,0.0)
+                                    }else{egui::vec2(0.0,delta.y)};
+                                    self.move_selected_items(movement);
+                                } else if let Some(pivot) = self.transform_rotate_pivot {
                                     if let Some(previous) = self.last_pointer_pos {
                                         let prev = to_stage(previous) - pivot;
                                         let curr = stage_pos - pivot;
@@ -4889,8 +5129,32 @@ impl eframe::App for StickApp {
             }
 
             if pointer_released {
+                self.vector_axis_drag=None;
+                if let (Some(start),Some(end))=(
+                    self.vector_marquee_start.take(),self.vector_marquee_current.take()){
+                    let rect=egui::Rect::from_two_pos(start,end);
+                    if rect.width()>3.0 || rect.height()>3.0 {
+                        let extend=ctx.input(|i|i.modifiers.shift);
+                        if !extend {self.selected_vector_nodes.clear();}
+                        if let Some(layer)=self.project.layers.get(self.active_layer_idx){
+                            let frame=self.project.evaluate_layer_at_frame(layer,self.current_frame);
+                            for (si,stroke) in frame.strokes.iter().enumerate(){
+                                if !stroke.is_vector {continue;}
+                                for (pi,p) in stroke.points.iter().enumerate(){
+                                    let key=(si,pi);
+                                    if rect.contains(egui::pos2(p.x,p.y))
+                                        && !self.selected_vector_nodes.contains(&key)
+                                        && self.selected_vector_nodes.len()<4_000 {
+                                        self.selected_vector_nodes.push(key);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
                 self.transform_drag_anchor = None;
                 self.transform_rotate_pivot = None;
+                self.transform_axis = None;
                 self.lasso_dragging_selection = false;
                 if let (Some(start), Some(end)) = (
                     self.selection_rect_start.take(), self.selection_rect_current.take()
@@ -4949,10 +5213,14 @@ impl eframe::App for StickApp {
                         }
                     }
                     if stroke.is_vector {
-                        stroke.simplify_vector_nodes(2.2);
-                        stroke.fit_cubic_bezier_spline(8);
+                        // Keep control points editable. Eightfold Catmull-Rom
+                        // expansion was causing thousands of artificial nodes.
+                        stroke.simplify_vector_nodes(self.vector_tolerance);
                     } else {
-                        stroke.fit_cubic_bezier_spline(4);
+                        // Freehand already has samples + smoothing stabilizer.
+                        // Adding four Catmull-Rom subdivisions overshoots sharp
+                        // turns and makes visibly broken/looped brush segments.
+                        // Keep the true pointer trajectory.
                     }
                     self.commit_stroke_with_symmetry(stroke, now_time);
                 }
@@ -5078,6 +5346,22 @@ impl eframe::App for StickApp {
                     painter.rect_stroke(screen_bounds, 0.0, egui::Stroke::new(
                         1.6, egui::Color32::from_rgb(54, 194, 255)
                     ));
+                    // Two axis arrows remain visible after selecting artwork.
+                    // Drag red for X only, cyan for Y only; corner squares and
+                    // rotation remain available through Free Transform.
+                    let origin=to_screen(bounds.center());
+                    for (end,col,label) in [
+                        (bounds.center()+egui::vec2(52.0/scale,0.0),
+                            egui::Color32::from_rgb(244,78,86),"X"),
+                        (bounds.center()+egui::vec2(0.0,-52.0/scale),
+                            egui::Color32::from_rgb(60,192,244),"Y")
+                    ] {
+                        let tip=to_screen(end);
+                        painter.line_segment([origin,tip],egui::Stroke::new(3.0,col));
+                        painter.circle_filled(tip,10.0,col);
+                        painter.text(tip,egui::Align2::CENTER_CENTER,label,
+                            egui::FontId::proportional(11.0),egui::Color32::BLACK);
+                    }
                     if self.active_tool_ui == ActiveToolUI::FreeTransform {
                         let top = to_screen(bounds.center_top());
                         let handle = to_screen(bounds.center_top()
@@ -5099,6 +5383,33 @@ impl eframe::App for StickApp {
                     }
                 }
             }
+            if let (Some(a),Some(b))=(self.vector_marquee_start,self.vector_marquee_current){
+                painter.rect_stroke(egui::Rect::from_two_pos(to_screen(a),to_screen(b)),0.0,
+                    egui::Stroke::new(1.4,egui::Color32::from_rgb(255,169,75)));
+            }
+            if self.active_tool_ui == ActiveToolUI::VectorDirectSelect
+                && !self.selected_vector_nodes.is_empty() {
+                if let Some(layer)=self.project.layers.get(self.active_layer_idx){
+                    let frame=self.project.evaluate_layer_at_frame(layer,self.current_frame);
+                    let pts:Vec<_>=self.selected_vector_nodes.iter().filter_map(|&(si,pi)|
+                        frame.strokes.get(si)?.points.get(pi)).collect();
+                    if !pts.is_empty(){
+                        let center=egui::pos2(
+                            pts.iter().map(|p|p.x).sum::<f32>()/pts.len() as f32,
+                            pts.iter().map(|p|p.y).sum::<f32>()/pts.len() as f32);
+                        for (end,col,label) in [
+                            (center+egui::vec2(52./scale,0.),egui::Color32::from_rgb(244,78,86),"X"),
+                            (center+egui::vec2(0.,-52./scale),egui::Color32::from_rgb(60,192,244),"Y")
+                        ]{
+                            painter.line_segment([to_screen(center),to_screen(end)],
+                                egui::Stroke::new(2.7,col));
+                            painter.circle_filled(to_screen(end),9.,col);
+                            painter.text(to_screen(end),egui::Align2::CENTER_CENTER,label,
+                                egui::FontId::proportional(11.0),egui::Color32::BLACK);
+                        }
+                    }
+                }
+            }
             if self.active_tool_ui == ActiveToolUI::VectorDirectSelect {
                 if let Some(layer) = self.project.layers.get(self.active_layer_idx) {
                     if layer.visible {
@@ -5110,7 +5421,7 @@ impl eframe::App for StickApp {
                                 if nodes_drawn >= 1_500 { break; }
                                 let p = to_screen(egui::pos2(node.x, node.y));
                                 if canvas_rect.contains(p) {
-                                    let selected = self.selected_vector_node == Some((stroke_index, node_index));
+                                    let selected = self.selected_vector_nodes.contains(&(stroke_index,node_index));
                                     let color = if selected {
                                         egui::Color32::from_rgb(255, 202, 58)
                                     } else {
@@ -5141,8 +5452,15 @@ impl eframe::App for StickApp {
             }
             if show_dot {
                 if let Some(p) = pointer_pos {
-                    let radius = (self.brush_size * self.zoom_level * 0.5).clamp(2.5, 125.0);
-                    if self.active_tool_ui == ActiveToolUI::EraserRed
+                    let radius = ((if self.active_tool_ui == ActiveToolUI::Sculpt {
+                        self.sculpt_radius * scale
+                    } else { self.brush_size * self.zoom_level * 0.5 })
+                        * self.config.brush_cursor_scale.clamp(0.4,2.5)).clamp(2.0,500.0);
+                    if self.active_tool_ui == ActiveToolUI::Sculpt {
+                        painter.circle_stroke(p,radius,egui::Stroke::new(1.8,
+                            egui::Color32::from_rgb(247,141,197)));
+                        painter.circle_filled(p,2.5,egui::Color32::from_rgb(247,141,197));
+                    } else if self.active_tool_ui == ActiveToolUI::EraserRed
                         || self.active_tool_ui == ActiveToolUI::EraserGreen {
                         let color = if self.active_tool_ui == ActiveToolUI::EraserRed {
                             egui::Color32::from_rgb(255, 96, 113)
@@ -5188,17 +5506,20 @@ impl eframe::App for StickApp {
                 }
             } else if show_tool_icon {
                 if let Some(p) = pointer_pos {
+                    let icon_size=(26.0*self.config.tool_icon_scale.clamp(0.6,2.0)).max(16.0);
                     let rect = egui::Rect::from_min_size(p + egui::vec2(8.0, 7.0),
-                        egui::vec2(26.0, 26.0));
+                        egui::vec2(icon_size, icon_size));
                     let tool_color = self.online_participants.iter()
                         .find(|participant| self.online_session.is_some()
                             && participant.name == self.user_profile.username)
                         .map(|p| egui::Color32::from_rgb(p.color[0],p.color[1],p.color[2]))
                         .unwrap_or_else(|| get_tool_ui_color(self.active_tool_ui));
-                    painter.circle_filled(rect.center(), 14.0,
-                        egui::Color32::from_rgba_unmultiplied(24, 27, 36, 180));
-                    painter.circle_stroke(rect.center(), 14.0,
-                        egui::Stroke::new(1.2, tool_color));
+                    if self.config.icon_cursor_ring {
+                        painter.circle_filled(rect.center(), icon_size*0.54,
+                            egui::Color32::from_rgba_unmultiplied(24, 27, 36, 180));
+                        painter.circle_stroke(rect.center(), icon_size*0.54,
+                            egui::Stroke::new(1.2, tool_color));
+                    }
                     draw_tool_ui_icon(&painter, rect, self.active_tool_ui, false);
                 }
             }
