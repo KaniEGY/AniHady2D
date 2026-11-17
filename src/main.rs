@@ -1,6 +1,7 @@
 #![windows_subsystem = "windows"]
 
 mod brushes;
+mod brush_engine;
 mod changelog;
 mod exporter;
 mod persistence;
