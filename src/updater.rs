@@ -11,7 +11,7 @@ const MAX_EXE_SIZE: u64 = 350 * 1024 * 1024;
 const RELEASE_EXE_NAME: &str = "Stick.exe";
 const RELEASE_URL_PREFIX: &str = "https://github.com/KaniEGY/Stick/releases/download/";
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ReleaseInfo {
     pub version: String,
     pub url: String,
