@@ -8,6 +8,10 @@ mod changelog;
 mod exporter;
 mod persistence;
 mod onion_skin;
+mod fill_tools;
+mod selection_tools;
+mod layer_ops;
+mod timeline_ops;
 mod profile;
 mod project;
 
@@ -186,6 +190,15 @@ fn tr(lang: AppLang, en: &str, ar: &str) -> String {
     match lang {
         AppLang::English => en.to_string(),
         AppLang::Arabic => fix_ar(ar),
+    }
+}
+
+// Notification strings are shaped once in the notice window itself.
+// Using tr() here would reshape Arabic twice and scramble its word order.
+fn tr_notice(lang: AppLang, en: &str, ar: &str) -> String {
+    match lang {
+        AppLang::English => en.to_string(),
+        AppLang::Arabic => ar.to_string(),
     }
 }
 
@@ -766,12 +779,18 @@ struct StickApp {
     active_krita_brush: KritaBrushPreset,
     brush_opacity: f32,
     selected_shape_kind: GeometricShapeKind,
+    shape_fill_enabled: bool,
+    pending_delete_layer: Option<usize>,
     symmetry_mode: SymmetryMode,
     stabilizer_strength: f32,
     stabilized_cursor: Option<egui::Pos2>,
     shape_drag_start: Option<egui::Pos2>,
     shape_drag_current: Option<egui::Pos2>,
     selected_stroke_indices: Vec<usize>,
+    selected_text_item_index: Option<usize>,
+    selection_rect_start: Option<egui::Pos2>,
+    selection_rect_current: Option<egui::Pos2>,
+    lasso_points: Vec<egui::Pos2>,
     custom_anchor_offset: egui::Vec2,
     brush_color: [u8; 4],
     stage_bg_color: [u8; 4],
@@ -861,12 +880,18 @@ impl StickApp {
             active_krita_brush: KritaBrushPreset::GPenInk,
             brush_opacity: 1.0,
             selected_shape_kind: GeometricShapeKind::StraightLine,
+            shape_fill_enabled: false,
+            pending_delete_layer: None,
             symmetry_mode: SymmetryMode::Off,
             stabilizer_strength: 0.30,
             stabilized_cursor: None,
             shape_drag_start: None,
             shape_drag_current: None,
             selected_stroke_indices: Vec::new(),
+            selected_text_item_index: None,
+            selection_rect_start: None,
+            selection_rect_current: None,
+            lasso_points: Vec::new(),
             custom_anchor_offset: egui::Vec2::ZERO,
             brush_color: [0, 0, 0, 255],
             stage_bg_color: [255, 255, 255, 255],
@@ -1014,6 +1039,10 @@ impl StickApp {
         self.current_frame = snap.current_frame.clamp(1, self.timeline_length);
         self.active_layer_idx = snap.active_layer_idx.min(self.project.layers.len().saturating_sub(1));
         self.selected_stroke_indices.clear();
+        self.selected_text_item_index = None;
+        self.selection_rect_start = None;
+        self.selection_rect_current = None;
+        self.lasso_points.clear();
     }
 
     fn save_undo_state(&mut self) {
@@ -1458,8 +1487,8 @@ impl StickApp {
 
     fn download_and_apply_update(&mut self, info: updater::ReleaseInfo, ctx: egui::Context) {
         if self.has_unsaved_changes || self.current_stroke.is_some() {
-            self.project_notice_title = tr(self.config.lang, "Save your work first", "احفظ شغلك الأول");
-            self.project_notice_body = tr(
+            self.project_notice_title = tr_notice(self.config.lang, "Save your work first", "احفظ شغلك الأول");
+            self.project_notice_body = tr_notice(
                 self.config.lang,
                 "Save your open project (Ctrl+S), then click Install again. We won't restart and lose unsaved work.",
                 "احفظ المشروع المفتوح (Ctrl+S)، وبعد كده اضغط تثبيت تاني. البرنامج مش هيقفل ويضيّع شغلك.",
@@ -1489,8 +1518,8 @@ impl StickApp {
 
     fn restart_with_new_exe(&mut self, version: String, staged_exe: PathBuf) {
         if self.has_unsaved_changes || self.current_stroke.is_some() {
-            self.project_notice_title = tr(self.config.lang, "Save before restarting", "احفظ قبل إعادة التشغيل");
-            self.project_notice_body = tr(
+            self.project_notice_title = tr_notice(self.config.lang, "Save before restarting", "احفظ قبل إعادة التشغيل");
+            self.project_notice_body = tr_notice(
                 self.config.lang,
                 "You have unsaved changes. Save your project, then restart the update.",
                 "عندك تعديلات لسه متحفظتش. احفظ المشروع وبعدها كمّل التحديث.",
@@ -1619,6 +1648,8 @@ impl StickApp {
                     ui.add(egui::DragValue::new(&mut self.brush_size).range(1.0..=100.0));
                 });
                 ui.add(egui::Slider::new(&mut self.brush_size, 1.0..=100.0).show_value(false));
+                ui.add(egui::Slider::new(&mut self.brush_opacity, 0.0..=1.0)
+                    .text(tr(lang, "Opacity", "الشفافية")));
             }
             ActiveToolUI::Brush => {
                 ui.strong(tr(lang, "Brushes (Icon Presets)", "اختر الفرشة بالأيقونة"));
@@ -1667,6 +1698,12 @@ impl StickApp {
                 ui.radio_value(&mut self.selected_shape_kind, GeometricShapeKind::Circle, tr(lang, "Circle", "دائرة"));
                 ui.radio_value(&mut self.selected_shape_kind, GeometricShapeKind::Square, tr(lang, "Square", "مربع"));
                 ui.radio_value(&mut self.selected_shape_kind, GeometricShapeKind::Rectangle, tr(lang, "Rectangle", "مستطيل"));
+                ui.separator();
+                ui.add(egui::Slider::new(&mut self.brush_size, 1.0..=120.0)
+                    .text(tr(lang, "Outline Size", "سُمك حدود الشكل")));
+                ui.add(egui::Slider::new(&mut self.brush_opacity, 0.0..=1.0)
+                    .text(tr(lang, "Opacity", "شفافية الشكل")));
+                ui.checkbox(&mut self.shape_fill_enabled, tr(lang, "Fill shape", "لوّن جوّه الشكل"));
             }
             ActiveToolUI::EraserRed | ActiveToolUI::EraserGreen => {
                 ui.strong(tr(lang, "Eraser Properties", "خصائص الممحاة"));
@@ -1674,11 +1711,16 @@ impl StickApp {
                     if ui.selectable_label(self.active_tool_ui == ActiveToolUI::EraserRed, tr(lang, "Red (Full E)", "حمراء (كامل E)")).clicked() { self.active_tool_ui = ActiveToolUI::EraserRed; }
                     if ui.selectable_label(self.active_tool_ui == ActiveToolUI::EraserGreen, tr(lang, "Green (Part T)", "خضراء (جزئي T)")).clicked() { self.active_tool_ui = ActiveToolUI::EraserGreen; }
                 });
-                ui.add(egui::Slider::new(&mut self.brush_size, 2.0..=120.0));
+                ui.add(egui::Slider::new(&mut self.brush_size, 2.0..=120.0)
+                    .text(tr(lang, "Eraser Size", "حجم الممحاة")));
             }
             ActiveToolUI::Text => {
                 ui.strong(tr(lang, "Text Properties", "خصائص النص"));
                 ui.add(egui::DragValue::new(&mut self.text_font_size).range(10.0..=180.0));
+                ui.small(tr(lang, "To move text, switch to Selection (V), click the text, then drag.",
+                    "عشان تحرك النص: اختار تحديد (V)، دوس على النص واسحبه."));
+                ui.add(egui::Slider::new(&mut self.brush_opacity, 0.0..=1.0)
+                    .text(tr(lang, "Text Opacity", "شفافية النص")));
             }
             ActiveToolUI::HandCanvas => {
                 ui.strong(tr(lang, "Canvas Orientation", "تدوير وعكس الكانفا"));
@@ -1985,7 +2027,9 @@ impl eframe::App for StickApp {
             if sc_hand { self.active_tool_ui = ActiveToolUI::HandCanvas; }
             if sc_smaller { self.brush_size = (self.brush_size - 2.0).max(1.0); }
             if sc_larger { self.brush_size = (self.brush_size + 2.0).min(120.0); }
-            if del_pressed && !self.selected_stroke_indices.is_empty() {
+            if del_pressed && (!self.selected_stroke_indices.is_empty() || self.selected_text_item_index.is_some())
+                && !self.is_active_layer_locked()
+            {
                 self.save_undo_state();
                 self.ensure_editable_keyframe();
                 if let Some(layer) = self.project.layers.get_mut(self.active_layer_idx) {
@@ -1994,7 +2038,11 @@ impl eframe::App for StickApp {
                         to_rem.sort_unstable_by(|a, b| b.cmp(a));
                         to_rem.dedup();
                         for idx in to_rem { if idx < frame.strokes.len() { frame.strokes.remove(idx); } }
+                        if let Some(index) = self.selected_text_item_index.take() {
+                            if index < frame.text_items.len() { frame.text_items.remove(index); }
+                        }
                         self.selected_stroke_indices.clear();
+                        self.has_unsaved_changes = true;
                     }
                 }
             }
@@ -2450,8 +2498,14 @@ impl eframe::App for StickApp {
             });
         });
 
-        // اللوحة اليمنى
-        egui::SidePanel::right("right_panel").resizable(true).default_width(270.0).show(ctx, |ui| {
+        // Scrolling the properties panel must scroll PROPERTIES, never the
+        // canvas or artwork. The canvas zoom handler runs only in CentralPanel.
+        let mut layer_menu_action: Option<(usize, layer_ops::LayerAction)> = None;
+        egui::SidePanel::right("right_panel").resizable(true).default_width(280.0).show(ctx, |ui| {
+            egui::ScrollArea::vertical()
+                .id_salt("tool_properties_scroll")
+                .auto_shrink([false, false])
+                .show(ui, |ui| {
             self.render_tool_properties_ui(ui, lang);
             ui.add_space(8.0);
             ui.separator();
@@ -2497,32 +2551,88 @@ impl eframe::App for StickApp {
                     self.active_layer_idx = 0;
                     self.has_unsaved_changes = true;
                 }
-                if self.project.layers.len() > 1 && self.active_layer_idx + 1 < self.project.layers.len() {
-                    if ui.small_button("Merge ↓").clicked() {
-                        self.save_undo_state();
-                        let top = self.project.layers.remove(self.active_layer_idx);
-                        if let Some(below) = self.project.layers.get_mut(self.active_layer_idx) {
-                            if let Some(tfd) = top.keyframes.get(&1) { below.keyframes.entry(1).or_default().strokes.extend(tfd.strokes.clone()); }
-                        }
-                        self.has_unsaved_changes = true;
-                    }
+                if ui.small_button(tr(lang, "Duplicate", "نسخ اللير"))
+                    .on_hover_text(tr(lang, "Duplicate selected layer", "اعمل نسخة من اللير")).clicked() {
+                    layer_menu_action = Some((self.active_layer_idx, layer_ops::LayerAction::Duplicate));
+                }
+                if ui.add_enabled(self.active_layer_idx > 0, egui::Button::new("↑"))
+                    .on_hover_text(tr(lang, "Move Layer Up", "حرّك اللير لفوق")).clicked() {
+                    layer_menu_action = Some((self.active_layer_idx, layer_ops::LayerAction::MoveUp));
+                }
+                if ui.add_enabled(self.active_layer_idx + 1 < self.project.layers.len(), egui::Button::new("↓"))
+                    .on_hover_text(tr(lang, "Move Layer Down", "حرّك اللير لتحت")).clicked() {
+                    layer_menu_action = Some((self.active_layer_idx, layer_ops::LayerAction::MoveDown));
                 }
             });
             if let Some(al) = self.project.layers.get_mut(self.active_layer_idx) {
                 ui.horizontal(|ui| {
-                    ui.label("Opacity:");
-                    ui.add(egui::Slider::new(&mut al.opacity, 0.05..=1.0));
+                    ui.label(tr(lang, "Layer Opacity", "شفافية اللير"));
+                    if ui.add(egui::Slider::new(&mut al.opacity, 0.0..=1.0)).changed() {
+                        self.has_unsaved_changes = true;
+                    }
                 });
             }
+            let can_delete_layers = self.project.layers.len() > 1;
             for (idx, layer) in self.project.layers.iter_mut().enumerate() {
                 ui.horizontal(|ui| {
-                    ui.checkbox(&mut layer.visible, "");
-                    if ui.small_button(if layer.locked { "🔒" } else { "🔓" }).clicked() { layer.locked = !layer.locked; }
-                    if ui.selectable_label(self.active_layer_idx == idx, &layer.name).clicked() { self.active_layer_idx = idx; }
+                    if ui.checkbox(&mut layer.visible, "")
+                        .on_hover_text(tr(lang, "Show or hide layer", "أظهر أو اخفي اللير")).changed() {
+                        self.has_unsaved_changes = true;
+                    }
+                    if ui.small_button(if layer.locked { "🔒" } else { "🔓" })
+                        .on_hover_text(tr(lang, "Lock or unlock layer", "اقفل أو افتح قفل اللير")).clicked() {
+                        layer.locked = !layer.locked;
+                        self.has_unsaved_changes = true;
+                    }
+                    if ui.selectable_label(self.active_layer_idx == idx, &layer.name).clicked() {
+                        self.active_layer_idx = idx;
+                        self.selected_stroke_indices.clear();
+                    }
+                    if ui.add_enabled(can_delete_layers && !layer.locked,
+                        egui::Button::new("×"))
+                        .on_hover_text(tr(lang, "Delete Layer", "احذف اللير")).clicked() {
+                        self.pending_delete_layer = Some(idx);
+                    }
                 });
             }
+                }); // property scroll
         });
+        if let Some(index) = self.pending_delete_layer {
+            let layer_name = self.project.layers.get(index).map(|l| l.name.clone()).unwrap_or_default();
+            egui::Window::new(tr(lang, "Delete Layer?", "عايز تحذف اللير؟"))
+                .collapsible(false).resizable(false)
+                .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+                .show(ctx, |ui| {
+                    ui.label(format!("{}: {}", tr(lang, "Layer", "اللير"), layer_name));
+                    ui.label(tr(lang, "This removes the whole layer. You can undo it.",
+                        "ده هيمسح اللير كله. وتقدر ترجع بالتراجع."));
+                    ui.horizontal(|ui| {
+                        if ui.button(tr(lang, "Cancel", "إلغاء")).clicked() {
+                            self.pending_delete_layer = None;
+                        }
+                        if ui.button(tr(lang, "Delete Layer", "احذف اللير")).clicked() {
+                            layer_menu_action = Some((index, layer_ops::LayerAction::Delete));
+                            self.pending_delete_layer = None;
+                        }
+                    });
+                });
+        }
+        if let Some((index, action)) = layer_menu_action {
+            self.save_undo_state();
+            match layer_ops::apply_layer_action(&mut self.project, index, action) {
+                Ok(new_index) => {
+                    self.active_layer_idx = new_index;
+                    self.selected_stroke_indices.clear();
+                    self.has_unsaved_changes = true;
+                }
+                Err(reason) => {
+                    self.undo_stack.pop();
+                    self.status_message = reason.to_owned();
+                }
+            }
+        }
 
+        let mut frame_menu_action: Option<(usize, usize, timeline_ops::FrameAction)> = None;
         // شريط التايم لاين السفلي في وضع الأنيميشن
         if self.workspace_mode == WorkspaceMode::AnimationStudio {
             egui::TopBottomPanel::bottom("timeline_panel").resizable(true).default_height(200.0).show(ctx, |ui| {
@@ -2534,7 +2644,7 @@ impl eframe::App for StickApp {
                         if self.is_playing { self.start_audio_playback(); } else { self.stop_audio_playback(); }
                     }
                     if ui.button(">").clicked() && self.current_frame < self.timeline_length { self.current_frame += 1; }
-                    ui.toggle_value(&mut self.loop_enabled, "🔁 Loop");
+                    ui.toggle_value(&mut self.loop_enabled, tr(lang, "🔁 Loop Range", "🔁 تكرار جزء"));
                     ui.label(format!("{}f / {}f", self.current_frame, self.timeline_length));
                     if ui.button("Frame (F5)").clicked() { self.action_insert_frame_f5(); }
                     if ui.button("Keyframe (F6)").clicked() { self.action_insert_keyframe_f6(now_time); }
@@ -2546,6 +2656,23 @@ impl eframe::App for StickApp {
                         self.has_unsaved_changes = true;
                     }
                 });
+                if self.loop_enabled {
+                    ui.horizontal(|ui| {
+                        ui.label(tr(lang, "Repeat from", "كرر من فريم"));
+                        ui.add(egui::DragValue::new(&mut self.loop_start_frame).range(1..=self.timeline_length.max(1)));
+                        ui.label(tr(lang, "to", "لحد"));
+                        ui.add(egui::DragValue::new(&mut self.loop_end_frame).range(1..=self.timeline_length.max(1)));
+                        if ui.small_button(tr(lang, "Start = current", "البداية = الحالي")).clicked() {
+                            self.loop_start_frame = self.current_frame;
+                        }
+                        if ui.small_button(tr(lang, "End = current", "النهاية = الحالي")).clicked() {
+                            self.loop_end_frame = self.current_frame;
+                        }
+                    });
+                    if self.loop_start_frame > self.loop_end_frame {
+                        self.loop_end_frame = self.loop_start_frame;
+                    }
+                }
                 ui.collapsing(tr(lang, "Onion Skin Options", "إعدادات الفريمات المجاورة"), |ui| {
                     ui.label(tr(lang, "Preview nearby frames with faded colors.", "عرض الفريمات القريبة بألوان شفافة للمساعدة في رسم الحركة."));
                     if ui.add(egui::Slider::new(&mut self.project.onion_skin.frames_before, 0..=6)
@@ -2556,16 +2683,43 @@ impl eframe::App for StickApp {
                         .text(tr(lang, "Next frames", "الفريمات التالية"))).changed() {
                         self.has_unsaved_changes = true;
                     }
+                    ui.separator();
+                    let mut prev_opacity = self.project.onion_skin.color_before[3] as f32 / 255.0;
+                    if ui.add(egui::Slider::new(&mut prev_opacity, 0.0..=1.0)
+                        .text(tr(lang, "Previous opacity", "شفافية الفريمات السابقة"))).changed() {
+                        self.project.onion_skin.color_before[3] = (prev_opacity * 255.0).round() as u8;
+                        self.has_unsaved_changes = true;
+                    }
+                    let mut next_opacity = self.project.onion_skin.color_after[3] as f32 / 255.0;
+                    if ui.add(egui::Slider::new(&mut next_opacity, 0.0..=1.0)
+                        .text(tr(lang, "Next opacity", "شفافية الفريمات التالية"))).changed() {
+                        self.project.onion_skin.color_after[3] = (next_opacity * 255.0).round() as u8;
+                        self.has_unsaved_changes = true;
+                    }
                 });
                 ui.separator();
+                ui.horizontal(|ui| {
+                    ui.label(tr(lang, "Timeline zoom", "تكبير التايم لاين"));
+                    ui.add(egui::Slider::new(&mut self.timeline_cell_width, 16.0..=84.0)
+                        .show_value(false));
+                    if ui.small_button(tr(lang, "+24 frames", "زوّد 24 فريم")).clicked() {
+                        self.save_undo_state();
+                        self.timeline_length = self.timeline_length.saturating_add(24).min(20_000);
+                        self.project.total_frames = self.timeline_length;
+                        self.has_unsaved_changes = true;
+                    }
+                });
                 let cell_w = self.timeline_cell_width;
                 let cols = self.timeline_length.max(30);
-                egui::ScrollArea::both().show(ui, |ui| {
+                egui::ScrollArea::both().id_salt("timeline_frame_scroller").show(ui, |ui| {
                     ui.horizontal(|ui| {
                         ui.allocate_ui(egui::vec2(140.0, 20.0), |ui| { ui.strong("Timeline"); });
                         for f in 1..=cols {
                             let is_c = self.current_frame == f;
                             let (r, resp) = ui.allocate_exact_size(egui::vec2(cell_w, 20.0), egui::Sense::click_and_drag());
+                            if self.loop_enabled && f >= self.loop_start_frame && f <= self.loop_end_frame {
+                                ui.painter().rect_filled(r.shrink(1.0), 2.0, egui::Color32::from_rgb(57, 103, 83));
+                            }
                             if is_c { ui.painter().rect_filled(r, 2.0, egui::Color32::from_rgb(225, 55, 55)); }
                             if is_c || f == 1 || f % 5 == 0 {
                                 ui.painter().text(r.center(), egui::Align2::CENTER_CENTER, format!("{}", f), egui::FontId::proportional(11.0), egui::Color32::WHITE);
@@ -2594,11 +2748,86 @@ impl eframe::App for StickApp {
                                     self.active_layer_idx = l_idx;
                                     self.current_frame = f;
                                 }
+                                let is_locked = layer.locked;
+                                let can_delete_global = self.timeline_length > 1
+                                    && self.project.layers.iter().all(|l| !l.locked);
+                                cresp.context_menu(|ui| {
+                                    ui.strong(format!("{} — {}", layer.name, f));
+                                    ui.separator();
+                                    if ui.button(tr(lang, "Copy Frame", "انسخ الفريم")).clicked() {
+                                        frame_menu_action = Some((l_idx, f, timeline_ops::FrameAction::Copy));
+                                        ui.close_menu();
+                                    }
+                                    if ui.add_enabled(!is_locked && self.clipboard_frame.is_some(),
+                                        egui::Button::new(tr(lang, "Paste Frame", "الصق الفريم"))).clicked() {
+                                        frame_menu_action = Some((l_idx, f, timeline_ops::FrameAction::Paste));
+                                        ui.close_menu();
+                                    }
+                                    ui.separator();
+                                    if ui.add_enabled(!is_locked, egui::Button::new(
+                                        tr(lang, "Create Keyframe", "اعمل كي فريم"))).clicked() {
+                                        frame_menu_action = Some((l_idx, f, timeline_ops::FrameAction::Keyframe));
+                                        ui.close_menu();
+                                    }
+                                    if ui.add_enabled(!is_locked, egui::Button::new(
+                                        tr(lang, "Blank Keyframe", "كي فريم فاضي"))).clicked() {
+                                        frame_menu_action = Some((l_idx, f, timeline_ops::FrameAction::BlankKeyframe));
+                                        ui.close_menu();
+                                    }
+                                    if ui.add_enabled(!is_locked, egui::Button::new(
+                                        tr(lang, "Clear Frame", "امسح محتوى الفريم"))).clicked() {
+                                        frame_menu_action = Some((l_idx, f, timeline_ops::FrameAction::Clear));
+                                        ui.close_menu();
+                                    }
+                                    if ui.add_enabled(!is_locked && layer.keyframes.contains_key(&f),
+                                        egui::Button::new(tr(lang, "Delete Keyframe", "احذف الكي فريم"))).clicked() {
+                                        frame_menu_action = Some((l_idx, f, timeline_ops::FrameAction::DeleteKeyframe));
+                                        ui.close_menu();
+                                    }
+                                    if ui.add_enabled(can_delete_global, egui::Button::new(
+                                        tr(lang, "Delete Time (all layers)", "احذف زمن الفريم من كل الليرز"))).clicked() {
+                                        frame_menu_action = Some((l_idx, f, timeline_ops::FrameAction::DeleteFrame));
+                                        ui.close_menu();
+                                    }
+                                    if !can_delete_global {
+                                        ui.small(tr(lang, "Unlock layers before deleting time.", "افتح قفل الليرز عشان تحذف الزمن."));
+                                    }
+                                });
                             }
                         });
                     }
                 });
             });
+        }
+
+        if let Some((layer_index, frame_index, action)) = frame_menu_action {
+            match action {
+                timeline_ops::FrameAction::Copy => self.copy_frame(layer_index, frame_index),
+                timeline_ops::FrameAction::Paste => {
+                    if self.project.layers.get(layer_index).is_some_and(|layer| !layer.locked) {
+                        self.paste_frame(layer_index, frame_index);
+                    }
+                }
+                edit => {
+                    // Save a single undo snapshot; only one frame command
+                    // executes per context-menu selection.
+                    self.save_undo_state();
+                    match timeline_ops::apply_frame_edit(&mut self.project, layer_index, frame_index, edit) {
+                        Ok(()) => {
+                            self.timeline_length = self.project.total_frames;
+                            self.current_frame = frame_index.min(self.timeline_length);
+                            self.active_layer_idx = layer_index.min(self.project.layers.len().saturating_sub(1));
+                            self.loop_end_frame = self.loop_end_frame.min(self.timeline_length).max(1);
+                            self.loop_start_frame = self.loop_start_frame.min(self.loop_end_frame).max(1);
+                            self.has_unsaved_changes = true;
+                        }
+                        Err(reason) => {
+                            self.undo_stack.pop();
+                            self.status_message = reason.to_string();
+                        }
+                    }
+                }
+            }
         }
 
         self.preload_frame_textures(ctx);
@@ -2613,8 +2842,23 @@ impl eframe::App for StickApp {
             let stage_rect = egui::Rect::from_center_size(center, egui::vec2(stage_w, stage_h) * scale);
 
             let is_inside_stage = pointer_pos.map_or(false, |p| stage_rect.contains(p) && canvas_rect.contains(p));
-            let show_dot = is_inside_stage && !any_modal_open && !space_down && !alt_down && self.active_tool_ui != ActiveToolUI::HandCanvas;
-            ctx.set_cursor_icon(if show_dot { egui::CursorIcon::None } else if space_down || self.active_tool_ui == ActiveToolUI::HandCanvas { egui::CursorIcon::Grab } else { egui::CursorIcon::Default });
+            let custom_brush_cursor = matches!(self.active_tool_ui,
+                ActiveToolUI::Brush | ActiveToolUI::VectorPen | ActiveToolUI::EraserRed | ActiveToolUI::EraserGreen);
+            let show_dot = is_inside_stage && !any_modal_open && !space_down && !alt_down && custom_brush_cursor;
+            let tool_cursor = if show_dot {
+                egui::CursorIcon::None
+            } else if space_down || self.active_tool_ui == ActiveToolUI::HandCanvas {
+                egui::CursorIcon::Grab
+            } else {
+                match self.active_tool_ui {
+                    ActiveToolUI::Text => egui::CursorIcon::Text,
+                    ActiveToolUI::Bucket | ActiveToolUI::ShapeLine
+                        | ActiveToolUI::SelectNormal | ActiveToolUI::SelectLasso
+                        | ActiveToolUI::Eyedropper => egui::CursorIcon::Crosshair,
+                    _ => egui::CursorIcon::Default,
+                }
+            };
+            ctx.set_cursor_icon(tool_cursor);
 
             let is_over_canvas = pointer_pos.map_or(false, |p| canvas_rect.contains(p));
             if scroll_y != 0.0 && is_over_canvas && !any_modal_open {
@@ -2648,7 +2892,7 @@ impl eframe::App for StickApp {
             if !space_down && !alt_down && self.active_tool_ui != ActiveToolUI::HandCanvas && is_over_canvas && !any_modal_open && !self.is_active_layer_locked() {
                 if let Some(pos) = pointer_pos {
                     let stage_pos = to_stage(pos);
-                    let delta = self.last_pointer_pos.map_or(egui::Vec2::ZERO, |l| (pos - l) / scale);
+                    let delta = self.last_pointer_pos.map_or(egui::Vec2::ZERO, |l| to_stage(pos) - to_stage(l));
                     match self.active_tool_ui {
                         ActiveToolUI::Text if pointer_pressed => { self.pending_text_pos = stage_pos; self.show_text_dialog = true; }
                         ActiveToolUI::ShapeLine => {
@@ -2656,18 +2900,26 @@ impl eframe::App for StickApp {
                             else if pointer_down { self.shape_drag_current = Some(stage_pos); }
                         }
                         ActiveToolUI::Bucket if pointer_pressed => {
-                            self.save_undo_state();
-                            self.ensure_editable_keyframe();
-                            if let Some(l) = self.project.layers.get_mut(self.active_layer_idx) {
-                                if let Some(f) = l.keyframes.get_mut(&self.current_frame) {
-                                    for s in f.strokes.iter_mut().rev() {
-                                        if s.points.iter().any(|p| ((p.x - stage_pos.x).powi(2) + (p.y - stage_pos.y).powi(2)).sqrt() < 35.0) {
-                                            s.fill_color = Some(self.brush_color);
+                            // Bucket works on closed vector shapes. Full
+                            // paint-region flood fill needs a raster backend.
+                            let can_fill = self.project.layers.get(self.active_layer_idx).is_some_and(|l| {
+                                let evaluated = self.project.evaluate_layer_at_frame(l, self.current_frame);
+                                fill_tools::find_topmost_shape(&evaluated.strokes, stage_pos.x, stage_pos.y).is_some()
+                            });
+                            if can_fill {
+                                self.save_undo_state();
+                                self.ensure_editable_keyframe();
+                                if let Some(l) = self.project.layers.get_mut(self.active_layer_idx) {
+                                    if let Some(f) = l.keyframes.get_mut(&self.current_frame) {
+                                        if fill_tools::apply_shape_fill(&mut f.strokes, stage_pos.x, stage_pos.y, self.brush_color) {
                                             self.has_unsaved_changes = true;
-                                            break;
                                         }
                                     }
                                 }
+                            } else {
+                                self.status_message = tr(lang,
+                                    "Bucket: click inside a closed vector shape.",
+                                    "البوكت: دوس جوّه شكل مقفول الأول.");
                             }
                         }
                         ActiveToolUI::EraserRed | ActiveToolUI::EraserGreen if pointer_down => {
@@ -2728,26 +2980,69 @@ impl eframe::App for StickApp {
                         ActiveToolUI::SelectNormal | ActiveToolUI::FreeTransform => {
                             if pointer_pressed {
                                 self.selected_stroke_indices.clear();
-                                if let Some(l) = self.project.layers.get(self.active_layer_idx) {
-                                    let f = self.project.evaluate_layer_at_frame(l, self.current_frame);
-                                    for (i, s) in f.strokes.iter().enumerate() {
-                                        if s.points.iter().any(|p| ((p.x - stage_pos.x).powi(2) + (p.y - stage_pos.y).powi(2)).sqrt() < 20.0) {
-                                            self.selected_stroke_indices.push(i);
-                                            break;
+                                self.selected_text_item_index = None;
+                                self.selection_rect_start = None;
+                                self.selection_rect_current = None;
+                                if let Some(layer) = self.project.layers.get(self.active_layer_idx) {
+                                    let frame = self.project.evaluate_layer_at_frame(layer, self.current_frame);
+                                    self.selected_text_item_index = frame.text_items.iter()
+                                        .enumerate().rev()
+                                        .find(|(_, text)| selection_tools::text_bounds(text).contains(stage_pos))
+                                        .map(|(index, _)| index);
+                                    if self.selected_text_item_index.is_none() {
+                                        let hit = egui::Rect::from_center_size(stage_pos, egui::vec2(12.0, 12.0));
+                                        if let Some((index, _)) = frame.strokes.iter().enumerate().rev()
+                                            .find(|(_, stroke)| selection_tools::stroke_intersects_marquee(stroke, hit)) {
+                                            self.selected_stroke_indices.push(index);
                                         }
                                     }
                                 }
-                            } else if pointer_down && delta.length_sq() > 0.0 {
-                                self.ensure_editable_keyframe();
-                                if let Some(l) = self.project.layers.get_mut(self.active_layer_idx) {
-                                    if let Some(f) = l.keyframes.get_mut(&self.current_frame) {
-                                        for &idx in &self.selected_stroke_indices {
-                                            if let Some(s) = f.strokes.get_mut(idx) {
-                                                for p in &mut s.points { p.x += delta.x; p.y += delta.y; }
+                                if self.selected_text_item_index.is_none() && self.selected_stroke_indices.is_empty() {
+                                    self.selection_rect_start = Some(stage_pos);
+                                    self.selection_rect_current = Some(stage_pos);
+                                } else {
+                                    self.save_undo_state();
+                                }
+                            } else if pointer_down {
+                                if self.selection_rect_start.is_some() {
+                                    self.selection_rect_current = Some(stage_pos);
+                                } else if delta.length_sq() > 0.0 {
+                                    if self.selected_text_item_index.is_some() || !self.selected_stroke_indices.is_empty() {
+                                        self.ensure_editable_keyframe();
+                                        if let Some(layer) = self.project.layers.get_mut(self.active_layer_idx) {
+                                            if let Some(frame) = layer.keyframes.get_mut(&self.current_frame) {
+                                                if let Some(index) = self.selected_text_item_index {
+                                                    if let Some(text) = frame.text_items.get_mut(index) {
+                                                        text.x += delta.x;
+                                                        text.y += delta.y;
+                                                    }
+                                                }
+                                                for &index in &self.selected_stroke_indices {
+                                                    if let Some(stroke) = frame.strokes.get_mut(index) {
+                                                        for p in &mut stroke.points {
+                                                            p.x += delta.x;
+                                                            p.y += delta.y;
+                                                        }
+                                                    }
+                                                }
+                                                self.has_unsaved_changes = true;
                                             }
                                         }
-                                        self.has_unsaved_changes = true;
                                     }
+                                }
+                            }
+                        }
+                        ActiveToolUI::SelectLasso => {
+                            if pointer_pressed {
+                                self.lasso_points.clear();
+                                self.selected_stroke_indices.clear();
+                                self.selected_text_item_index = None;
+                                self.lasso_points.push(stage_pos);
+                            } else if pointer_down && self.lasso_points.last()
+                                .is_none_or(|&prev| prev.distance(stage_pos) >= 2.5) {
+                                // Limit to avoid memory growth on very long drag gestures.
+                                if self.lasso_points.len() < 4_096 {
+                                    self.lasso_points.push(stage_pos);
                                 }
                             }
                         }
@@ -2757,11 +3052,44 @@ impl eframe::App for StickApp {
             }
 
             if pointer_released {
+                if let (Some(start), Some(end)) = (
+                    self.selection_rect_start.take(), self.selection_rect_current.take()
+                ) {
+                    let rect = egui::Rect::from_two_pos(start, end);
+                    if rect.width() > 3.0 || rect.height() > 3.0 {
+                        if let Some(layer) = self.project.layers.get(self.active_layer_idx) {
+                            let frame = self.project.evaluate_layer_at_frame(layer, self.current_frame);
+                            self.selected_stroke_indices = frame.strokes.iter().enumerate()
+                                .filter_map(|(idx, s)| selection_tools::stroke_intersects_marquee(s, rect).then_some(idx))
+                                .collect();
+                            self.selected_text_item_index = frame.text_items.iter().position(
+                                |text| selection_tools::text_bounds(text).intersects(rect)
+                            );
+                        }
+                    }
+                }
+                if self.lasso_points.len() >= 3 {
+                    if let Some(layer) = self.project.layers.get(self.active_layer_idx) {
+                        let frame = self.project.evaluate_layer_at_frame(layer, self.current_frame);
+                        self.selected_stroke_indices = frame.strokes.iter().enumerate()
+                            .filter_map(|(idx, s)| selection_tools::stroke_inside_lasso(s, &self.lasso_points).then_some(idx))
+                            .collect();
+                        self.selected_text_item_index = frame.text_items.iter().position(
+                            |txt| selection_tools::point_in_polygon(selection_tools::text_bounds(txt).center(), &self.lasso_points)
+                        );
+                    }
+                }
+                self.lasso_points.clear();
                 self.stabilized_cursor = None;
                 if let (Some(p0), Some(p1)) = (self.shape_drag_start.take(), self.shape_drag_current.take()) {
                     if p0.distance(p1) > 3.0 {
                         self.save_undo_state();
-                        self.commit_stroke_with_symmetry(build_geometric_stroke(self.selected_shape_kind, p0, p1, self.brush_color, self.brush_size), now_time);
+                        let mut shape = build_geometric_stroke(self.selected_shape_kind, p0, p1, self.brush_color, self.brush_size);
+                        shape.opacity = self.brush_opacity;
+                        if self.shape_fill_enabled && self.selected_shape_kind != GeometricShapeKind::StraightLine {
+                            shape.fill_color = Some(self.brush_color);
+                        }
+                        self.commit_stroke_with_symmetry(shape, now_time);
                     }
                 }
                 if let Some(mut stroke) = self.current_stroke.take() {
@@ -2839,14 +3167,49 @@ impl eframe::App for StickApp {
                 }
             }
 
+            if let (Some(start), Some(end)) = (self.selection_rect_start, self.selection_rect_current) {
+                let a = to_screen(start);
+                let b = to_screen(end);
+                painter.rect_stroke(
+                    egui::Rect::from_two_pos(a, b), 0.0,
+                    egui::Stroke::new(1.4, egui::Color32::from_rgb(45, 170, 255)),
+                );
+            }
+            if self.lasso_points.len() >= 2 {
+                let path: Vec<_> = self.lasso_points.iter().copied().map(&to_screen).collect();
+                painter.add(egui::Shape::line(path, egui::Stroke::new(
+                    1.4, egui::Color32::from_rgb(45, 170, 255)
+                )));
+            }
+            if let Some(idx) = self.selected_text_item_index {
+                if let Some(layer) = self.project.layers.get(self.active_layer_idx) {
+                    let frame = self.project.evaluate_layer_at_frame(layer, self.current_frame);
+                    if let Some(txt) = frame.text_items.get(idx) {
+                        let bounds = selection_tools::text_bounds(txt);
+                        painter.rect_stroke(
+                            egui::Rect::from_two_pos(to_screen(bounds.min), to_screen(bounds.max)),
+                            1.5, egui::Stroke::new(1.4, egui::Color32::from_rgb(45, 170, 255))
+                        );
+                    }
+                }
+            }
             if let Some(stroke) = &self.current_stroke { draw_stroke_pro(&painter, stroke, None, 1.0, scale, 0.0, 0.0, &to_screen); }
             if let (Some(p0), Some(p1)) = (self.shape_drag_start, self.shape_drag_current) {
-                draw_stroke_pro(&painter, &build_geometric_stroke(self.selected_shape_kind, p0, p1, self.brush_color, self.brush_size), None, 1.0, scale, 0.0, 0.0, &to_screen);
+                let mut shape = build_geometric_stroke(self.selected_shape_kind, p0, p1, self.brush_color, self.brush_size);
+                shape.opacity = self.brush_opacity;
+                if self.shape_fill_enabled && self.selected_shape_kind != GeometricShapeKind::StraightLine {
+                    shape.fill_color = Some(self.brush_color);
+                }
+                draw_stroke_pro(&painter, &shape, None, 1.0, scale, 0.0, 0.0, &to_screen);
             }
             if show_dot {
                 if let Some(p) = pointer_pos {
-                    painter.circle_filled(p, 3.5, egui::Color32::WHITE);
-                    painter.circle_stroke(p, 4.3, egui::Stroke::new(1.2, egui::Color32::BLACK));
+                    let radius = (self.brush_size * self.zoom_level * 0.5).clamp(2.5, 125.0);
+                    let erasing = matches!(self.active_tool_ui, ActiveToolUI::EraserRed | ActiveToolUI::EraserGreen);
+                    let outline = if erasing { egui::Color32::from_rgb(248, 113, 113) } else { egui::Color32::BLACK };
+                    painter.circle_stroke(p, radius + 1.0, egui::Stroke::new(2.2, egui::Color32::WHITE));
+                    painter.circle_stroke(p, radius, egui::Stroke::new(1.3, outline));
+                    painter.circle_filled(p, 1.7, outline);
                 }
             }
         });
@@ -2865,6 +3228,17 @@ fn main() -> eframe::Result<()> {
 #[cfg(test)]
 mod tool_discovery_tests {
     use super::*;
+
+    #[test]
+    fn updater_notice_keeps_arabic_unshaped_until_one_render_pass() {
+        let message = tr_notice(
+            AppLang::Arabic,
+            "Save your work first",
+            "احفظ شغلك الأول",
+        );
+        assert_eq!(message, "احفظ شغلك الأول");
+        assert!(!message.is_empty());
+    }
 
     #[test]
     fn every_toolbar_tool_has_a_localized_name_and_shortcut() {

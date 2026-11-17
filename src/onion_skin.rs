@@ -30,7 +30,7 @@ pub fn ghost_frames(
 
 pub fn ghost_color(base: [u8; 4], distance: usize) -> [u8; 4] {
     let distance = distance.clamp(1, 6) as u16;
-    let alpha = ((base[3] as u16) / distance).max(1) as u8;
+    let alpha = (base[3] as u16 / distance) as u8;
     [base[0], base[1], base[2], alpha]
 }
 
@@ -57,6 +57,12 @@ mod tests {
         assert_eq!(ghost_frames(4, 4, 2, 3).len(), 2);
         assert!(ghost_frames(0, 10, 2, 2).is_empty());
         assert!(ghost_frames(11, 10, 2, 2).is_empty());
+    }
+
+    #[test]
+    fn zero_opacity_stays_invisible_at_any_distance() {
+        assert_eq!(ghost_color([255, 80, 80, 0], 1)[3], 0);
+        assert_eq!(ghost_color([255, 80, 80, 0], 6)[3], 0);
     }
 
     #[test]
