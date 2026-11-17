@@ -31,7 +31,10 @@ pub fn contour_contains(stroke: &Stroke, x: f32, y: f32) -> bool {
     let last = &points[points.len() - 1];
     let close_dx = first.x - last.x;
     let close_dy = first.y - last.y;
-    let close_tolerance = (stroke.base_width.abs() * 1.25).clamp(8.0, 22.0);
+    // Painter strokes often finish near, but not precisely on, their start.
+/// Permit gaps proportionate to the pen width without treating every open
+/// line as a fillable polygon.
+    let close_tolerance = (stroke.base_width.abs() * 2.5).clamp(10.0, 30.0);
     if close_dx * close_dx + close_dy * close_dy > close_tolerance * close_tolerance {
         return false;
     }
