@@ -3,6 +3,7 @@
 //! Internet peers can use host-IP:port with appropriate router/firewall rules.
 //! This is not an encrypted Internet service or a global room directory.
 use crate::project::{AniProject, Stroke};
+use crate::project_sync::{self, ProjectEdit};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
@@ -18,10 +19,10 @@ pub const TCP_PORT: u16 = 47554;
 const DISCOVERY_PORT: u16 = 47553;
 const DISCOVER_REQUEST: &[u8] = b"STICK_STUDIO_LAN_DISCOVER_V1";
 // Protocol v2 includes peer roster and LAN room codes; old v1 peers are rejected.
-const PROTOCOL: u16 = 2;
+const PROTOCOL: u16 = 3;
 const MAX_PACKET: usize = 8 * 1024 * 1024;
 const MAX_MEMBERS: usize = 12;
-const MAX_FRAME: usize = 10_000;
+const MAX_FRAME: usize = 20_000;
 
 #[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Debug)]
 pub enum OnlineMode { Drawing, Animation }
@@ -75,6 +76,7 @@ enum Packet {
     Welcome { project: Box<AniProject> },
     Rejected { reason: String },
     Strokes { layer: usize, frame: usize, strokes: Vec<Stroke> },
+    Edits { edits: Vec<ProjectEdit> },
     Snapshot { project: Box<AniProject> },
     Members { count: usize },
     Roster { participants: Vec<Participant> },
@@ -86,6 +88,7 @@ pub enum OnlineEvent {
     Connected(AniProject),
     Disconnected(String),
     Strokes { layer: usize, frame: usize, strokes: Vec<Stroke> },
+    Edits(Vec<ProjectEdit>),
     Snapshot(AniProject),
     Members(usize),
     Roster(Vec<Participant>),
@@ -178,6 +181,8 @@ struct HostShared {
     local: Participant,
     room_code: String,
     project: Mutex<AniProject>,
+    /// Serialize application + broadcast so parallel peer threads cannot reorder edits.
+    edit_order: Mutex<()>,
     password: String,
     title: String,
     mode: OnlineMode,
@@ -213,6 +218,7 @@ impl HostShared {
 fn clone_packet(packet: &Packet) -> Packet {
     match packet {
         Packet::Strokes { layer, frame, strokes } => Packet::Strokes { layer: *layer, frame: *frame, strokes: strokes.clone() },
+        Packet::Edits { edits } => Packet::Edits { edits: edits.clone() },
         Packet::Snapshot { project } => Packet::Snapshot { project: project.clone() },
         Packet::Members { count } => Packet::Members { count: *count },
         Packet::Roster { participants } => Packet::Roster { participants: participants.clone() },
@@ -258,6 +264,9 @@ fn host_peer(mut stream: TcpStream, host: Arc<HostShared>) -> io::Result<()> {
     let id = host.peer_ids.fetch_add(1, Ordering::Relaxed);
     let (out_tx, out_rx) = mpsc::channel();
     {
+        // Admission must share the edit ordering gate: Welcome cannot
+        // contain an edit which is then redundantly replayed to the new peer.
+        let _order = host.edit_order.lock().map_err(|_| io::Error::other("Edit gate poisoned"))?;
         let mut peers = host.peers.lock().map_err(|_| io::Error::other("Peer registry poisoned"))?;
         if peers.len() + 1 >= host.limit {
             packet_write(&mut stream, &Packet::Rejected { reason: "Room is full".into() })?;
@@ -282,6 +291,28 @@ fn host_peer(mut stream: TcpStream, host: Arc<HostShared>) -> io::Result<()> {
                     host.broadcast(&Packet::Strokes { layer, frame, strokes }, Some(id));
                 }
             }
+            Ok(Packet::Edits { edits }) => {
+                // Acquiring the gate until after relay is essential: otherwise
+                // peer B could broadcast edit #2 ahead of peer A's edit #1.
+                let _order = host.edit_order.lock().map_err(|_| io::Error::other("Edit gate poisoned"))?;
+                let accepted = host.project.lock().map(|mut p|
+                    project_sync::apply_edits(&mut p, &edits).is_ok()).unwrap_or(false);
+                if accepted {
+                    let _ = host.events.send(OnlineEvent::Edits(edits.clone()));
+                    host.broadcast(&Packet::Edits { edits }, Some(id));
+                } else {
+                    // Invalid/stale edits cannot silently diverge: restore this peer
+                    // to the host's authoritative document.
+                    let state = host.project.lock().ok().map(|p| public_project(p.clone()));
+                    if let Some(state) = state {
+                        if let Ok(peers) = host.peers.lock() {
+                            if let Some((tx, _)) = peers.get(&id) {
+                                let _ = tx.send(Packet::Snapshot { project: Box::new(state) });
+                            }
+                        }
+                    }
+                }
+            }
             Ok(Packet::Goodbye) => break,
             Err(_) => break,
             _ => {}
@@ -302,6 +333,8 @@ pub struct OnlineSession {
     event_rx: mpsc::Receiver<OnlineEvent>,
     outgoing: Option<mpsc::Sender<Packet>>,
     host: Option<Arc<HostShared>>,
+    /// Local optimistic baseline; new edits are relative to this document.
+    baseline: Mutex<Option<AniProject>>,
     running: Arc<AtomicBool>,
 }
 
@@ -320,7 +353,7 @@ impl OnlineSession {
             running: running.clone(), peers: Mutex::new(HashMap::new()),
             local: Participant { id: 0, name: nickname, level, color: member_color(0) },
             room_code: room_code.clone(),
-            project: Mutex::new(project), password: password.clone(),
+            project: Mutex::new(project.clone()), edit_order: Mutex::new(()), password: password.clone(),
             title: title.clone(), mode, limit, events: event_tx,
             peer_ids: AtomicU64::new(1),
         });
@@ -364,7 +397,7 @@ impl OnlineSession {
             }
         });
         Ok(Self { title, mode, address: local_address(), is_host: true, members: 1,
-            room_code, event_rx, outgoing: None, host: Some(host), running })
+            room_code, event_rx, outgoing: None, host: Some(host), baseline: Mutex::new(Some(project)), running })
     }
 
     pub fn join_room(address: String, password: String, nickname: String, level: u32, mode: OnlineMode) -> Result<Self, String> {
@@ -400,6 +433,7 @@ impl OnlineSession {
                             let _ = event_tx.send(OnlineEvent::Strokes { layer, frame, strokes });
                         }
                         Ok(Packet::Snapshot { project }) => { let _ = event_tx.send(OnlineEvent::Snapshot(*project)); }
+                        Ok(Packet::Edits { edits }) => { let _ = event_tx.send(OnlineEvent::Edits(edits)); }
                         Ok(Packet::Members { count }) => { let _ = event_tx.send(OnlineEvent::Members(count)); }
                         Ok(Packet::Roster { participants }) => { let _ = event_tx.send(OnlineEvent::Roster(participants)); }
                         Ok(Packet::Goodbye) => break,
@@ -414,10 +448,54 @@ impl OnlineSession {
             }
         });
         Ok(Self { title: String::new(), mode, address, is_host: false, members: 1,
-            room_code: String::new(), event_rx, outgoing: Some(out_tx), host: None, running })
+            room_code: String::new(), event_rx, outgoing: Some(out_tx), host: None, baseline: Mutex::new(None), running })
     }
 
     pub fn events(&self) -> Vec<OnlineEvent> { self.event_rx.try_iter().collect() }
+
+    pub fn set_baseline(&self, project: &AniProject) {
+        if let Ok(mut baseline) = self.baseline.lock() { *baseline = Some(project.clone()); }
+    }
+
+    /// Merge an incoming host-ordered edit with the visible document and the
+    /// optimistic baseline; never echo remote edits as local changes.
+    pub fn ingest_remote_edits(
+        &self, project: &mut AniProject, edits: &[ProjectEdit]
+    ) -> Result<(), String> {
+        let mut baseline = self.baseline.lock().map_err(|_| "Project sync lock poisoned")?;
+        let mut preview = project.clone();
+        project_sync::apply_edits(&mut preview, edits)?;
+        if let Some(ref mut known) = *baseline {
+            project_sync::apply_edits(known, edits)?;
+        }
+        *project = preview;
+        Ok(())
+    }
+
+    /// Send every document mutation, not merely newly drawn strokes.
+    /// The host applies batches serially and relays them to all other peers.
+    pub fn sync_local_changes(&self, project: &AniProject) -> Result<(), String> {
+        let mut baseline = self.baseline.lock().map_err(|_| "Project sync lock poisoned")?;
+        let Some(known) = baseline.as_ref() else { return Ok(()); };
+        // Never transmit host/guest filesystem paths through incremental edits.
+        let edits = project_sync::diff_projects(
+            &public_project(known.clone()), &public_project(project.clone()))?;
+        if edits.is_empty() { return Ok(()); }
+        let packet = Packet::Edits { edits: edits.clone() };
+        let encoded = serde_json::to_vec(&packet).map_err(|e| e.to_string())?;
+        if encoded.len() > MAX_PACKET { return Err("Project edit is too large for online sync".into()); }
+        if let Some(host) = &self.host {
+            let _order = host.edit_order.lock().map_err(|_| "Edit gate poisoned")?;
+            let mut canonical = host.project.lock().map_err(|_| "Room project lock poisoned")?;
+            project_sync::apply_edits(&mut canonical, &edits)?;
+            drop(canonical);
+            host.broadcast(&packet, None);
+        } else if let Some(tx) = &self.outgoing {
+            tx.send(packet).map_err(|_| "Room connection is no longer active")?;
+        } else { return Err("Online room is not connected".into()); }
+        *baseline = Some(project.clone());
+        Ok(())
+    }
 
     pub fn send_strokes(&self, layer: usize, frame: usize, strokes: Vec<Stroke>) {
         if let Some(host) = &self.host {
@@ -432,7 +510,9 @@ impl OnlineSession {
     /// Explicit host-authoritative structure resync; clients never replace host state.
     pub fn resync_from_host(&self, project: AniProject) {
         if let Some(host) = &self.host {
+            let Ok(_order) = host.edit_order.lock() else { return; };
             if let Ok(mut state) = host.project.lock() { *state = project.clone(); }
+            self.set_baseline(&project);
             host.broadcast(&Packet::Snapshot { project: Box::new(public_project(project)) }, None);
         }
     }
@@ -531,6 +611,20 @@ mod tests {
             thread::sleep(Duration::from_millis(25));
         }
         assert!(connected, "guest must receive an authenticated project snapshot");
+        let guest_two = OnlineSession::join_room(
+            format!("127.0.0.1:{}", TCP_PORT),
+            "unique-test-password".into(), "Guest Two".into(), 6, OnlineMode::Drawing,
+        ).expect("start second guest");
+        let peer_deadline = std::time::Instant::now() + Duration::from_secs(8);
+        let mut peer_connected = false;
+        while std::time::Instant::now() < peer_deadline {
+            for event in guest_two.events() {
+                if matches!(event, OnlineEvent::Connected(_)) { peer_connected = true; }
+            }
+            if peer_connected { break; }
+            thread::sleep(Duration::from_millis(25));
+        }
+        assert!(peer_connected, "second guest must join the same host room");
         let stroke = Stroke {
             points: vec![], color: [1, 2, 3, 255], fill_color: None,
             base_width: 3.0, is_vector: false,
@@ -550,7 +644,48 @@ mod tests {
             thread::sleep(Duration::from_millis(25));
         }
         assert!(delivered, "host must receive guest stroke once");
+
+        // Regression: deleting or creating a layer/frame is an edit just like
+        // painting, and must reach the host and every room participant.
+        let mut guest_project = AniProject::default();
+        guest.set_baseline(&guest_project);
+        let added_layer = guest_project.layers[0].clone();
+        guest_project.layers.insert(0, added_layer);
+        guest_project.layers[0].name = "Guest's new layer".into();
+        guest_project.layers[0].keyframes.insert(4, Default::default());
+        guest_project.total_frames = 4;
+        guest.sync_local_changes(&guest_project).expect("send structural edits");
+        let deadline = std::time::Instant::now() + Duration::from_secs(8);
+        let mut received_edits = false;
+        while std::time::Instant::now() < deadline {
+            for event in host.events() {
+                if let OnlineEvent::Edits(edits) = event {
+                    assert!(!edits.is_empty());
+                    received_edits = true;
+                }
+            }
+            if received_edits { break; }
+            thread::sleep(Duration::from_millis(25));
+        }
+        assert!(received_edits, "the host must see layer/frame changes");
+        let peer_deadline = std::time::Instant::now() + Duration::from_secs(8);
+        let mut forwarded = false;
+        while std::time::Instant::now() < peer_deadline {
+            for event in guest_two.events() {
+                if let OnlineEvent::Edits(edits) = event {
+                    forwarded = !edits.is_empty();
+                }
+            }
+            if forwarded { break; }
+            thread::sleep(Duration::from_millis(25));
+        }
+        assert!(forwarded, "a layer/frame edit must also reach the OTHER guest");
+        let host_document = host.host.as_ref().unwrap().project.lock().unwrap().clone();
+        assert_eq!(host_document.layers.len(), 2);
+        assert_eq!(host_document.layers[0].name, "Guest's new layer");
+        assert!(host_document.layers[0].keyframes.contains_key(&4));
         guest.close();
+        guest_two.close();
         host.close();
     }
 

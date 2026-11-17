@@ -15,6 +15,7 @@ mod timeline_ops;
 mod profile;
 mod project;
 mod collab;
+mod project_sync;
 
 use arabic_reshaper::arabic_reshape;
 use brushes::{draw_brush_preset_icon, draw_stroke_pro};
@@ -1257,6 +1258,7 @@ impl StickApp {
                     self.current_frame = 1;
                     self.active_layer_idx = 0;
                     self.project = project;
+                    if let Some(session) = &self.online_session { session.set_baseline(&self.project); }
                     self.current_project_path = None;
                     self.has_unsaved_changes = true;
                     self.online_message.clear();
@@ -1274,6 +1276,25 @@ impl StickApp {
                         self.redo_stack.clear();
                     }
                 }
+                OnlineEvent::Edits(edits) => {
+                    let result = self.online_session.as_ref()
+                        .map(|session| session.ingest_remote_edits(&mut self.project, &edits));
+                    match result {
+                        Some(Ok(())) => {
+                            self.timeline_length = self.timeline_length.max(self.project.total_frames);
+                            self.active_layer_idx = self.active_layer_idx.min(self.project.layers.len().saturating_sub(1));
+                            self.undo_stack.clear();
+                            self.redo_stack.clear();
+                            self.selected_stroke_indices.clear();
+                            self.has_unsaved_changes = true;
+                        }
+                        Some(Err(err)) => {
+                            self.online_message = format!("Online edit conflict: {err}. Ask the host to sync the project.");
+                            self.status_message = self.online_message.clone();
+                        }
+                        None => {}
+                    }
+                }
                 OnlineEvent::Snapshot(project) => {
                     if self.has_unsaved_changes {
                         if let Err(err) = persistence::atomic_save::write_recovery_snapshot(&self.project, "online_before_resync") {
@@ -1282,6 +1303,7 @@ impl StickApp {
                         }
                     }
                     self.project = project;
+                    if let Some(session) = &self.online_session { session.set_baseline(&self.project); }
                     self.timeline_length = self.project.total_frames.max(1);
                     self.current_frame = self.current_frame.min(self.timeline_length);
                     self.active_layer_idx = self.active_layer_idx.min(self.project.layers.len().saturating_sub(1));
@@ -1350,9 +1372,18 @@ impl StickApp {
                             self.online_message.clear();
                             self.refresh_online_rooms();
                         }
+                        ui.add_space(25.0);
+                        ui.label(egui::RichText::new(tr(lang,
+                            "Hosting uses YOUR PC as the room server; keep Stick running and allow private-network access in Windows Firewall. Joining uses another participant's computer.",
+                            "مهم: لو عملت إنشاء غرفة، جهازك نفسه هيبقى سيرفر الغرفة. لازم Stick يفضل شغال وتسمح له في جدار حماية الشبكة الخاصة. لو اخترت انضمام، هتتصل بجهاز صاحب الغرفة."))
+                            .color(egui::Color32::from_rgb(238, 192, 110)));
                     }
                     OnlinePage::CreateRoom => {
                         ui.heading(tr(lang, "Host a room", "إنشاء غرفة جديدة"));
+                        ui.add_space(12.0);
+                        ui.label(tr(lang,
+                            "Your computer becomes the HOST/SERVER for this room. Keep Stick open; guests connect directly to this PC over LAN.",
+                            "جهازك هيكون الهوست وسيرفر الغرفة. لازم البرنامج يفضل مفتوح، وباقي اللاعبين هيتصلوا بجهازك مباشرة عبر الشبكة المحلية."));
                         ui.add_space(16.0);
                         egui::Grid::new("host_room_fields").min_col_width(140.0).spacing([12.0, 12.0]).show(ui, |ui| {
                             ui.label(tr(lang, "Room name", "اسم الغرفة"));
@@ -1707,13 +1738,10 @@ impl StickApp {
         }
         self.ensure_editable_keyframe();
         if let Some(layer) = self.project.layers.get_mut(self.active_layer_idx) {
-            let outgoing_strokes = strokes_to_add.clone();
             layer.keyframes.entry(self.current_frame).or_default().strokes.extend(strokes_to_add);
             self.has_unsaved_changes = true;
             self.record_frame_drawn_activity(now_time);
-            if let Some(session) = &self.online_session {
-                session.send_strokes(self.active_layer_idx, self.current_frame, outgoing_strokes);
-            }
+            // Document-level sync at the end of update also covers new strokes.
         }
     }
 
@@ -3506,6 +3534,8 @@ impl eframe::App for StickApp {
                     ui.colored_label(egui::Color32::from_rgb(60, 210, 160), tr(lang, "ONLINE", "أونلاين"));
                     ui.label(format!("{}  •  {} online", title, self.online_members));
                     if host {
+                        ui.colored_label(egui::Color32::from_rgb(245, 193, 82),
+                            tr(lang, "HOST: Your PC is the room server", "هوست: جهازك هو سيرفر الغرفة"));
                         ui.label(format!("LAN {}", address));
                         if ui.button(format!("Room #{}  ⧉", code)).on_hover_text(
                             tr(lang, "Copy room code", "نسخ كود الغرفة")).clicked() {
@@ -4239,7 +4269,9 @@ impl eframe::App for StickApp {
                                 let is_b = f > self.timeline_length;
                                 let is_kf = !is_b && layer.keyframes.contains_key(&f);
                                 let eff = if is_b { None } else { Self::get_effective_frame_data(layer, f) };
-                                let has_d = eff.map_or(false, |fd| !fd.strokes.is_empty() || !fd.media_items.is_empty());
+                                let has_d = eff.map_or(false, |fd| !fd.strokes.is_empty()
+                                    || !fd.media_items.is_empty() || !fd.text_items.is_empty()
+                                    || !fd.symbol_instances.is_empty());
                                 let tw = eff.map(|fd| fd.tween_mode).unwrap_or(TweenMode::None);
                                 let (cr, cresp) = ui.allocate_exact_size(egui::vec2(cell_w, 34.0), egui::Sense::click());
                                 let cell = self.config.timeline_cell_color;
@@ -4581,13 +4613,13 @@ impl eframe::App for StickApp {
                             let (can_fill, fallback) = self.project.layers.get(self.active_layer_idx)
                                 .map(|l| {
                                     let evaluated = self.project.evaluate_layer_at_frame(l, self.current_frame);
-                                    let direct = fill_tools::can_fill_contour(
+                                    // The enclosed pixel region takes precedence over a
+                                    // closed outer shape when there are interior dividers.
+                                    let polygon = fill_tools::flood_fill_polygon(
+                                        &evaluated.strokes, (stage_pos.x, stage_pos.y),
+                                        (self.project.width as f32, self.project.height as f32), 1.4);
+                                    let direct = polygon.is_none() && fill_tools::can_fill_contour(
                                         &evaluated.strokes, stage_pos.x, stage_pos.y);
-                                    let polygon = if direct { None } else {
-                                        fill_tools::flood_fill_polygon(
-                                            &evaluated.strokes, (stage_pos.x, stage_pos.y),
-                                            (self.project.width as f32, self.project.height as f32), 1.4)
-                                    };
                                     (direct, polygon)
                                 }).unwrap_or((false, None));
                             if can_fill || fallback.is_some() {
@@ -4595,13 +4627,13 @@ impl eframe::App for StickApp {
                                 self.ensure_editable_keyframe();
                                 if let Some(l) = self.project.layers.get_mut(self.active_layer_idx) {
                                     if let Some(f) = l.keyframes.get_mut(&self.current_frame) {
-                                        if (can_fill && fill_tools::apply_contour_fill(
-                                            &mut f.strokes, stage_pos.x, stage_pos.y, self.brush_color))
-                                            || fallback.map(|points| {
-                                                f.strokes.insert(0, fill_tools::polygon_fill_stroke(
-                                                    points, self.brush_color));
-                                                true
-                                            }).unwrap_or(false) {
+                                        if fallback.map(|points| {
+                                            f.strokes.insert(0, fill_tools::polygon_fill_stroke(
+                                                points, self.brush_color));
+                                            true
+                                        }).unwrap_or(false)
+                                            || (can_fill && fill_tools::apply_contour_fill(
+                                                &mut f.strokes, stage_pos.x, stage_pos.y, self.brush_color)) {
                                             self.has_unsaved_changes = true;
                                         }
                                     }
@@ -5104,6 +5136,15 @@ impl eframe::App for StickApp {
                 }
             }
         });
+
+        // Relay all document mutations after each UI frame, including erasing,
+        // layer operations, frame/keyframe changes, fills, text and transform.
+        if let Some(session) = &self.online_session {
+            if let Err(err) = session.sync_local_changes(&self.project) {
+                self.online_message = format!("Online sync: {err}");
+                self.status_message = self.online_message.clone();
+            }
+        }
 
         // Positioned relative to the full window, not just remaining menu
         // space: the optional-support heart stays in the TOP CENTER.

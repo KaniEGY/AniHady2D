@@ -69,3 +69,16 @@
 - Online protocol v2: local room code 8 digits, room roster with colored names and self-reported local levels, hosts currently open project, directed UDP broadcast. No worldwide rendezvous, automatic Google OAuth or universal concurrent operation syncing.
 - New original colorful vector icons for 13 tools and game UI synthesized sounds. No third-party asset icons copied.
 - DO NOT claim manual two-PC or cloud QA complete until tested, and DO NOT publish a failing Windows build. User explicitly authorized auto-publishing every passing version on main.
+
+
+## 17 November 2026 — LAN document sync / bucket divider follow-up
+- Starting main SHA: `41f2e98507fa3aefa3194a8ae167a8848095cdc3`.
+- Branch: `fix/online-project-sync-bucket-20261117`; PR: https://github.com/KaniEGY/Stick/pull/25.
+- Added `src/project_sync.rs`: granular JSON-structured edit operations for project fields, layers, frame/keyframe data, stroke insertion/removal, text, transform and settings, with merge unit tests. No saved project schema change.
+- `src/collab.rs`: LAN protocol v3; guest sends edits, host validates/serializes and relays them, plus baseline management and fallback resync for rejected edits; 20k frames supported. Absolute filesystem paths are sanitized. Loopback coverage for structural changes added.
+- `src/main.rs`: sends all project changes after UI update; receives remote edits; stops duplicate legacy immediate stroke messages; host role explained clearly. Bucket now tries region flood first to respect interior line boundaries.
+- `src/fill_tools.rs`: regression test for circle divided by diameter and single-half fill.
+- Existing AniCraft-inspired timeline controls remain in place. `src/timeline_ops.rs` now preserves exposure artwork when deleting the first frame, and the UI marks text/symbol frame content. No AniCraft code imported or animation engine replaced in this sprint. Plan targeted integration only after stable collaboration and acceptance QA.
+- QA: PR Windows `cargo test` and `cargo build --release` via Actions; at time of writing, newest SHA result **not yet confirmed**. Two-PC GUI acceptance **not performed**. Do not claim this as proven in production until verified.
+- Known limitations: simultaneous edits to identical array positions can conflict; external media bytes not transferred; no encryption/global Internet room discovery; no Windows executable generated locally (GitHub Actions builds it).
+- Next: check latest PR Windows CI, fix any errors, merge only if green, verify main release, and test two-PC erasing/layer/frame/bucket behavior and existing project save/open.
