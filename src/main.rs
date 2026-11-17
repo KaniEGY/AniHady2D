@@ -4130,6 +4130,54 @@ impl eframe::App for StickApp {
                             tr(lang, "Copy room code", "نسخ كود الغرفة")).clicked() {
                             ui.output_mut(|out| out.copied_text = code.clone());
                         }
+                        ui.menu_button(tr(lang, "Host controls", "إدارة الغرفة"), |ui| {
+                            ui.set_min_width(300.0);
+                            ui.label(egui::RichText::new(tr(lang,
+                                "Host permissions • participants and tool colors",
+                                "صلاحيات الهوست • الأعضاء وألوان الأدوات")).strong());
+                            ui.separator();
+                            let palette: [[u8; 3]; 8] = [
+                                [64,185,250], [247,115,87], [159,125,248], [47,207,147],
+                                [240,186,54], [229,98,184], [76,200,210], [248,102,135],
+                            ];
+                            for participant in self.online_participants.clone() {
+                                ui.horizontal(|ui| {
+                                    let color = egui::Color32::from_rgb(
+                                        participant.color[0], participant.color[1], participant.color[2]);
+                                    ui.colored_label(color, format!("● {}  Lv.{}",
+                                        participant.name, participant.level));
+                                    if participant.id == 0 {
+                                        ui.small(tr(lang, "HOST", "الهوست"));
+                                    } else if ui.small_button(tr(lang, "Kick", "طرد")).clicked() {
+                                        if let Err(err) = session.kick_member(participant.id) {
+                                            self.online_message = err;
+                                        }
+                                        ui.close_menu();
+                                    }
+                                });
+                                ui.horizontal_wrapped(|ui| {
+                                    ui.small(tr(lang, "Tool color:", "لون الأدوات:"));
+                                    for rgb in palette {
+                                        let swatch = egui::Color32::from_rgb(rgb[0], rgb[1], rgb[2]);
+                                        let (rect, click) = ui.allocate_exact_size(
+                                            egui::vec2(19.0, 19.0), egui::Sense::click());
+                                        ui.painter().rect_filled(rect, 3.0, swatch);
+                                        if participant.color == rgb {
+                                            ui.painter().rect_stroke(rect.expand(1.0), 3.0,
+                                                egui::Stroke::new(2.0, egui::Color32::WHITE));
+                                        }
+                                        if click.clicked() {
+                                            if let Err(err) = session.change_member_color(participant.id, rgb) {
+                                                self.online_message = err;
+                                            }
+                                        }
+                                    }
+                                });
+                                ui.separator();
+                            }
+                            ui.small(tr(lang, "The oldest joined guest becomes host when you leave normally. A sudden PC crash cannot guarantee a handoff.",
+                                "أول ضيف دخل الغرفة يستلم الهوست لما تخرج طبيعي. لو الجهاز فصل فجأة، النقل مش مضمون."));
+                        });
                         if ui.small_button(tr(lang, "Sync full project", "مزامنة المشروع بالكامل")).clicked() { resync = true; }
                     }
                     if ui.small_button(tr(lang, "Leave Room", "مغادرة الغرفة")).clicked() { leave = true; }
@@ -4141,7 +4189,7 @@ impl eframe::App for StickApp {
                 }
             }
             if leave {
-                if let Some(session) = self.online_session.take() { session.close(); }
+                self.leave_online_session();
                 self.online_participants.clear();
                 self.online_enabled = false;
                 self.online_discovery = None;
