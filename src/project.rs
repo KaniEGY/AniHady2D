@@ -833,6 +833,7 @@ pub fn import_adobe_animate_project(path: &Path) -> Result<AniProject, String> {
                 visible: true,
                 locked: false,
                 is_guide: false,
+                xp_first_paint_rewarded: false,
                 opacity: 1.0,
                 keyframes: kf_map,
             });
