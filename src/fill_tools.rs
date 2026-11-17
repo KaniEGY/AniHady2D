@@ -18,6 +18,8 @@ fn distance_sq_to_segment(x: f32, y: f32, a: &StrokePoint, b: &StrokePoint) -> f
 }
 
 pub fn contour_contains(stroke: &Stroke, x: f32, y: f32) -> bool {
+    // The current canvas renderer can only fill vector contours.
+    if !stroke.is_vector { return false; }
     let points = &stroke.points;
     if points.len() < 4 || !x.is_finite() || !y.is_finite() {
         return false;
