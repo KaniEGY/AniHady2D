@@ -21,18 +21,22 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Run Compatibility & Unit Tests
-        run: cargo test
-
-      - name: Build Release EXE
-        run: cargo build --release
-
       - name: Extract Unified APP_VERSION from Cargo.toml
         id: meta
         shell: pwsh
         run: |
           $ver = (Select-String -Path Cargo.toml -Pattern '^version\s*=\s*"([^"]+)"').Matches[0].Groups[1].Value
           echo "version=$ver" >> $env:GITHUB_OUTPUT
+
+      - name: Run Compatibility & Unit Tests
+        env:
+          STICK_BUILD_VERSION: ${{ steps.meta.outputs.version }}.${{ github.run_number }}
+        run: cargo test
+
+      - name: Build Release EXE
+        env:
+          STICK_BUILD_VERSION: ${{ steps.meta.outputs.version }}.${{ github.run_number }}
+        run: cargo build --release
 
       - name: Package Clean Folder
         shell: pwsh
@@ -48,12 +52,14 @@ jobs:
           path: dist/
 
       - name: Publish Direct Release
-        if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ steps.meta.outputs.version }}.${{ github.run_number }}
           name: Stick v${{ steps.meta.outputs.version }} (Build ${{ github.run_number }})
           body_path: RELEASE_NOTES.md
+          prerelease: false
+          make_latest: true
           files: |
             dist/Stick.exe
             dist/version.txt

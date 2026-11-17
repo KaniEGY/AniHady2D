@@ -259,15 +259,10 @@ const BASIC_COLORS: [([u8; 3], &str); 12] = [
 ];
 
 fn get_installed_version() -> String {
-    if let Ok(exe) = std::env::current_exe() {
-        if let Ok(v) = std::fs::read_to_string(exe.with_file_name("version.txt")) {
-            let t = v.trim().trim_start_matches('v').to_string();
-            if !t.is_empty() {
-                return t;
-            }
-        }
-    }
-    FALLBACK_VERSION.to_string()
+    // The GitHub Release is a standalone Stick.exe download. A sidecar
+    // version.txt may be missing or may belong to a different EXE.
+    // The version baked into the executable is the only reliable authority.
+    updater::embedded_build_version().to_string()
 }
 
 fn is_running_from_installed_dir() -> bool {
@@ -941,8 +936,18 @@ impl StickApp {
                 }
             }
         }
-        let _ = std::fs::write(target_dir.join("stick_installed.marker"), "installed");
-        let _ = std::fs::write(target_dir.join("version.txt"), FALLBACK_VERSION);
+        // The installer and the self-updater must report the SAME exact
+        // compiled build number, including the GitHub Actions run suffix.
+        if let Err(e) = std::fs::write(
+            target_dir.join("version.txt"), updater::embedded_build_version()
+        ) {
+            self.install_status_text = format!("Couldn't record the installed version: {e}");
+            return;
+        }
+        if let Err(e) = std::fs::write(target_dir.join("stick_installed.marker"), "installed") {
+            self.install_status_text = format!("Couldn't finish installation: {e}");
+            return;
+        }
         let _ = create_desktop_shortcut(&target_exe);
         self.play_sfx(SfxType::LevelUpFanfare);
         self.workspace_mode = WorkspaceMode::Launcher;
@@ -1502,6 +1507,77 @@ impl StickApp {
         }
     }
 
+    fn render_update_dialog(&mut self, ctx: &egui::Context, lang: AppLang) {
+        if self.show_update_dialog {
+            let update_snapshot = self.update_state.lock().unwrap().clone();
+            egui::Window::new(tr(lang, "Check for Updates", "تحديثات البرنامج"))
+                .collapsible(false)
+                .resizable(false)
+                .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+                .show(ctx, |ui| {
+                    ui.label(format!("Stick v{}", self.installed_version));
+                    ui.separator();
+                    match update_snapshot {
+                        UpdateState::Checking => {
+                            ui.horizontal(|ui| {
+                                ui.spinner();
+                                ui.label(tr(lang, "Checking GitHub for updates...", "بندور على تحديثات جديدة..."));
+                            });
+                        }
+                        UpdateState::UpToDate => {
+                            ui.label(tr(lang, "No updates available right now. You're up to date!", "مفيش تحديث دلوقتي، إنت على آخر إصدار!"));
+                            if ui.button(tr(lang, "Close", "قفل")).clicked() {
+                                self.show_update_dialog = false;
+                            }
+                        }
+                        UpdateState::UpdateAvailable(info) => {
+                            ui.label(tr(lang, "A new Stick version is ready.", "في تحديث جديد لبرنامج Stick."));
+                            ui.label(format!("v{} → v{}", self.installed_version, info.version));
+                            if ui.button(tr(lang, "Download and install update", "نزّل وثبّت التحديث")).clicked() {
+                                self.download_and_apply_update(info, ctx.clone());
+                            }
+                            if ui.button(tr(lang, "Not now", "مش دلوقتي")).clicked() {
+                                self.show_update_dialog = false;
+                            }
+                        }
+                        UpdateState::Downloading(message) => {
+                            ui.spinner();
+                            ui.label(message);
+                        }
+                        UpdateState::ReadyToRestart { version, staged_exe } => {
+                            if self.has_unsaved_changes || self.current_stroke.is_some() {
+                                ui.label(tr(lang, "Update downloaded. Save your project before restarting.", "التحديث اتنزّل. احفظ مشروعك قبل ما البرنامج يعيد التشغيل."));
+                                if ui.button(tr(lang, "Save and restart", "احفظ واعمل إعادة تشغيل")).clicked() {
+                                    if self.trigger_save() {
+                                        self.restart_with_new_exe(version, staged_exe);
+                                    }
+                                }
+                            } else {
+                                ui.label(tr(lang, "Update checked. Restarting Stick to finish installation...", "اتأكدنا إن التحديث سليم. Stick هيعيد التشغيل عشان يكمّل التثبيت..."));
+                                self.restart_with_new_exe(version, staged_exe);
+                            }
+                        }
+                        UpdateState::Error(error) => {
+                            ui.colored_label(egui::Color32::LIGHT_RED, tr(lang, "Update failed. Your current Stick version is safe.", "التحديث فشل، بس نسختك الحالية سليمة."));
+                            ui.label(error);
+                            ui.hyperlink_to(
+                                tr(lang, "Download the latest Stick manually", "نزّل آخر إصدار من GitHub يدويًا"),
+                                "https://github.com/KaniEGY/Stick/releases/latest",
+                            );
+                            if ui.button(tr(lang, "Try again", "جرّب تاني")).clicked() {
+                                self.check_for_updates(ctx.clone());
+                            }
+                            if ui.button(tr(lang, "Close", "قفل")).clicked() {
+                                self.show_update_dialog = false;
+                            }
+                        }
+                        UpdateState::Idle => {}
+                    }
+                });
+        }
+
+    }
+
     fn preload_frame_textures(&mut self, ctx: &egui::Context) {
         let mut paths = Vec::new();
         for layer in &self.project.layers {
@@ -1717,6 +1793,14 @@ impl eframe::App for StickApp {
                         }
                     });
                 });
+                ui.add_space(16.0);
+                if ui.button(tr(lang, "Check for Updates", "تحديث البرنامج")).clicked() {
+                    self.check_for_updates(ctx.clone());
+                }
+                ui.hyperlink_to(
+                    tr(lang, "Report a bug or suggest a feature", "بلّغ عن مشكلة أو اقترح ميزة"),
+                    "https://github.com/KaniEGY/Stick/issues/new/choose",
+                );
             });
             // Show version notes on the first run after an update, even
             // before the user chooses Drawing or Animation workspace.
@@ -1729,6 +1813,9 @@ impl eframe::App for StickApp {
                 self.config.last_seen_patch_version = self.installed_version.clone();
                 self.config.save();
             }
+            // Show the updater before mode selection too, so users do not
+            // need to start a drawing project just to install a new build.
+            self.render_update_dialog(ctx, lang);
             return;
         }
 
@@ -2200,67 +2287,7 @@ impl eframe::App for StickApp {
             });
         }
 
-        if self.show_update_dialog {
-            let update_snapshot = self.update_state.lock().unwrap().clone();
-            egui::Window::new(tr(lang, "Stick Updates", "تحديثات Stick"))
-                .collapsible(false)
-                .resizable(false)
-                .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
-                .show(ctx, |ui| {
-                    match update_snapshot {
-                        UpdateState::Checking => {
-                            ui.horizontal(|ui| {
-                                ui.spinner();
-                                ui.label(tr(lang, "Checking GitHub for updates...", "بندور على تحديثات جديدة..."));
-                            });
-                        }
-                        UpdateState::UpToDate => {
-                            ui.label(tr(lang, "No updates available right now. You're up to date!", "مفيش تحديث دلوقتي، إنت على آخر إصدار!"));
-                            if ui.button(tr(lang, "Close", "قفل")).clicked() {
-                                self.show_update_dialog = false;
-                            }
-                        }
-                        UpdateState::UpdateAvailable(info) => {
-                            ui.label(tr(lang, "A new Stick version is ready.", "في تحديث جديد لبرنامج Stick."));
-                            ui.label(format!("v{} → v{}", self.installed_version, info.version));
-                            if ui.button(tr(lang, "Download and install update", "نزّل وثبّت التحديث")).clicked() {
-                                self.download_and_apply_update(info, ctx.clone());
-                            }
-                            if ui.button(tr(lang, "Not now", "مش دلوقتي")).clicked() {
-                                self.show_update_dialog = false;
-                            }
-                        }
-                        UpdateState::Downloading(message) => {
-                            ui.spinner();
-                            ui.label(message);
-                        }
-                        UpdateState::ReadyToRestart { version, staged_exe } => {
-                            if self.has_unsaved_changes || self.current_stroke.is_some() {
-                                ui.label(tr(lang, "Update downloaded. Save your project before restarting.", "التحديث اتنزّل. احفظ مشروعك قبل ما البرنامج يعيد التشغيل."));
-                                if ui.button(tr(lang, "Save and restart", "احفظ واعمل إعادة تشغيل")).clicked() {
-                                    if self.trigger_save() {
-                                        self.restart_with_new_exe(version, staged_exe);
-                                    }
-                                }
-                            } else {
-                                ui.label(tr(lang, "Update checked. Restarting Stick to finish installation...", "اتأكدنا إن التحديث سليم. Stick هيعيد التشغيل عشان يكمّل التثبيت..."));
-                                self.restart_with_new_exe(version, staged_exe);
-                            }
-                        }
-                        UpdateState::Error(error) => {
-                            ui.colored_label(egui::Color32::LIGHT_RED, tr(lang, "Update failed. Your current Stick version is safe.", "التحديث فشل، بس نسختك الحالية سليمة."));
-                            ui.label(error);
-                            if ui.button(tr(lang, "Try again", "جرّب تاني")).clicked() {
-                                self.check_for_updates(ctx.clone());
-                            }
-                            if ui.button(tr(lang, "Close", "قفل")).clicked() {
-                                self.show_update_dialog = false;
-                            }
-                        }
-                        UpdateState::Idle => {}
-                    }
-                });
-        }
+        self.render_update_dialog(ctx, lang);
 
         if self.show_symbol_dialog {
             egui::Window::new("Symbol").collapsible(false).resizable(false).anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0]).show(ctx, |ui| {
@@ -2350,7 +2377,11 @@ impl eframe::App for StickApp {
                 if ui.button(egui::RichText::new(tr(lang, "Export Studio", "استوديو التصدير")).color(egui::Color32::from_rgb(56, 189, 248))).clicked() {
                     self.show_export_studio = true;
                 }
-                if ui.button(tr(lang, "Updates", "تحديثات")).clicked() { self.check_for_updates(ctx.clone()); }
+                if ui.button(tr(lang, "Check for Updates", "تحديث البرنامج")).clicked() { self.check_for_updates(ctx.clone()); }
+                ui.hyperlink_to(
+                    tr(lang, "Feedback", "ابلغ عن مشكلة"),
+                    "https://github.com/KaniEGY/Stick/issues/new/choose",
+                );
 
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     let (gr, gresp) = ui.allocate_exact_size(egui::vec2(24.0, 22.0), egui::Sense::click());
