@@ -835,6 +835,8 @@ struct StickApp {
     selected_stroke_indices: Vec<usize>,
     selected_vector_node: Option<(usize, usize)>,
     transform_drag_anchor: Option<egui::Pos2>,
+    transform_rotate_pivot: Option<egui::Pos2>,
+    lasso_dragging_selection: bool,
     selected_text_item_index: Option<usize>,
     selection_rect_start: Option<egui::Pos2>,
     selection_rect_current: Option<egui::Pos2>,
@@ -945,6 +947,8 @@ impl StickApp {
             selected_stroke_indices: Vec::new(),
             selected_vector_node: None,
             transform_drag_anchor: None,
+            transform_rotate_pivot: None,
+            lasso_dragging_selection: false,
             selected_text_item_index: None,
             selection_rect_start: None,
             selection_rect_current: None,
@@ -1247,6 +1251,51 @@ impl StickApp {
                         text.x = anchor.x + (text.x - anchor.x) * factor;
                         text.y = anchor.y + (text.y - anchor.y) * factor;
                         text.font_size = (text.font_size * factor).clamp(4.0, 512.0);
+                    }
+                }
+                self.has_unsaved_changes = true;
+            }
+        }
+    }
+
+    fn move_selected_items(&mut self, delta: egui::Vec2) {
+        if self.is_active_layer_locked() || delta.length_sq() <= 0.0 { return; }
+        self.ensure_editable_keyframe();
+        if let Some(layer) = self.project.layers.get_mut(self.active_layer_idx) {
+            if let Some(frame) = layer.keyframes.get_mut(&self.current_frame) {
+                for &index in &self.selected_stroke_indices {
+                    if let Some(stroke) = frame.strokes.get_mut(index) {
+                        for p in &mut stroke.points { p.x += delta.x; p.y += delta.y; }
+                    }
+                }
+                if let Some(idx) = self.selected_text_item_index {
+                    if let Some(text) = frame.text_items.get_mut(idx) {
+                        text.x += delta.x; text.y += delta.y;
+                    }
+                }
+                self.has_unsaved_changes = true;
+            }
+        }
+    }
+
+    fn rotate_selection_around(&mut self, pivot: egui::Pos2, radians: f32) {
+        if self.is_active_layer_locked() || !radians.is_finite() || radians.abs() < 0.00001 {
+            return;
+        }
+        self.ensure_editable_keyframe();
+        if let Some(layer) = self.project.layers.get_mut(self.active_layer_idx) {
+            if let Some(frame) = layer.keyframes.get_mut(&self.current_frame) {
+                for &index in &self.selected_stroke_indices {
+                    if let Some(stroke) = frame.strokes.get_mut(index) {
+                        selection_tools::rotate_points_around(stroke, pivot, radians);
+                    }
+                }
+                if let Some(index) = self.selected_text_item_index {
+                    if let Some(text) = frame.text_items.get_mut(index) {
+                        let (sn, cs) = radians.sin_cos();
+                        let (dx, dy) = (text.x - pivot.x, text.y - pivot.y);
+                        text.x = pivot.x + dx * cs - dy * sn;
+                        text.y = pivot.y + dx * sn + dy * cs;
                     }
                 }
                 self.has_unsaved_changes = true;
@@ -3490,20 +3539,38 @@ impl eframe::App for StickApp {
                         }
                         ActiveToolUI::SelectNormal | ActiveToolUI::FreeTransform => {
                             if pointer_pressed {
-                                // In Free Transform, grab the bottom-right handle
-                                // to resize an existing multi-object selection.
+                                // A dedicated handle above the selection provides free rotation.
+                                let bounds = self.selected_canvas_bounds();
+                                let rotate_pivot = if self.active_tool_ui == ActiveToolUI::FreeTransform {
+                                    bounds.filter(|rect| {
+                                        (rect.center_top() + egui::vec2(0.0, -26.0 / scale))
+                                            .distance(stage_pos) < (14.0 / scale)
+                                    }).map(|rect| rect.center())
+                                } else { None };
                                 let resize_anchor = if self.active_tool_ui == ActiveToolUI::FreeTransform {
-                                    self.selected_canvas_bounds().and_then(|rect| {
+                                    bounds.and_then(|rect| {
                                         if rect.max.distance(stage_pos) <= (16.0 / scale).max(4.0) {
                                             Some(rect.min)
                                         } else { None }
                                     })
                                 } else { None };
-                                if let Some(anchor) = resize_anchor {
+                                let reuse_selection = bounds.is_some_and(|rect| rect.contains(stage_pos))
+                                    && (!self.selected_stroke_indices.is_empty() || self.selected_text_item_index.is_some());
+                                if let Some(pivot) = rotate_pivot {
+                                    self.save_undo_state();
+                                    self.transform_rotate_pivot = Some(pivot);
+                                    self.transform_drag_anchor = None;
+                                } else if let Some(anchor) = resize_anchor {
                                     self.save_undo_state();
                                     self.transform_drag_anchor = Some(anchor);
+                                    self.transform_rotate_pivot = None;
+                                } else if reuse_selection {
+                                    self.save_undo_state();
+                                    self.transform_drag_anchor = None;
+                                    self.transform_rotate_pivot = None;
                                 } else {
                                 self.transform_drag_anchor = None;
+                                self.transform_rotate_pivot = None;
                                 self.selected_stroke_indices.clear();
                                 self.selected_text_item_index = None;
                                 self.selection_rect_start = None;
@@ -3530,7 +3597,14 @@ impl eframe::App for StickApp {
                                 }
                                 } // finished regular selection; otherwise grabbed transform handle
                             } else if pointer_down {
-                                if let Some(anchor) = self.transform_drag_anchor {
+                                if let Some(pivot) = self.transform_rotate_pivot {
+                                    if let Some(previous) = self.last_pointer_pos {
+                                        let prev = to_stage(previous) - pivot;
+                                        let curr = stage_pos - pivot;
+                                        let radians = curr.y.atan2(curr.x) - prev.y.atan2(prev.x);
+                                        self.rotate_selection_around(pivot, radians);
+                                    }
+                                } else if let Some(anchor) = self.transform_drag_anchor {
                                     if let Some(previous) = self.last_pointer_pos {
                                         let previous_stage = to_stage(previous);
                                         let old_length = previous_stage.distance(anchor).max(1.0);
@@ -3541,40 +3615,28 @@ impl eframe::App for StickApp {
                                 } else if self.selection_rect_start.is_some() {
                                     self.selection_rect_current = Some(stage_pos);
                                 } else if delta.length_sq() > 0.0 {
-                                    if self.selected_text_item_index.is_some() || !self.selected_stroke_indices.is_empty() {
-                                        self.ensure_editable_keyframe();
-                                        if let Some(layer) = self.project.layers.get_mut(self.active_layer_idx) {
-                                            if let Some(frame) = layer.keyframes.get_mut(&self.current_frame) {
-                                                if let Some(index) = self.selected_text_item_index {
-                                                    if let Some(text) = frame.text_items.get_mut(index) {
-                                                        text.x += delta.x;
-                                                        text.y += delta.y;
-                                                    }
-                                                }
-                                                for &index in &self.selected_stroke_indices {
-                                                    if let Some(stroke) = frame.strokes.get_mut(index) {
-                                                        for p in &mut stroke.points {
-                                                            p.x += delta.x;
-                                                            p.y += delta.y;
-                                                        }
-                                                    }
-                                                }
-                                                self.has_unsaved_changes = true;
-                                            }
-                                        }
-                                    }
+                                    self.move_selected_items(delta);
                                 }
                             }
                         }
                         ActiveToolUI::SelectLasso => {
                             if pointer_pressed {
+                                let existing = self.selected_canvas_bounds().is_some_and(
+                                    |bounds| bounds.contains(stage_pos));
+                                self.lasso_dragging_selection = existing &&
+                                    (!self.selected_stroke_indices.is_empty() || self.selected_text_item_index.is_some());
                                 self.lasso_points.clear();
-                                self.selected_stroke_indices.clear();
-                                self.selected_text_item_index = None;
-                                self.lasso_points.push(stage_pos);
+                                if self.lasso_dragging_selection {
+                                    self.save_undo_state();
+                                } else {
+                                    self.selected_stroke_indices.clear();
+                                    self.selected_text_item_index = None;
+                                    self.lasso_points.push(stage_pos);
+                                }
+                            } else if pointer_down && self.lasso_dragging_selection {
+                                self.move_selected_items(delta);
                             } else if pointer_down && self.lasso_points.last()
                                 .is_none_or(|&prev| prev.distance(stage_pos) >= 2.5) {
-                                // Limit to avoid memory growth on very long drag gestures.
                                 if self.lasso_points.len() < 4_096 {
                                     self.lasso_points.push(stage_pos);
                                 }
@@ -3587,6 +3649,8 @@ impl eframe::App for StickApp {
 
             if pointer_released {
                 self.transform_drag_anchor = None;
+                self.transform_rotate_pivot = None;
+                self.lasso_dragging_selection = false;
                 if let (Some(start), Some(end)) = (
                     self.selection_rect_start.take(), self.selection_rect_current.take()
                 ) {
@@ -3740,7 +3804,7 @@ impl eframe::App for StickApp {
                 }
             }
             // Persistent visual selection and a draggable scale handle.
-            if matches!(self.active_tool_ui, ActiveToolUI::SelectNormal | ActiveToolUI::FreeTransform) {
+            if matches!(self.active_tool_ui, ActiveToolUI::SelectNormal | ActiveToolUI::SelectLasso | ActiveToolUI::FreeTransform) {
                 if let Some(bounds) = self.selected_canvas_bounds() {
                     let screen_bounds = egui::Rect::from_two_pos(
                         to_screen(bounds.min), to_screen(bounds.max)
@@ -3749,6 +3813,13 @@ impl eframe::App for StickApp {
                         1.6, egui::Color32::from_rgb(54, 194, 255)
                     ));
                     if self.active_tool_ui == ActiveToolUI::FreeTransform {
+                        let top = to_screen(bounds.center_top());
+                        let handle = to_screen(bounds.center_top() + egui::vec2(0.0, -26.0 / scale));
+                        painter.line_segment([top, handle], egui::Stroke::new(1.5, egui::Color32::from_rgb(54, 194, 255)));
+                        painter.circle_filled(handle, 11.0, egui::Color32::from_rgb(19, 31, 42));
+                        painter.circle_stroke(handle, 11.0, egui::Stroke::new(2.0, egui::Color32::from_rgb(54, 194, 255)));
+                        painter.text(handle, egui::Align2::CENTER_CENTER, "↻",
+                            egui::FontId::proportional(16.0), egui::Color32::WHITE);
                         for corner in [screen_bounds.left_top(), screen_bounds.right_top(),
                                        screen_bounds.left_bottom(), screen_bounds.right_bottom()] {
                             let handle = egui::Rect::from_center_size(corner, egui::vec2(9.0, 9.0));
