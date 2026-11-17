@@ -193,6 +193,29 @@ mod tests {
     }
 
     #[test]
+    fn eraser_removes_strokes_and_propagates_the_deletion() {
+        use crate::project::{Stroke, StrokePoint};
+        let mut before = AniProject::default();
+        let dab = |x: f32| Stroke {
+            points: vec![StrokePoint { x, y: 42.0, pressure: 1.0 }],
+            color: [0, 0, 0, 255], fill_color: None, base_width: 4.0,
+            is_vector: false, brush_preset: Default::default(), opacity: 1.0,
+            brush_texture_id: None, tip_shape: Default::default(),
+        };
+        before.layers[0].keyframes.get_mut(&1).unwrap().strokes =
+            vec![dab(10.0), dab(20.0), dab(30.0)];
+        let mut erased = before.clone();
+        erased.layers[0].keyframes.get_mut(&1).unwrap().strokes.remove(1);
+        let edits = diff_projects(&before, &erased).expect("compute eraser edits");
+        let mut peer = before.clone();
+        apply_edits(&mut peer, &edits).expect("apply eraser edits on peer");
+        let result = &peer.layers[0].keyframes[&1].strokes;
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0].points[0].x, 10.0);
+        assert_eq!(result[1].points[0].x, 30.0);
+    }
+
+    #[test]
     fn concurrent_stroke_appends_keep_both_items() {
         use crate::project::{Stroke, StrokePoint};
         let mut base = AniProject::default();
