@@ -192,7 +192,7 @@ pub fn render_frame_pixmap(project: &AniProject, frame_idx: usize, transparent_b
         }
 
         for s in &fd.strokes {
-            draw_skia_stroke(&mut layer_pixmap, s, Transform::identity(), 1.0);
+            draw_skia_stroke(&mut layer_pixmap, s, Transform::identity());
         }
 
         // Text must be present in every export, not only in the editor preview.
@@ -208,7 +208,7 @@ pub fn render_frame_pixmap(project: &AniProject, frame_idx: usize, transparent_b
                     .post_rotate(inst.rotation_deg)
                     .post_translate(inst.x + inst.anchor_offset_x, inst.y + inst.anchor_offset_y);
                 for s in sym_strokes {
-                    draw_skia_stroke(&mut layer_pixmap, s, ts, inst.scale);
+                    draw_skia_stroke(&mut layer_pixmap, s, ts);
                 }
             }
         }
@@ -285,126 +285,71 @@ fn draw_export_text(pixmap: &mut Pixmap, item: &crate::project::TextItem) {
     }
 }
 
-fn draw_skia_stroke(pixmap: &mut Pixmap, s: &crate::project::Stroke, ts: Transform, width_scale: f32) {
-    if s.points.is_empty() {
-        return;
+fn fill_skia_polygon(
+    pixmap: &mut Pixmap, mut points: impl Iterator<Item=(f32,f32)>, paint: &Paint, ts: Transform,
+) {
+    let Some((x,y)) = points.next() else { return };
+    let mut path = PathBuilder::new();
+    path.move_to(x,y);
+    for (x,y) in points { path.line_to(x,y); }
+    path.close();
+    if let Some(path) = path.finish() {
+        pixmap.fill_path(&path,paint,tiny_skia::FillRule::Winding,ts,None);
     }
-    let alpha = ((s.color[3] as f32) * s.opacity.clamp(0.0, 1.0)) as u8;
+}
+
+fn draw_skia_stroke(pixmap: &mut Pixmap, s: &crate::project::Stroke, ts: Transform) {
+    use crate::brush_engine::{visit_round_marks, RoundMark};
+    let Some(first) = s.points.first() else { return };
+    let alpha = (s.color[3] as f32 * s.opacity.clamp(0.0,1.0)) as u8;
     let mut paint = Paint::default();
-    paint.set_color_rgba8(s.color[0], s.color[1], s.color[2], alpha);
     paint.anti_alias = true;
-
+    if let Some(fc) = s.fill_color.filter(|_| s.points.len() >= 3) {
+        paint.set_color_rgba8(fc[0], fc[1], fc[2], (fc[3] as f32 * s.opacity.clamp(0.0,1.0)) as u8);
+        fill_skia_polygon(pixmap, s.points.iter().map(|p| (p.x,p.y)), &paint, ts);
+    }
+    if alpha == 0 { return; }
+    if let Some(texture) = crate::texture_brush::TextureBrush::for_stroke(s) {
+        texture.export(pixmap, s, alpha, ts);
+        return;
+    }
     if !s.is_vector && s.tip_shape != BrushTipShape::Round {
-        if let Some(fc) = s.fill_color {
-            if s.points.len() >= 3 {
-                let mut region = PathBuilder::new();
-                region.move_to(s.points[0].x, s.points[0].y);
-                for p in &s.points[1..] { region.line_to(p.x, p.y); }
-                region.close();
-                if let Some(path) = region.finish() {
-                    let mut fill_paint = Paint::default();
-                    fill_paint.set_color_rgba8(fc[0], fc[1], fc[2],
-                        ((fc[3] as f32)*s.opacity.clamp(0.0,1.0)) as u8);
-                    fill_paint.anti_alias = true;
-                    pixmap.fill_path(&path,&fill_paint,tiny_skia::FillRule::Winding,ts,None);
+        paint.set_color_rgba8(s.color[0], s.color[1], s.color[2], alpha);
+        crate::brush_engine::visit_pressure_dabs(&s.points,s.base_width, |dab,_| {
+            let polygon = crate::brush_engine::dab_polygon(s.tip_shape, dab);
+            fill_skia_polygon(pixmap, polygon.into_iter(), &paint, ts);
+        });
+        return;
+    }
+    let mut centerline = None;
+    visit_round_marks(s, |mark, flow| {
+        paint.set_color_rgba8(s.color[0], s.color[1], s.color[2], (alpha as f32 * flow) as u8);
+        match mark {
+            RoundMark::Outline(contour) => fill_skia_polygon(pixmap, contour.into_iter(), &paint, ts),
+            RoundMark::Dot(dab) => {
+                let mut pb = PathBuilder::new();
+                pb.push_circle(dab.x,dab.y,dab.radius);
+                if let Some(path) = pb.finish() {
+                    pixmap.fill_path(&path,&paint,tiny_skia::FillRule::Winding,ts,None);
+                }
+            }
+            RoundMark::Line { width } => {
+                let path = centerline.get_or_insert_with(|| {
+                    let mut pb = PathBuilder::new();
+                    pb.move_to(first.x,first.y);
+                    for p in &s.points[1..] { pb.line_to(p.x,p.y); }
+                    pb.finish()
+                });
+                if let Some(path) = path {
+                    let brush = Stroke {
+                        width, line_cap: tiny_skia::LineCap::Round,
+                        line_join: tiny_skia::LineJoin::Round, ..Stroke::default()
+                    };
+                    pixmap.stroke_path(path,&paint,&brush,ts,None);
                 }
             }
         }
-        for dab in crate::brush_engine::sample_pressure_dabs(&s.points,s.base_width) {
-            let polygon = crate::brush_engine::dab_polygon(s.tip_shape,dab);
-            if polygon.len() < 3 { continue; }
-            let mut path = PathBuilder::new();
-            path.move_to(polygon[0].0,polygon[0].1);
-            for &(x,y) in &polygon[1..] { path.line_to(x,y); }
-            path.close();
-            if let Some(path)=path.finish() {
-                pixmap.fill_path(&path,&paint,tiny_skia::FillRule::Winding,ts,None);
-            }
-        }
-        return;
-    }
-
-    // Share the G-Pen pressure sampler with the live canvas preview.
-    if !s.is_vector && s.brush_preset == crate::project::KritaBrushPreset::GPenInk {
-        // Bucket fill must be exported beneath the brush outline, too.
-        if let Some(fc) = s.fill_color {
-            if s.points.len() >= 3 {
-                let mut region = PathBuilder::new();
-                region.move_to(s.points[0].x, s.points[0].y);
-                for p in &s.points[1..] { region.line_to(p.x, p.y); }
-                region.close();
-                if let Some(path) = region.finish() {
-                    let mut fill_paint = Paint::default();
-                    fill_paint.set_color_rgba8(fc[0], fc[1], fc[2],
-                        ((fc[3] as f32) * s.opacity.clamp(0.0, 1.0)) as u8);
-                    fill_paint.anti_alias = true;
-                    pixmap.fill_path(&path, &fill_paint, tiny_skia::FillRule::Winding, ts, None);
-                }
-            }
-        }
-        let contour=crate::stroke_geometry::pressure_outline(&s.points,s.base_width);
-        if contour.len()>=3 {
-            let mut pb=PathBuilder::new();
-            pb.move_to(contour[0].0,contour[0].1);
-            for &(x,y) in contour.iter().skip(1) { pb.line_to(x,y); }
-            pb.close();
-            if let Some(path)=pb.finish() {
-                pixmap.fill_path(&path,&paint,tiny_skia::FillRule::Winding,ts,None);
-            }
-        } else if s.points.len()==1 {
-            let point=&s.points[0];
-            let mut pb=PathBuilder::new();
-            pb.push_circle(point.x,point.y,(s.base_width*0.5*point.pressure).max(0.25));
-            if let Some(path)=pb.finish() {
-                pixmap.fill_path(&path,&paint,tiny_skia::FillRule::Winding,ts,None);
-            }
-        } else if s.points.len()>=2 {
-            // Very long or self-degenerate paths must still export.
-            let mut pb=PathBuilder::new();
-            pb.move_to(s.points[0].x,s.points[0].y);
-            for p in s.points.iter().skip(1){pb.line_to(p.x,p.y);}
-            if let Some(path)=pb.finish(){
-                let mut brush=Stroke::default();
-                brush.width=s.base_width.max(0.25)*width_scale;
-                brush.line_cap=tiny_skia::LineCap::Round;
-                brush.line_join=tiny_skia::LineJoin::Round;
-                pixmap.stroke_path(&path,&paint,&brush,ts,None);
-            }
-        }
-        return;
-    }
-
-    if s.points.len() == 1 {
-        let mut pb = PathBuilder::new();
-        pb.push_circle(
-            s.points[0].x,
-            s.points[0].y,
-            (s.base_width * s.points[0].pressure * 0.5).max(1.0),
-        );
-        if let Some(path) = pb.finish() {
-            pixmap.fill_path(&path, &paint, tiny_skia::FillRule::Winding, ts, None);
-        }
-        return;
-    }
-
-    let mut pb = PathBuilder::new();
-    pb.move_to(s.points[0].x, s.points[0].y);
-    for p in &s.points[1..] {
-        pb.line_to(p.x, p.y);
-    }
-    if let Some(path) = pb.finish() {
-        if let Some(fc) = s.fill_color {
-            let mut fill_paint = Paint::default();
-            fill_paint.set_color_rgba8(fc[0], fc[1], fc[2], ((fc[3] as f32) * s.opacity.clamp(0.0, 1.0)) as u8);
-            fill_paint.anti_alias = true;
-            pixmap.fill_path(&path, &fill_paint, tiny_skia::FillRule::Winding, ts, None);
-        }
-        let mut stroke = Stroke::default();
-        stroke.width = (s.base_width * width_scale).max(1.0);
-        stroke.line_cap = tiny_skia::LineCap::Round;
-        stroke.line_join = tiny_skia::LineJoin::Round;
-        pixmap.stroke_path(&path, &paint, &stroke, ts, None);
-    }
+    });
 }
 
 fn pixmap_to_rgba_image(pixmap: &Pixmap) -> RgbaImage {
@@ -755,6 +700,48 @@ mod layer_opacity_tests {
             .pixel(24, 24)
             .expect("center pixel")
             .alpha()
+    }
+
+    #[test]
+    fn textured_brushes_keep_fast_strokes_and_survive_project_roundtrip() {
+        use crate::persistence::{atomic_save, migration, sniff};
+        let mut previous_pixels = Vec::new();
+        for preset in [KritaBrushPreset::DryBrush, KritaBrushPreset::Chalk] {
+            let mut project = project_with_solid_dab(1.0);
+            project.width = 220;
+            let stroke = &mut project.layers[0].keyframes.get_mut(&1).unwrap().strokes[0];
+            stroke.brush_preset = preset;
+            stroke.points[0].x = 8.0;
+            stroke.points[0].pressure = 0.35;
+            stroke.points.push(StrokePoint { x: 210.0, y: 24.0, pressure: 1.0 });
+            let image = render_frame_pixmap(&project, 1, true, [0;4]);
+            for x in 8..210 {
+                assert!((12..36).any(|y| image.pixel(x,y).unwrap().alpha() > 0),
+                    "{preset:?} left column {x} empty");
+            }
+            let ink_at = |x| (10..38).map(|y| u32::from(image.pixel(x,y).unwrap().alpha())).sum::<u32>();
+            assert!(ink_at(185) > ink_at(24));
+            let bytes = atomic_save::serialize_and_compress_project(&project).unwrap();
+            let (loaded, _) = migration::decode_and_migrate(sniff::sniff_project_bytes(&bytes).unwrap()).unwrap();
+            let reloaded = render_frame_pixmap(&loaded, 1, true, [0;4]);
+            assert_eq!(image.data(), reloaded.data());
+            assert_ne!(image.data(), previous_pixels.as_slice());
+            previous_pixels = image.data().to_owned();
+        }
+    }
+
+    #[test]
+    fn watercolor_and_airbrush_export_the_translucent_outer_wash() {
+        for preset in [KritaBrushPreset::Watercolor, KritaBrushPreset::SoftAirbrush] {
+            let mut project = project_with_solid_dab(1.0);
+            let stroke = &mut project.layers[0].keyframes.get_mut(&1).unwrap().strokes[0];
+            stroke.brush_preset = preset;
+            stroke.points[0].x = 6.0;
+            stroke.points.push(StrokePoint { x: 42.0, y: 24.0, pressure: 1.0 });
+            let rendered = render_frame_pixmap(&project, 1, true, [0;4]);
+            let halo = rendered.pixel(24,33).unwrap().alpha();
+            assert!(halo > 0 && halo < rendered.pixel(24,24).unwrap().alpha());
+        }
     }
 
     #[test]

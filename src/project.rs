@@ -13,6 +13,8 @@ pub enum KritaBrushPreset {
     ChiselMarker,
     SoftAirbrush,
     SketchPencil,
+    DryBrush,
+    Chalk,
 }
 
 impl Default for KritaBrushPreset {
@@ -22,6 +24,16 @@ impl Default for KritaBrushPreset {
 }
 
 impl KritaBrushPreset {
+    pub const MENU: [(Self, &'static str, &'static str); 7] = [
+        (Self::GPenInk, "G-Pen", "حبر"),
+        (Self::Watercolor, "Watercolor", "مائية"),
+        (Self::ChiselMarker, "Marker", "ماركر"),
+        (Self::SoftAirbrush, "Airbrush", "بخاخ"),
+        (Self::SketchPencil, "Pencil", "رصاص"),
+        (Self::DryBrush, "DryBrush", "جافة"),
+        (Self::Chalk, "Chalk", "طباشير"),
+    ];
+
     pub fn label(&self) -> &'static str {
         match self {
             KritaBrushPreset::GPenInk => "G-Pen (حبر ثابت بدون ذيل)",
@@ -29,6 +41,8 @@ impl KritaBrushPreset {
             KritaBrushPreset::ChiselMarker => "Marker (ماركر شفاف متراكم)",
             KritaBrushPreset::SoftAirbrush => "Airbrush (بخاخ ناعم)",
             KritaBrushPreset::SketchPencil => "Pencil (قلم رصاص سكتش)",
+            Self::DryBrush => "DryBrush (فرشاة جافة)",
+            Self::Chalk => "Chalk (طباشير)",
         }
     }
 
@@ -39,6 +53,8 @@ impl KritaBrushPreset {
             KritaBrushPreset::ChiselMarker => 0.42,
             KritaBrushPreset::SoftAirbrush => 0.40,
             KritaBrushPreset::SketchPencil => 0.75,
+            Self::DryBrush => 0.84,
+            Self::Chalk => 0.64,
         }
     }
 }
@@ -109,7 +125,7 @@ impl EasingCurve {
     }
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct StrokePoint {
     pub x: f32,
     pub y: f32,
@@ -131,7 +147,7 @@ pub enum BrushTipShape {
     WideRectangle,
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct Stroke {
     #[serde(default)]
     pub points: Vec<StrokePoint>,
@@ -270,7 +286,7 @@ fn perpendicular_distance(p: &StrokePoint, a: &StrokePoint, b: &StrokePoint) -> 
     ((p.x - proj_x).powi(2) + (p.y - proj_y).powi(2)).sqrt()
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct TextItem {
     #[serde(default)]
     pub content: String,
@@ -300,7 +316,7 @@ impl Default for MediaType {
     }
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct MediaItem {
     #[serde(default)]
     pub path: String,
@@ -320,7 +336,7 @@ fn default_media_dim() -> f32 {
     300.0
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct Symbol {
     #[serde(default)]
     pub name: String,
@@ -332,7 +348,7 @@ pub struct Symbol {
     pub nested_total_frames: usize,
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct SymbolInstance {
     #[serde(default)]
     pub symbol_name: String,
@@ -350,7 +366,7 @@ pub struct SymbolInstance {
     pub anchor_offset_y: f32,
 }
 
-#[derive(Serialize, Deserialize, Clone, Default, Debug)]
+#[derive(Serialize, Deserialize, Clone, Default, Debug, PartialEq)]
 pub struct FrameData {
     #[serde(default)]
     pub strokes: Vec<Stroke>,
@@ -370,7 +386,7 @@ pub struct FrameData {
     pub easing: EasingCurve,
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct Layer {
     #[serde(default = "default_layer_name")]
     pub name: String,
@@ -397,7 +413,7 @@ fn default_true() -> bool {
     true
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct AudioTrack {
     #[serde(default)]
     pub name: String,
@@ -421,7 +437,7 @@ fn default_end_frame() -> usize {
     120
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct OnionSkinSettings {
     #[serde(default = "default_true")]
     pub enabled: bool,
@@ -459,7 +475,7 @@ impl Default for OnionSkinSettings {
     }
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct AniProject {
     #[serde(default = "default_schema")]
     pub schema_version: u32,

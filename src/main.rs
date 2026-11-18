@@ -2,6 +2,7 @@
 
 mod brushes;
 mod brush_engine;
+mod texture_brush;
 mod stroke_geometry;
 mod sculpt_tools;
 mod stylus;
@@ -20,6 +21,7 @@ mod timeline_styles;
 mod profile;
 mod project;
 mod collab;
+mod cursor_sync;
 mod cloud_sync;
 mod project_sync;
 mod remote_access;
@@ -711,8 +713,8 @@ fn generate_stick_window_icon() -> egui::IconData {
             let idx = ((y * size + x) * 4) as usize;
             let fx = x as f32 - 32.0;
             let fy = y as f32 - 32.0;
-            let u = (fx + fy) * 0.7071;
-            let v = (-fx + fy) * 0.7071;
+            let u = (fx + fy) * std::f32::consts::FRAC_1_SQRT_2;
+            let v = (-fx + fy) * std::f32::consts::FRAC_1_SQRT_2;
             if u.abs() <= 26.0 && v.abs() <= 5.0 {
                 if u.abs() >= 24.4 || v.abs() >= 3.4 {
                     rgba[idx..idx + 4].copy_from_slice(&[15, 15, 18, 255]);
@@ -995,12 +997,13 @@ fn draw_anicraft_timeline_cell(painter: &egui::Painter, rect: egui::Rect, is_key
     }
 }
 
-#[derive(Clone)]
 struct HistorySnapshot {
-    project: Arc<AniProject>,
+    project: AniProject,
     timeline_length: usize,
     current_frame: usize,
     active_layer_idx: usize,
+    loop_start_frame: usize,
+    loop_end_frame: usize,
 }
 
 fn build_geometric_stroke(kind: GeometricShapeKind, p0: egui::Pos2, p1: egui::Pos2, color: [u8; 4], width: f32) -> Stroke {
@@ -1200,13 +1203,13 @@ struct StickApp {
 }
 
 impl StickApp {
-    fn new(cc: &eframe::CreationContext<'_>) -> Self {
-        setup_custom_fonts(&cc.egui_ctx);
-        apply_stick_theme(&cc.egui_ctx);
+    fn new(ctx: &egui::Context) -> Self {
+        setup_custom_fonts(ctx);
+        apply_stick_theme(ctx);
         let mut proj = AniProject::default();
         proj.total_frames = 1;
         let profile = UserProfile::load();
-        let artist_avatar = load_artist_avatar(&cc.egui_ctx, profile.avatar_path.as_deref());
+        let artist_avatar = load_artist_avatar(ctx, profile.avatar_path.as_deref());
         let default_install_path = std::env::var("LOCALAPPDATA").map(|p| format!("{}\\StickStudio", p)).unwrap_or_else(|_| "C:\\StickStudio".to_string());
         let initial_mode = if is_running_from_installed_dir() { WorkspaceMode::Launcher } else { WorkspaceMode::InstallerSetup };
 
@@ -1355,6 +1358,15 @@ impl StickApp {
         self.online_discovery = Some(rx);
     }
 
+    fn refresh_online_timeline(&mut self) {
+        self.timeline_length = self.project.total_frames.max(1);
+        self.current_frame = self.current_frame.clamp(1, self.timeline_length);
+        self.active_layer_idx = self.active_layer_idx.min(self.project.layers.len().saturating_sub(1));
+        self.loop_start_frame = self.loop_start_frame.clamp(1, self.timeline_length);
+        self.loop_end_frame = self.loop_end_frame.clamp(self.loop_start_frame, self.timeline_length);
+        self.clear_cel_selection();
+    }
+
     fn poll_online_events(&mut self, ctx: &egui::Context) {
         let discovered = self.online_discovery.as_ref().and_then(|rx| rx.try_recv().ok());
         if let Some(result) = discovered {
@@ -1362,7 +1374,13 @@ impl StickApp {
             self.online_remote_info = Some(result.tailnet);
             self.online_discovery = None;
         }
-        let events = self.online_session.as_ref().map(|s| s.events()).unwrap_or_default();
+        let events = self.online_session.as_ref().map(|session| {
+            session.wake_on_cursor(|| {
+                let ctx = ctx.clone();
+                Box::new(move || ctx.request_repaint())
+            });
+            session.events()
+        }).unwrap_or_default();
         for event in events {
             match event {
                 OnlineEvent::Connected(project) => {
@@ -1373,13 +1391,9 @@ impl StickApp {
                             continue;
                         }
                     }
-                    self.save_undo_state();
-                    self.timeline_length = project.total_frames.max(1);
-                    self.current_frame = 1;
-                    self.active_layer_idx = 0;
-                    self.project = project;
+                    // A guest's previous local document must not enter room undo history.
+                    self.replace_document(project);
                     if let Some(session) = &self.online_session { session.set_baseline(&self.project); }
-                    self.current_project_path = None;
                     self.has_unsaved_changes = true;
                     self.online_message.clear();
                     self.workspace_mode = match self.online_mode {
@@ -1401,11 +1415,9 @@ impl StickApp {
                         .map(|session| session.ingest_remote_edits(&mut self.project, &edits));
                     match result {
                         Some(Ok(())) => {
-                            self.timeline_length = self.timeline_length.max(self.project.total_frames);
-                            self.active_layer_idx = self.active_layer_idx.min(self.project.layers.len().saturating_sub(1));
+                            self.refresh_online_timeline();
                             self.undo_stack.clear();
                             self.redo_stack.clear();
-                            self.selected_stroke_indices.clear();
                             self.has_unsaved_changes = true;
                         }
                         Some(Err(err)) => {
@@ -1424,18 +1436,25 @@ impl StickApp {
                     }
                     self.project = project;
                     if let Some(session) = &self.online_session { session.set_baseline(&self.project); }
-                    self.timeline_length = self.project.total_frames.max(1);
-                    self.current_frame = self.current_frame.min(self.timeline_length);
-                    self.active_layer_idx = self.active_layer_idx.min(self.project.layers.len().saturating_sub(1));
+                    self.refresh_online_timeline();
                     self.undo_stack.clear();
                     self.redo_stack.clear();
-                    self.selected_stroke_indices.clear();
                     self.has_unsaved_changes = true;
                 }
                 OnlineEvent::Members(n) => self.online_members = n,
                 OnlineEvent::Roster(roster) => {
+                    if let Some(session) = &mut self.online_session {
+                        session.cursors.retain_members(|id| roster.iter().any(|p| p.id == id));
+                    }
                     self.online_members = roster.len();
                     self.online_participants = roster;
+                }
+                OnlineEvent::Cursor { id, position, received } => {
+                    if self.online_participants.iter().any(|p| p.id == id) {
+                        if let Some(session) = &mut self.online_session {
+                            session.cursors.update(id, position, received);
+                        }
+                    }
                 }
                 OnlineEvent::HostHandoff { address, promote, title, room_code, limit, project } => {
                     let password = self.online_session.as_ref()
@@ -1460,8 +1479,7 @@ impl StickApp {
                                         &self.project, "online_before_host_transfer");
                                 }
                                 self.project = snapshot;
-                                self.timeline_length = self.project.total_frames.max(1);
-                                self.active_layer_idx = self.active_layer_idx.min(self.project.layers.len().saturating_sub(1));
+                                self.refresh_online_timeline();
                                 self.undo_stack.clear();
                                 self.redo_stack.clear();
                                 self.online_members = 1;
@@ -1498,6 +1516,8 @@ impl StickApp {
                 OnlineEvent::Disconnected(message) => {
                     self.online_message = message;
                     self.online_session = None;
+                    self.online_participants.clear();
+                    self.online_members = 1;
                     // Keep the local project and any unsaved edits intact after disconnect.
                     self.has_unsaved_changes = true;
                     self.status_message = self.online_message.clone();
@@ -1510,6 +1530,8 @@ impl StickApp {
     }
 
     fn leave_online_session(&mut self) {
+        self.online_participants.clear();
+        self.online_members = 1;
         if let Some(session) = self.online_session.take() {
             if session.is_host {
                 // Flush this editor's pending local changes before choosing the
@@ -2003,21 +2025,36 @@ impl StickApp {
 
     fn take_snapshot(&self) -> HistorySnapshot {
         HistorySnapshot {
-            project: Arc::new(self.project.clone()),
+            project: self.project.clone(),
             timeline_length: self.timeline_length,
             current_frame: self.current_frame,
             active_layer_idx: self.active_layer_idx,
+            loop_start_frame: self.loop_start_frame,
+            loop_end_frame: self.loop_end_frame,
         }
     }
 
     fn restore_snapshot(&mut self, snap: HistorySnapshot) {
-        self.project = (*snap.project).clone();
+        self.project = snap.project;
         self.timeline_length = snap.timeline_length.max(1);
         self.current_frame = snap.current_frame.clamp(1, self.timeline_length);
         self.active_layer_idx = snap.active_layer_idx.min(self.project.layers.len().saturating_sub(1));
+        self.loop_start_frame = snap.loop_start_frame;
+        self.loop_end_frame = snap.loop_end_frame;
+        self.has_unsaved_changes = true;
+        self.clear_cel_selection();
+    }
+
+    fn clear_cel_selection(&mut self) {
         self.selected_stroke_indices.clear();
         self.selected_vector_node = None;
+        self.selected_vector_nodes.clear();
+        self.vector_marquee_start = None;
+        self.vector_marquee_current = None;
+        self.vector_axis_drag = None;
         self.transform_drag_anchor = None;
+        self.transform_rotate_pivot = None;
+        self.transform_axis = None;
         self.selected_text_item_index = None;
         self.selection_rect_start = None;
         self.selection_rect_current = None;
@@ -2025,8 +2062,12 @@ impl StickApp {
     }
 
     fn save_undo_state(&mut self) {
-        if self.undo_stack.len() > 60 { self.undo_stack.remove(0); }
-        self.undo_stack.push(self.take_snapshot());
+        self.push_undo_snapshot(self.take_snapshot());
+    }
+
+    fn push_undo_snapshot(&mut self, snapshot: HistorySnapshot) {
+        if self.undo_stack.len() >= 60 { self.undo_stack.remove(0); }
+        self.undo_stack.push(snapshot);
         self.redo_stack.clear();
     }
 
@@ -2200,6 +2241,7 @@ impl StickApp {
     }
 
     fn transform_selected_items(&mut self, scale_factor: f32, delta_angle_deg: f32, flip_h: bool, flip_v: bool) {
+        if self.is_active_layer_locked() || self.selected_stroke_indices.is_empty() { return; }
         self.ensure_editable_keyframe();
         if let Some(layer) = self.project.layers.get_mut(self.active_layer_idx) {
             if let Some(frame) = layer.keyframes.get_mut(&self.current_frame) {
@@ -2236,85 +2278,101 @@ impl StickApp {
     }
 
     fn action_insert_frame_f5(&mut self) {
+        if self.timeline_length >= timeline_ops::MAX_TIMELINE_FRAMES {
+            return;
+        }
         self.save_undo_state();
         self.timeline_length += 1;
         self.project.total_frames = self.timeline_length;
         self.current_frame = self.timeline_length;
+        self.clear_cel_selection();
         self.has_unsaved_changes = true;
         self.play_sfx(SfxType::NewFrame);
     }
 
-    fn action_insert_keyframe_f6(&mut self, now_time: f64) {
-        self.save_undo_state();
-        let next_f = self.current_frame + 1;
-        if next_f > self.timeline_length {
-            self.timeline_length = next_f;
+    fn insert_next_keyframe(&mut self, blank: bool, now_time: f64) {
+        let layer_index = self.active_layer_idx;
+        let Some(layer) = self.project.layers.get(layer_index) else { return };
+        if layer.locked || self.current_frame >= timeline_ops::MAX_TIMELINE_FRAMES {
+            return;
+        }
+        let next = self.current_frame + 1;
+        if layer.keyframes.contains_key(&next) {
+            // Preserve an authored next key by moving it forward on this layer.
+            let (at, action) = if blank {
+                (next, timeline_ops::FrameAction::InsertEmpty)
+            } else {
+                (self.current_frame, timeline_ops::FrameAction::Duplicate)
+            };
+            if !self.edit_timeline_frame(layer_index, at, action) {
+                return;
+            }
+        } else {
+            let data = if blank {
+                FrameData::default()
+            } else {
+                self.project.evaluate_layer_at_frame(layer, self.current_frame)
+            };
+            self.save_undo_state();
+            self.project.layers[layer_index].keyframes.insert(next, data);
+            self.timeline_length = self.timeline_length.max(next);
             self.project.total_frames = self.timeline_length;
+            self.current_frame = next;
+            self.clear_cel_selection();
+            self.has_unsaved_changes = true;
         }
-        if let Some(layer) = self.project.layers.get_mut(self.active_layer_idx) {
-            let copied = Self::get_effective_keyframe_index(layer, self.current_frame)
-                .and_then(|k| layer.keyframes.get(&k).cloned())
-                .unwrap_or_default();
-            layer.keyframes.insert(next_f, copied);
-        }
-        self.current_frame = next_f;
-        self.has_unsaved_changes = true;
-        self.play_sfx(SfxType::NewFrame);
-        self.record_frame_drawn_activity(now_time);
-    }
-
-    fn action_insert_blank_keyframe_f7(&mut self, now_time: f64) {
-        self.save_undo_state();
-        let next_f = self.current_frame + 1;
-        if next_f > self.timeline_length {
-            self.timeline_length = next_f;
-            self.project.total_frames = self.timeline_length;
-        }
-        if let Some(layer) = self.project.layers.get_mut(self.active_layer_idx) {
-            layer.keyframes.insert(next_f, FrameData::default());
-        }
-        self.current_frame = next_f;
-        self.has_unsaved_changes = true;
         self.play_sfx(SfxType::NewFrame);
         self.record_frame_drawn_activity(now_time);
     }
 
     fn copy_frame(&mut self, layer_idx: usize, frame_idx: usize) {
+        if !(1..=self.project.total_frames).contains(&frame_idx) { return; }
         if let Some(layer) = self.project.layers.get(layer_idx) {
-            self.clipboard_frame = Some(Self::get_effective_frame_data(layer, frame_idx).cloned().unwrap_or_default());
+            self.clipboard_frame = Some(self.project.evaluate_layer_at_frame(layer, frame_idx));
             self.play_sfx(SfxType::UiClick);
         }
     }
 
     fn paste_frame(&mut self, layer_idx: usize, frame_idx: usize) {
+        if !(1..=self.project.total_frames).contains(&frame_idx)
+            || !self.project.layers.get(layer_idx).is_some_and(|layer| !layer.locked)
+        {
+            return;
+        }
         if let Some(clip) = self.clipboard_frame.clone() {
             self.save_undo_state();
-            if let Some(layer) = self.project.layers.get_mut(layer_idx) {
-                layer.keyframes.insert(frame_idx, clip);
-                self.has_unsaved_changes = true;
-                self.play_sfx(SfxType::NewFrame);
-            }
+            self.project.layers[layer_idx].keyframes.insert(frame_idx, clip);
+            self.active_layer_idx = layer_idx;
+            self.current_frame = frame_idx;
+            self.clear_cel_selection();
+            self.has_unsaved_changes = true;
+            self.play_sfx(SfxType::NewFrame);
         }
     }
 
-    fn remove_frame_completely(&mut self, layer_idx: usize, frame_idx: usize) {
-        self.save_undo_state();
-        if let Some(layer) = self.project.layers.get_mut(layer_idx) {
-            let mut updated = HashMap::new();
-            for (&k, v) in &layer.keyframes {
-                if k < frame_idx { updated.insert(k, v.clone()); }
-                else if k > frame_idx { updated.insert(k - 1, v.clone()); }
-            }
-            if updated.is_empty() { updated.insert(1, FrameData::default()); }
-            layer.keyframes = updated;
+    fn edit_timeline_frame(&mut self, layer: usize, frame: usize, action: timeline_ops::FrameAction) -> bool {
+        let snapshot = self.take_snapshot();
+        if let Err(reason) = timeline_ops::apply_frame_edit(&mut self.project, layer, frame, action) {
+            self.status_message = reason.to_owned();
+            return false;
         }
-        if self.timeline_length > 1 {
-            self.timeline_length -= 1;
-            self.project.total_frames = self.timeline_length;
+        self.push_undo_snapshot(snapshot);
+        self.timeline_length = self.project.total_frames;
+        self.current_frame = if action == timeline_ops::FrameAction::Duplicate {
+            frame + 1
+        } else {
+            frame.min(self.timeline_length)
+        };
+        self.active_layer_idx = layer;
+        if action == timeline_ops::FrameAction::DeleteFrame {
+            if self.loop_start_frame > frame { self.loop_start_frame -= 1; }
+            if self.loop_end_frame >= frame { self.loop_end_frame = self.loop_end_frame.saturating_sub(1); }
+            self.loop_start_frame = self.loop_start_frame.clamp(1, self.timeline_length);
+            self.loop_end_frame = self.loop_end_frame.clamp(self.loop_start_frame, self.timeline_length);
         }
-        if self.current_frame > self.timeline_length { self.current_frame = self.timeline_length; }
+        self.clear_cel_selection();
         self.has_unsaved_changes = true;
-        self.play_sfx(SfxType::EraserRub);
+        true
     }
 
     fn trigger_audio_stream_scrub(&mut self) {
@@ -2432,15 +2490,35 @@ impl StickApp {
         }
     }
 
+    fn replace_document(&mut self, project: AniProject) {
+        self.stop_audio_playback();
+        self.is_playing = false;
+        self.timeline_length = project.total_frames.max(1);
+        self.loop_start_frame = 1;
+        self.loop_end_frame = self.timeline_length;
+        self.current_frame = 1;
+        self.last_scrubbed_frame = 1;
+        self.active_layer_idx = 0;
+        self.undo_stack.clear();
+        self.redo_stack.clear();
+        self.clear_cel_selection();
+        self.current_stroke = None;
+        self.shape_drag_start = None;
+        self.shape_drag_current = None;
+        self.selected_audio_idx = None;
+        self.editing_symbol_name = None;
+        self.pending_delete_layer = None;
+        self.layer_rename_index = None;
+        self.texture_cache.clear();
+        self.current_project_path = None;
+        self.project = project;
+    }
+
     fn open_project_at_path(&mut self, p: PathBuf) {
         match persistence::open_project_safe(&p) {
                 Ok(outcome) => {
                     self.remember_recent_project(&p);
-                    self.save_undo_state();
-                    self.timeline_length = outcome.project.total_frames.max(1);
-                    self.current_frame = 1;
-                    self.active_layer_idx = 0;
-                    self.project = outcome.project;
+                    self.replace_document(outcome.project);
                     self.has_unsaved_changes = false;
                     self.play_sfx(SfxType::NewFrame);
 
@@ -2515,11 +2593,7 @@ impl StickApp {
     fn import_animate_dialog(&mut self) {
         if let Some(path) = rfd::FileDialog::new().add_filter("Adobe Animate", &["xfl", "fla"]).pick_file() {
             if let Ok(proj) = project::import_adobe_animate_project(&path) {
-                self.save_undo_state();
-                self.timeline_length = proj.total_frames.max(1);
-                self.current_frame = 1;
-                self.active_layer_idx = 0;
-                self.project = proj;
+                self.replace_document(proj);
                 self.has_unsaved_changes = true;
                 self.play_sfx(SfxType::NewFrame);
             }
@@ -2741,7 +2815,8 @@ impl StickApp {
         let mut paths = Vec::new();
         for layer in &self.project.layers {
             if layer.visible {
-                let fd = self.project.evaluate_layer_at_frame(layer, self.current_frame);
+                // Tweens interpolate strokes and symbols. Media paths belong to the held key.
+                let Some(fd) = Self::get_effective_frame_data(layer, self.current_frame) else { continue };
                 for m in &fd.media_items {
                     if !self.texture_cache.contains_key(&m.path) { paths.push(m.path.clone()); }
                 }
@@ -2827,15 +2902,9 @@ impl StickApp {
             ActiveToolUI::Brush => {
                 ui.strong(tr(lang, "Brushes (Icon Presets)", "اختر الفرشة بالأيقونة"));
                 ui.add_space(4.0);
-                let presets = [
-                    (KritaBrushPreset::GPenInk, "G-Pen"),
-                    (KritaBrushPreset::Watercolor, "Watercolor"),
-                    (KritaBrushPreset::ChiselMarker, "Marker"),
-                    (KritaBrushPreset::SoftAirbrush, "Airbrush"),
-                    (KritaBrushPreset::SketchPencil, "Pencil"),
-                ];
                 ui.horizontal_wrapped(|ui| {
-                    for (preset, short_name) in presets {
+                    for (preset, en, ar) in KritaBrushPreset::MENU {
+                        let short_name = tr(lang, en, ar);
                         let is_sel = self.active_krita_brush == preset;
                         let (btn_rect, resp) = ui.allocate_exact_size(egui::vec2(44.0, 44.0), egui::Sense::click());
                         let bg = if is_sel { egui::Color32::from_rgb(0, 122, 204) } else if resp.hovered() { egui::Color32::from_rgb(62, 64, 72) } else { egui::Color32::from_rgb(44, 46, 52) };
@@ -3257,10 +3326,14 @@ impl eframe::App for StickApp {
             if pan_left_nav { self.pan_offset.x -= 18.0; ctx.request_repaint(); }
 
             if self.workspace_mode == WorkspaceMode::AnimationStudio {
-                if shift_f5 || sc_del_frame { self.remove_frame_completely(self.active_layer_idx, self.current_frame); }
+                if shift_f5 || sc_del_frame {
+                    if self.edit_timeline_frame(self.active_layer_idx, self.current_frame, timeline_ops::FrameAction::DeleteFrame) {
+                        self.play_sfx(SfxType::EraserRub);
+                    }
+                }
                 else if sc_f5 { self.action_insert_frame_f5(); }
-                if sc_f6 { self.action_insert_keyframe_f6(now_time); }
-                if sc_f7 { self.action_insert_blank_keyframe_f7(now_time); }
+                if sc_f6 { self.insert_next_keyframe(false, now_time); }
+                if sc_f7 { self.insert_next_keyframe(true, now_time); }
                 if sc_f8 { self.show_symbol_dialog = true; }
                 if sc_play {
                     self.is_playing = !self.is_playing;
@@ -3362,13 +3435,7 @@ impl eframe::App for StickApp {
                                     ui.label(format!("📄 {} ({} KB)", entry.file_name, (entry.size_bytes / 1024).max(1)));
                                     if ui.button(tr(lang, "Restore", "استعادة")).clicked() {
                                         if let Ok(outcome) = persistence::open_project_safe(&entry.path) {
-                                            self.save_undo_state();
-                                            self.timeline_length = outcome.project.total_frames.max(1);
-                                            self.current_frame = 1;
-                                            self.active_layer_idx = 0;
-                                            self.project = outcome.project;
-                                            // نمسح المسار النشط حتى يطلب Save As ولا يكتب فوق الأصل
-                                            self.current_project_path = None;
+                                            self.replace_document(outcome.project);
                                             self.has_unsaved_changes = true;
                                             self.show_recovery_dialog = false;
                                             self.play_sfx(SfxType::NewFrame);
@@ -4488,13 +4555,8 @@ impl eframe::App for StickApp {
                                     }
                                 }
                                 ActiveToolUI::Brush => {
-                                    for (preset, label) in [
-                                        (KritaBrushPreset::GPenInk, "G-Pen"),
-                                        (KritaBrushPreset::Watercolor, "Watercolor"),
-                                        (KritaBrushPreset::ChiselMarker, "Marker"),
-                                        (KritaBrushPreset::SoftAirbrush, "Airbrush"),
-                                        (KritaBrushPreset::SketchPencil, "Pencil"),
-                                    ] {
+                                    for (preset, en, ar) in KritaBrushPreset::MENU {
+                                        let label = tr(lang, en, ar);
                                         if ui.selectable_label(self.active_krita_brush == preset, label).clicked() {
                                             self.active_krita_brush = preset;
                                             self.brush_opacity = preset.default_opacity();
@@ -4890,6 +4952,7 @@ impl eframe::App for StickApp {
         }
 
         let mut frame_menu_action: Option<(usize, usize, timeline_ops::FrameAction)> = None;
+        let mut timeline_seek = None;
         let mut timeline_visibility_toggle: Option<usize> = None;
         let mut timeline_lock_toggle: Option<usize> = None;
         // شريط التايم لاين السفلي في وضع الأنيميشن
@@ -4946,8 +5009,8 @@ impl eframe::App for StickApp {
                     ui.label(egui::RichText::new(format!("Frame {} / {}", self.current_frame, self.timeline_length))
                         .color(egui::Color32::from_rgb(255, 214, 110)).strong());
                     if ui.button(tr(lang, "+ Frame (F5)", "+ فريم (F5)")).clicked() { self.action_insert_frame_f5(); }
-                    if ui.button(tr(lang, "◆ Keyframe (F6)", "◆ كي فريم (F6)")).clicked() { self.action_insert_keyframe_f6(now_time); }
-                    if ui.button(tr(lang, "◇ Blank (F7)", "◇ فاضي (F7)")).clicked() { self.action_insert_blank_keyframe_f7(now_time); }
+                    if ui.button(tr(lang, "◆ Keyframe (F6)", "◆ كي فريم (F6)")).clicked() { self.insert_next_keyframe(false, now_time); }
+                    if ui.button(tr(lang, "◇ Blank (F7)", "◇ فاضي (F7)")).clicked() { self.insert_next_keyframe(true, now_time); }
                     if ui.checkbox(&mut self.project.onion_skin.enabled, tr(lang, "Onion Skin", "عرض الفريمات المجاورة"))
                         .on_hover_text(tr(lang, "Show faded previous and next frames to help animate.", "إظهار الفريمات السابقة والتالية بشفافية لتسهيل التحريك."))
                         .changed()
@@ -4986,9 +5049,10 @@ impl eframe::App for StickApp {
                         .text(tr(lang, "Panel height", "ارتفاع التايم لاين"))).changed() {
                         self.config.save();
                     }
-                    if ui.small_button(tr(lang, "+24 frames", "زوّد 24 فريم")).clicked() {
+                    if ui.add_enabled(self.timeline_length < timeline_ops::MAX_TIMELINE_FRAMES,
+                        egui::Button::new(tr(lang, "+24 frames", "زوّد 24 فريم")).small()).clicked() {
                         self.save_undo_state();
-                        self.timeline_length = self.timeline_length.saturating_add(24).min(20_000);
+                        self.timeline_length = (self.timeline_length + 24).min(timeline_ops::MAX_TIMELINE_FRAMES);
                         self.project.total_frames = self.timeline_length;
                         self.has_unsaved_changes = true;
                     }
@@ -5003,6 +5067,7 @@ impl eframe::App for StickApp {
                     self.config.timeline_new_row_height.clamp(36.0, 76.0)
                 } else { 34.0 };
                 let cols = self.timeline_length.max(30);
+                let can_delete_global = self.timeline_length > 1 && self.project.layers.iter().all(|layer| !layer.locked);
                 egui::ScrollArea::both().id_salt("timeline_frame_scroller").show(ui, |ui| {
                     ui.horizontal(|ui| {
                         ui.allocate_ui(egui::vec2(label_w, header_h), |ui| {
@@ -5035,8 +5100,7 @@ impl eframe::App for StickApp {
                                 }
                             }
                             if resp.clicked() || (pointer_down && resp.hovered()) {
-                                if f > self.timeline_length { self.timeline_length = f; self.project.total_frames = f; }
-                                self.current_frame = f;
+                                timeline_seek = Some((self.active_layer_idx, f));
                             }
                         }
                     });
@@ -5056,14 +5120,17 @@ impl eframe::App for StickApp {
                                                 egui::Color32::from_rgb(113, 209, 255)
                                             } else { egui::Color32::WHITE }))
                                         .on_hover_text(&layer.name).clicked() {
-                                        self.active_layer_idx = l_idx;
+                                        timeline_seek = Some((l_idx, self.current_frame));
                                     }
                                 });
                             });
+                            let mut exposure = None;
                             for f in 1..=cols {
                                 let is_b = f > self.timeline_length;
-                                let is_kf = !is_b && layer.keyframes.contains_key(&f);
-                                let eff = if is_b { None } else { Self::get_effective_frame_data(layer, f) };
+                                let key = layer.keyframes.get(&f);
+                                if key.is_some() { exposure = key; }
+                                let is_kf = !is_b && key.is_some();
+                                let eff = if is_b { None } else { exposure };
                                 let has_d = eff.map_or(false, |fd| !fd.strokes.is_empty()
                                     || !fd.media_items.is_empty() || !fd.text_items.is_empty()
                                     || !fd.symbol_instances.is_empty());
@@ -5101,26 +5168,34 @@ impl eframe::App for StickApp {
                                 if !is_b { draw_anicraft_timeline_cell(ui.painter(), cr, is_kf, has_d, tw); }
                                 }
                                 if cresp.clicked() {
-                                    if is_b { self.timeline_length = f; self.project.total_frames = f; }
-                                    self.active_layer_idx = l_idx;
-                                    self.current_frame = f;
+                                    timeline_seek = Some((l_idx, f));
                                 }
                                 let is_locked = layer.locked;
-                                let can_delete_global = self.timeline_length > 1
-                                    && self.project.layers.iter().all(|l| !l.locked);
                                 cresp.context_menu(|ui| {
                                     ui.strong(format!("{} — {}", layer.name, f));
                                     ui.separator();
+                                    if is_b { return; }
                                     if ui.button(tr(lang, "Copy Frame", "انسخ الفريم")).clicked() {
                                         frame_menu_action = Some((l_idx, f, timeline_ops::FrameAction::Copy));
                                         ui.close_menu();
                                     }
                                     if ui.add_enabled(!is_locked && self.clipboard_frame.is_some(),
-                                        egui::Button::new(tr(lang, "Paste Frame", "الصق الفريم"))).clicked() {
+                                        egui::Button::new(tr(lang, "Paste over cel", "الصق مكان الخلية"))).clicked() {
                                         frame_menu_action = Some((l_idx, f, timeline_ops::FrameAction::Paste));
                                         ui.close_menu();
                                     }
                                     ui.separator();
+                                    let can_insert = !is_locked && self.timeline_length < timeline_ops::MAX_TIMELINE_FRAMES;
+                                    if ui.add_enabled(can_insert, egui::Button::new(
+                                        tr(lang, "Duplicate cel after (this layer)", "كرّر الخلية بعدها في الطبقة دي"))).clicked() {
+                                        frame_menu_action = Some((l_idx, f, timeline_ops::FrameAction::Duplicate));
+                                        ui.close_menu();
+                                    }
+                                    if ui.add_enabled(can_insert, egui::Button::new(
+                                        tr(lang, "Insert empty cel before (this layer)", "أدرج خلية فاضية قبلها في الطبقة دي"))).clicked() {
+                                        frame_menu_action = Some((l_idx, f, timeline_ops::FrameAction::InsertEmpty));
+                                        ui.close_menu();
+                                    }
                                     if ui.add_enabled(!is_locked, egui::Button::new(
                                         tr(lang, "Create Keyframe", "اعمل كي فريم"))).clicked() {
                                         frame_menu_action = Some((l_idx, f, timeline_ops::FrameAction::Keyframe));
@@ -5156,6 +5231,19 @@ impl eframe::App for StickApp {
                 });
             });
             // The grip and the height slider both modify the same persisted value.
+        }
+        if let Some((layer, frame)) = timeline_seek {
+            if frame > self.timeline_length {
+                self.save_undo_state();
+                self.timeline_length = frame;
+                self.project.total_frames = frame;
+                self.has_unsaved_changes = true;
+            }
+            if self.active_layer_idx != layer || self.current_frame != frame {
+                self.clear_cel_selection();
+                self.active_layer_idx = layer;
+                self.current_frame = frame;
+            }
         }
         if let Some(idx) = timeline_visibility_toggle {
             self.save_undo_state();
@@ -5252,30 +5340,8 @@ impl eframe::App for StickApp {
         if let Some((layer_index, frame_index, action)) = frame_menu_action {
             match action {
                 timeline_ops::FrameAction::Copy => self.copy_frame(layer_index, frame_index),
-                timeline_ops::FrameAction::Paste => {
-                    if self.project.layers.get(layer_index).is_some_and(|layer| !layer.locked) {
-                        self.paste_frame(layer_index, frame_index);
-                    }
-                }
-                edit => {
-                    // Save a single undo snapshot; only one frame command
-                    // executes per context-menu selection.
-                    self.save_undo_state();
-                    match timeline_ops::apply_frame_edit(&mut self.project, layer_index, frame_index, edit) {
-                        Ok(()) => {
-                            self.timeline_length = self.project.total_frames;
-                            self.current_frame = frame_index.min(self.timeline_length);
-                            self.active_layer_idx = layer_index.min(self.project.layers.len().saturating_sub(1));
-                            self.loop_end_frame = self.loop_end_frame.min(self.timeline_length).max(1);
-                            self.loop_start_frame = self.loop_start_frame.min(self.loop_end_frame).max(1);
-                            self.has_unsaved_changes = true;
-                        }
-                        Err(reason) => {
-                            self.undo_stack.pop();
-                            self.status_message = reason.to_string();
-                        }
-                    }
-                }
+                timeline_ops::FrameAction::Paste => self.paste_frame(layer_index, frame_index),
+                edit => { self.edit_timeline_frame(layer_index, frame_index, edit); }
             }
         }
 
@@ -5460,7 +5526,8 @@ impl eframe::App for StickApp {
                 }
             }
 
-            if !space_down && !alt_down && self.active_tool_ui != ActiveToolUI::HandCanvas && is_over_canvas && !any_modal_open && !self.is_active_layer_locked() {
+            let can_use_tool = self.active_tool_ui == ActiveToolUI::Eyedropper || !self.is_active_layer_locked();
+            if !space_down && !alt_down && self.active_tool_ui != ActiveToolUI::HandCanvas && is_over_canvas && !any_modal_open && can_use_tool {
                 if let Some(pos) = pointer_pos {
                     let stage_pos = to_stage(pos);
                     let delta = self.last_pointer_pos.map_or(egui::Vec2::ZERO, |l| to_stage(pos) - to_stage(l));
@@ -5558,14 +5625,8 @@ impl eframe::App for StickApp {
                         }
                         ActiveToolUI::Eyedropper if pointer_pressed => {
                             // Visible topmost layer must take precedence.
-                            let picked = self.project.layers.iter().rev()
-                                .filter(|layer| layer.visible && !layer.is_guide)
-                                .find_map(|layer| {
-                                    let evaluated = self.project.evaluate_layer_at_frame(
-                                        layer, self.current_frame);
-                                    selection_tools::pick_color(
-                                        &evaluated.strokes, stage_pos, (5.0 / scale).max(1.0))
-                                });
+                            let picked = selection_tools::pick_layer_color(
+                                &self.project, self.current_frame, stage_pos, (5.0 / scale).max(1.0));
                             if let Some(color) = picked {
                                 self.brush_color = color;
                             }
@@ -5974,7 +6035,8 @@ impl eframe::App for StickApp {
 
             for layer in self.project.layers.iter().rev() {
                 if layer.visible {
-                    let l_op = layer.opacity.clamp(0.05, 1.0);
+                    let l_op = layer.opacity.clamp(0.0, 1.0);
+                    if l_op == 0.0 { continue; }
                     let fd = self.project.evaluate_layer_at_frame(layer, self.current_frame);
                     for m in &fd.media_items {
                         if let Some(tex) = self.texture_cache.get(&m.path) {
@@ -6148,6 +6210,40 @@ impl eframe::App for StickApp {
                 }
                 draw_stroke_pro(&painter, &shape, None, 1.0, scale, 0.0, 0.0, &to_screen);
             }
+            if let Some(session) = &mut self.online_session {
+                let now = std::time::Instant::now();
+                let stage = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(stage_w, stage_h));
+                let local = ctx.input(|i| i.pointer.hover_pos().filter(|_| i.raw.focused))
+                    .filter(|_| !any_modal_open && ui.rect_contains_pointer(canvas_rect))
+                    .map(to_stage).filter(|p| stage.contains(*p))
+                    .map(|p| cursor_sync::CursorPosition { x: p.x, y: p.y, frame: self.current_frame });
+                session.update_cursor(local, now);
+                for member in &self.online_participants {
+                    let Some(cursor) = session.cursors.position(member.id, now) else { continue; };
+                    if cursor.frame != self.current_frame { continue; }
+                    let tip = to_screen(egui::pos2(cursor.x, cursor.y));
+                    if !canvas_rect.contains(tip) { continue; }
+                    let [r, g, b] = member.color;
+                    let color = egui::Color32::from_rgb(r, g, b);
+                    painter.add(egui::Shape::convex_polygon(
+                        vec![tip, tip + egui::vec2(4.0, 15.0), tip + egui::vec2(13.0, 10.0)],
+                        color, egui::Stroke::new(1.2, egui::Color32::BLACK),
+                    ));
+                    let name = painter.layout_no_wrap(fix_ar(&member.name), egui::FontId::proportional(13.0), egui::Color32::WHITE);
+                    let size = name.size() + egui::vec2(8.0, 4.0);
+                    let label = egui::pos2(
+                        (tip.x + 12.0).min(canvas_rect.right() - size.x).max(canvas_rect.left()),
+                        (tip.y + 12.0).min(canvas_rect.bottom() - size.y).max(canvas_rect.top()),
+                    );
+                    let rect = egui::Rect::from_min_size(label, size);
+                    painter.rect_filled(rect, 3.0, egui::Color32::from_black_alpha(210));
+                    painter.rect_stroke(rect, 3.0, egui::Stroke::new(1.0, color));
+                    painter.galley(label + egui::vec2(4.0, 2.0), name, egui::Color32::WHITE);
+                }
+                if session.cursors.moving(now) {
+                    ctx.request_repaint_after(Duration::from_millis(16));
+                }
+            }
             if show_dot {
                 if let Some(p) = pointer_pos {
                     let radius = ((if self.active_tool_ui == ActiveToolUI::Sculpt {
@@ -6267,12 +6363,45 @@ fn main() -> eframe::Result<()> {
         renderer: eframe::Renderer::Wgpu,
         ..Default::default()
     };
-    eframe::run_native("Stick", options, Box::new(|cc| Ok(Box::new(StickApp::new(cc)))))
+    eframe::run_native("Stick", options, Box::new(|cc| Ok(Box::new(StickApp::new(&cc.egui_ctx)))))
 }
 
 #[cfg(test)]
 mod tool_discovery_tests {
     use super::*;
+
+    #[test]
+    fn remote_shortening_clamps_playhead_loop_and_selection() {
+        let mut app = StickApp::new(&egui::Context::default());
+        app.timeline_length = 12;
+        app.current_frame = 10;
+        app.loop_start_frame = 8;
+        app.loop_end_frame = 12;
+        app.active_layer_idx = 1;
+        app.selected_stroke_indices.push(0);
+        app.project.total_frames = 4;
+        app.refresh_online_timeline();
+        assert_eq!((app.timeline_length, app.current_frame), (4, 4));
+        assert_eq!((app.loop_start_frame, app.loop_end_frame), (4, 4));
+        assert_eq!(app.active_layer_idx, 0);
+        assert!(app.selected_stroke_indices.is_empty());
+    }
+
+    #[test]
+    fn replacing_document_discards_old_path_selection_and_undo_history() {
+        let mut app = StickApp::new(&egui::Context::default());
+        app.save_undo_state();
+        app.current_project_path = Some("previous.stick".into());
+        app.selected_stroke_indices.push(0);
+        let mut next = AniProject::default();
+        next.total_frames = 17;
+        app.replace_document(next);
+        app.undo();
+        assert_eq!(app.timeline_length, 17);
+        assert!(app.current_project_path.is_none());
+        assert!(app.redo_stack.is_empty());
+        assert!(app.selected_stroke_indices.is_empty());
+    }
 
     #[test]
     fn official_google_desktop_oauth_client_is_configured() {

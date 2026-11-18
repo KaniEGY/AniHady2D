@@ -40,8 +40,9 @@ pub fn erase_whole(strokes:&mut Vec<Stroke>,center:(f32,f32),radius:f32)->bool {
     strokes.len()!=old
 }
 
-fn split_stroke(s:Stroke,c:(f32,f32),radius:f32)->Vec<Stroke> {
-    if s.points.len()<2{return if s.points.first().is_some_and(|p| outside(p,c,radius*radius)) {vec![s]} else {vec![]};}
+fn split_stroke(mut s:Stroke,c:(f32,f32),radius:f32)->Vec<Stroke> {
+    // Callers already tested the visible footprint, including the width of a dab.
+    if s.points.len()<2 { return Vec::new(); }
     // The fill-only element is a region, not a drawable path. Removing its
     // polygon corners would leave invalid fill geometry; erase it as a region.
     if s.fill_color.is_some() {
@@ -49,6 +50,7 @@ fn split_stroke(s:Stroke,c:(f32,f32),radius:f32)->Vec<Stroke> {
         return vec![s];
     }
     let effective=(radius+s.base_width.abs()*0.5).max(0.01);
+    let points = std::mem::take(&mut s.points);
     let radius_sq=effective*effective;
     let mut output=Vec::new();
     let mut part:Vec<StrokePoint>=Vec::new();
@@ -60,7 +62,7 @@ fn split_stroke(s:Stroke,c:(f32,f32),radius:f32)->Vec<Stroke> {
             output.push(piece);
         }
     };
-    for pair in s.points.windows(2) {
+    for pair in points.windows(2) {
         let (a,b)=(&pair[0],&pair[1]);
         let dx=b.x-a.x;
         let dy=b.y-a.y;
@@ -157,7 +159,8 @@ mod tests {
     #[test]
     fn single_dab_is_erased_without_creating_invalid_fragments() {
         let mut strokes=vec![line(&[(12.,12.)])];
-        assert!(erase_partial(&mut strokes,(12.,12.),5.));
+        // Brush and eraser rims overlap while the dab's center is outside.
+        assert!(erase_partial(&mut strokes,(18.,12.),5.));
         assert!(strokes.is_empty());
     }
 }

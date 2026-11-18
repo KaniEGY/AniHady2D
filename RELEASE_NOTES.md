@@ -5,6 +5,8 @@
 ## English (US)
 
 ### Bugs fixed
+- The eyedropper samples overlapping layers from the front and distinguishes a shape's outline from its fill. Partial erasing now removes a single dab when its edge touches the eraser.
+- Opening, restoring or importing a whole document clears the previous document's undo history and active save path.
 - **Google sign-in configuration:** official Windows builds now contain Stick Studio's public Google Desktop OAuth Client ID. Legacy empty/invalid saved IDs recover automatically, while valid developer overrides stay intact. Google audience is still in Testing; live browser sign-in and Drive restore require authorized testers and manual validation before broad rollout.
 - **Support popup:** bounded window size and scrollable body, with accessible Close/X and Esc; prevents giant fullscreen-height popup caused by unconstrained RTL layout.
 - **Google OAuth:** older settings with an empty client ID now pick up a public Desktop OAuth ID embedded in newer builds; Sign in is disabled with setup guidance until a valid client ID is present. Real Google sign-in still requires app-owner Google Cloud configuration and testing.
@@ -21,6 +23,9 @@
 - **Known boundaries:** bucket fill operates on recognized closed stroke contours (now with improved near-closure tolerance), not arbitrary raster flood fill. Imported artwork/text still needs further parity tests for every transform. No Krita GPL code is copied into Stick.
 
 ### What's new
+- DryBrush and Chalk add pressure-sensitive bristles and grain to the brush picker. Their patterns follow the saved stroke in the editor and raster exports.
+- Room participants can see one another's named, colored pointers on the same frame. All peers need this protocol v5 build or a compatible newer build.
+- Both timeline styles can duplicate a cel after the selection or insert one empty cel before it. Later keys on that layer shift forward and either edit supports Undo.
 - **Official website groundwork:** added a responsive static Stick Studio homepage, Google API privacy policy, and terms of use under `docs/`. GitHub Pages activation and verified-domain production OAuth branding remain separate owner-controlled steps; no public site URL is claimed live yet.
 - **Arabic support window fix:** donation copy now uses properly ordered, manually wrapped right-aligned Arabic lines, with corrected colloquial spelling and separated emojis to prevent Unicode bidi wrapping errors.
 - **Download progress:** verified GitHub releases now show a real download progress bar, completed percent, and transferred/total megabytes before SHA-256 verification and restart.
@@ -112,6 +117,8 @@
 - **تجهيز تسجيل Google:** أضفنا معرّف OAuth العام الخاص بـStick Studio في إصدارات ويندوز، مع إصلاح الإعدادات القديمة الفارغة أو غير الصحيحة. ما زال Google في وضع Testing، ولا نعتبر تسجيل الدخول والنسخ السحابي مختبرين عمليًا قبل تجارب أجهزة ويندوز.
 
 ### المشاكل اللي اتصلحت
+- القطّارة بتختار من الطبقة الظاهرة في الأمام وبتفرّق بين لون حدود الشكل وتعبئته. الممحاة الجزئية بتمسح نقطة الفرشة لما تلمس حافتها.
+- فتح مشروع أو استرجاع نسخة أو استيراد مشروع كامل بيمسح سجل التراجع ومسار الحفظ بتوع المشروع السابق.
 - **نافذة الدعم:** حجم ثابت ونص قابل للتمرير وزر إغلاق ظاهر واختصار Esc، لحل مشكلة النافذة الممتدة خارج الشاشة.
 - **تسجيل جوجل:** إصلاح قراءة Client ID من النسخة الجديدة عند وجود إعداد فارغ محفوظ من نسخة قديمة، مع منع فتح تسجيل دخول غير مُعد وإظهار التعليمات. الدخول الفعلي يحتاج إعداد OAuth من المطوّر واختبار حساب حقيقي.
 - **الأونلاين:** توحيد ترتيب إرسال الرسم والتعديلات واختبار رفض كلمة السر الخطأ. الاتصال خارج الشبكة المحلية ما زال يحتاج Tailscale أو عنوانًا متاحًا، واختبار جهازين مطلوب.
@@ -128,6 +135,9 @@
 - **القيود الحالية:** الدلو بيلون المسارات المقفولة اللي بيتعرف عليها، ولسه مش Flood Fill كامل على أي سطح Raster. لم يتم نسخ أكواد Krita الخاضعة لترخيص GPL.
 
 ### إيه الجديد؟
+- فرشتا DryBrush وChalk بتضيفا أثر شعيرات وحبيبات بيتغيّر مع ضغط القلم، وبيظهر بنفس النمط بعد الحفظ وفي تصدير الصور.
+- في الغرفة هتشوف مؤشر كل رسّام باسمه ولونه على نفس الفريم. عشان تتصلوا مع بعض استخدموا نسخ متوافقة مع بروتوكول الغرف v5.
+- في التايم لاين القديم والجديد تقدر تكرّر الخلية بعدها أو تدخل خلية فاضية قبلها. المفاتيح التالية على نفس الطبقة بتتحرك، وتقدر تتراجع عن العمليتين.
 - **تصحيح نافذة الدعم:** ضبط صياغة رسالة الدعم المصري وتقسيمها إلى سطور قصيرة بمحاذاة اليمين لمنع تلخبط ترتيب الحروف والكلمات أثناء العرض.
 - **شريط التحميل:** النسبة المئوية وحجم الملف المحمّل أثناء تحديث Stick، ثم التحقق من سلامة الملف قبل التثبيت.
 - **الإبلاغ:** زر «ابلغ عن مشكلة» فوق بيفتح نفس نافذة GitHub وInstagram الموجودة في الشاشة الرئيسية.

@@ -12,8 +12,8 @@ fn generate_stick_icon_ico() -> Vec<u8> {
             // إحداثيات مائلة بزاوية 45 درجة لرسم عصا طويلة قطرية
             let fx = x as f32 - 128.0;
             let fy = y as f32 - 128.0;
-            let u = (fx + fy) * 0.7071; // الطول على امتداد العصا
-            let v = (-fx + fy) * 0.7071; // السُمك العرضي للعصا
+            let u = (fx + fy) * std::f32::consts::FRAC_1_SQRT_2; // الطول على امتداد العصا
+            let v = (-fx + fy) * std::f32::consts::FRAC_1_SQRT_2; // السُمك العرضي للعصا
 
             let half_len = 104.0;
             let half_thick = 18.0;

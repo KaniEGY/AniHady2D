@@ -1,6 +1,8 @@
 # Stick Online — friends over the Internet and LAN
 
-Stick is **hosted on the creator's own computer**. It listens on TCP 47554 for collaborators and uses UDP 47553 to discover rooms. This implementation uses protocol v4 and synchronizes document edits via the host. There is **no central Stick account, global room directory or server operated by Stick**.
+Stick is **hosted on the creator's own computer**. It listens on TCP 47554 for collaborators and uses UDP 47553 to discover rooms. Protocol v5 carries document edits and live canvas pointers through the host.
+
+While viewing the same frame, you see each artist's name and roster color beside their pointer. Each viewer can zoom, pan, rotate or flip the canvas independently. The pointer hides when the artist leaves the stage, switches frames or disconnects. Stick also hides a pointer after six seconds without a fresh position. Pointers exist only during the session.
 
 ## Play with friends on different Internet connections (recommended)
 
@@ -19,7 +21,7 @@ Stick is **hosted on the creator's own computer**. It listens on TCP 47554 for c
 - TCP **47554** carries all edits and the joining snapshot.
 - UDP **47553** advertises rooms using LAN broadcast or unicast to visible Tailscale peers.
 - Two instances on the same PC can test `127.0.0.1:47554`.
-- Both ends must run compatible Stick protocol v4 builds.
+- Everyone in the room needs a protocol v5 build. Update together when moving from v4.
 
 ## Troubleshooting
 
@@ -51,6 +53,7 @@ Stick is **hosted on the creator's own computer**. It listens on TCP 47554 for c
 - [ ] On 3 real PCs: host leaves gracefully, first guest becomes host, remaining guest reconnects, draws, and then the second host leaves and hands off again. Test password protected room, color changes, kick and reconnect attempts.
 - [ ] Unplug the host PC without warning: make sure clients keep local artwork and get an explicit disconnect, not a false promise of recovery.
 - [ ] Test erasing, adding/deleting layers, animation keyframes, and explicit host resync on both PCs.
+- [ ] Compare pointers at different zoom levels and rotations, switch animation frames, leave the stage, then disconnect a guest. Check the names, colors, position and disappearance on the other PC.
 - [ ] Test selection transform at zoom 25%, 100%, 400% and each of its four corner handles.
 - [ ] Confirm old project save/reopen and Previous Versions rollback remain functional.
 
