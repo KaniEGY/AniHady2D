@@ -1928,6 +1928,9 @@ impl StickApp {
                             ui.add(egui::TextEdit::singleline(&mut self.online_invite_input)
                                 .desired_width(390.0)
                                 .hint_text("stick://join?address=...&code=...&mode=drawing"));
+                            ui.add(egui::TextEdit::singleline(&mut self.online_password)
+                                .password(true).desired_width(250.0)
+                                .hint_text(tr(lang,"Room password if required","كلمة سر الغرفة لو موجودة")));
                             if ui.add_enabled(self.online_session.is_none(),
                                 egui::Button::new(tr(lang,"Join invitation","الدخول بالدعوة"))).clicked() {
                                 match online_invite::parse_invite(&self.online_invite_input) {
