@@ -4641,6 +4641,13 @@ impl eframe::App for StickApp {
             )
         });
 
+        let quick_color_pressed=ctx.input(|i|
+            is_shortcut_pressed(i,&self.config.quick_color_key));
+        let size_gesture_down=ctx.input(|i|
+            is_hold_shortcut_active(i,&self.config.size_gesture_key));
+        let opacity_gesture_down=ctx.input(|i|
+            is_hold_shortcut_active(i,&self.config.opacity_gesture_key));
+
         // Best-effort tablet pressure delivered by egui Touch events.
         // Regular mouse input and unsupported tablets safely use 1.0.
         let raw_drawing_pressure =
@@ -4689,6 +4696,25 @@ impl eframe::App for StickApp {
             typing_in_textbox = true;
         }
 
+        if self.show_quick_custom_color {
+            let mut open=true;
+            let mut done=false;
+            egui::Window::new(tr(lang,"Custom Color","لون مخصص"))
+                .open(&mut open).collapsible(false).resizable(false)
+                .anchor(egui::Align2::CENTER_CENTER,[0.0,0.0])
+                .show(ctx,|ui|{
+                    ui.label(tr(lang,
+                        "Choose the exact color used by Brush, Vector Pen and Bucket.",
+                        "اختار اللون المخصص للفرشة وقلم الفيكتور والبوكت."));
+                    ui.add_space(8.0);
+                    ui.color_edit_button_srgba_unmultiplied(&mut self.brush_color);
+                    ui.monospace(format!("#{:02X}{:02X}{:02X}",
+                        self.brush_color[0],self.brush_color[1],self.brush_color[2]));
+                    if ui.button(tr(lang,"Done","تمام")).clicked(){done=true;}
+                });
+            self.show_quick_custom_color=open && !done;
+        }
+
         let transient_system_overlay = artist_intro_visible || now_time < self.level_up_banner_timer;
         let any_modal_open = self.show_symbol_dialog || self.show_text_dialog || self.show_export_studio
             || self.show_command_palette || self.show_exit_dialog || self.show_update_dialog
@@ -4697,7 +4723,7 @@ impl eframe::App for StickApp {
             || self.show_features_guide || self.layer_rename_index.is_some()
             || self.show_timeline_settings || self.show_project_notice
             || self.show_recovery_dialog || self.show_project_details
-            || self.show_feedback_dialog
+            || self.show_feedback_dialog || self.show_quick_custom_color
             || transient_system_overlay;
         if any_modal_open { typing_in_textbox = true; }
 
@@ -6405,12 +6431,6 @@ impl eframe::App for StickApp {
                     ui.selectable_value(&mut self.right_panel_tab,2,
                         tr(lang,"Media","وسائط"));
                 }
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.add(egui::Slider::new(&mut self.config.right_panel_split, 0.18..=0.85)
-                        .show_value(false).text(tr(lang, "Split", "تقسيم"))).changed() {
-                        self.config.save();
-                    }
-                });
             });
             let panel_height = ui.available_height();
             let tool_height = ((panel_height - 44.0).max(180.0)
@@ -7747,9 +7767,9 @@ impl eframe::App for StickApp {
                 ActiveToolUI::Brush | ActiveToolUI::VectorPen | ActiveToolUI::Sculpt
                     | ActiveToolUI::EraserRed | ActiveToolUI::EraserGreen);
             let show_dot = is_inside_workspace && !any_modal_open && !space_down
-                && !alt_down && !ctrl_down && custom_brush_cursor;
+                && !size_gesture_down && !opacity_gesture_down && custom_brush_cursor;
             let show_tool_icon = is_inside_workspace && !any_modal_open && !space_down
-                && !alt_down && !ctrl_down && !custom_brush_cursor
+                && !size_gesture_down && !opacity_gesture_down && !custom_brush_cursor
                 && self.active_tool_ui != ActiveToolUI::HandCanvas;
             let tool_cursor = if !is_inside_workspace || any_modal_open {
                 egui::CursorIcon::Default
@@ -7775,13 +7795,21 @@ impl eframe::App for StickApp {
 
             let is_over_canvas = pointer_on_canvas_layer;
             let secondary_clicked=ctx.input(|i|i.pointer.secondary_clicked());
-            if secondary_clicked && is_over_canvas && !any_modal_open {
+            if (secondary_clicked || quick_color_pressed) && is_over_canvas && !any_modal_open {
                 if let Some(center)=pointer_pos {
-                    let kind=match self.active_tool_ui {
-                        ActiveToolUI::ShapeLine=>Some(canvas_quick_menu::QuickMenuKind::Shapes),
-                        ActiveToolUI::Brush | ActiveToolUI::VectorPen=>
-                            Some(canvas_quick_menu::QuickMenuKind::Colors),
-                        _=>None,
+                    let kind=if quick_color_pressed {
+                        match self.active_tool_ui {
+                            ActiveToolUI::Brush | ActiveToolUI::VectorPen | ActiveToolUI::Bucket=>
+                                Some(canvas_quick_menu::QuickMenuKind::Colors),
+                            _=>None,
+                        }
+                    } else {
+                        match self.active_tool_ui {
+                            ActiveToolUI::ShapeLine=>Some(canvas_quick_menu::QuickMenuKind::Shapes),
+                            ActiveToolUI::Brush | ActiveToolUI::VectorPen | ActiveToolUI::Bucket=>
+                                Some(canvas_quick_menu::QuickMenuKind::Colors),
+                            _=>None,
+                        }
                     };
                     if let Some(kind)=kind {
                         self.canvas_quick_menu=Some(canvas_quick_menu::QuickMenuState{kind,center});
@@ -7803,7 +7831,7 @@ impl eframe::App for StickApp {
                 };
                 if let Some(action)=canvas_quick_menu::show(
                     ctx,menu,&["／","○","□","▭","△","⬠"],&colors,
-                    selected_shape,self.brush_color
+                    selected_shape,self.brush_color,tr(lang,"CUSTOM","مخصص")
                 ) {
                     match action {
                         canvas_quick_menu::QuickMenuAction::Shape(index)=>{
@@ -7823,6 +7851,11 @@ impl eframe::App for StickApp {
                             self.play_sfx(SfxType::UiClick);
                             self.canvas_quick_menu=None;
                         }
+                        canvas_quick_menu::QuickMenuAction::CustomColor=>{
+                            self.show_quick_custom_color=true;
+                            self.play_sfx(SfxType::UiClick);
+                            self.canvas_quick_menu=None;
+                        }
                         canvas_quick_menu::QuickMenuAction::Close=>{
                             self.canvas_quick_menu=None;
                         }
@@ -7831,7 +7864,7 @@ impl eframe::App for StickApp {
             }
 
             let can_alt_adjust_size = self.active_sizable_tool_size().is_some();
-            if alt_down && can_alt_adjust_size && is_over_canvas && !any_modal_open
+            if size_gesture_down && can_alt_adjust_size && is_over_canvas && !any_modal_open
                 && self.canvas_quick_menu.is_none() {
                 if let Some(pos) = pointer_pos {
                     if let Some((origin, start_size)) = self.alt_size_drag_origin {
@@ -7840,15 +7873,19 @@ impl eframe::App for StickApp {
                     } else if let Some(start_size) = self.active_sizable_tool_size() {
                         self.alt_size_drag_origin = Some((pos, start_size));
                     }
-                    if let (Some(radius),Some(value))=(
+                    if let (Some(radius),Some(value),Some(percent))=(
                         self.active_tool_visual_radius_px(scale),
-                        self.active_sizable_tool_size()
+                        self.active_sizable_tool_size(),
+                        self.active_tool_size_percent()
                     ) {
+                        let label=if self.active_tool_ui==ActiveToolUI::Sculpt {
+                            tr(lang,"Radius","نطاق")
+                        } else {tr(lang,"Thickness","السُمك")};
                         canvas_quick_menu::draw_size_feedback(
                             &painter,pos,radius,
                             egui::Color32::from_rgb(
                                 self.brush_color[0],self.brush_color[1],self.brush_color[2]),
-                            value
+                            value,percent,label
                         );
                     }
                 }
@@ -7859,7 +7896,7 @@ impl eframe::App for StickApp {
             }
 
             let can_ctrl_adjust_opacity=self.active_tool_opacity().is_some();
-            if ctrl_down && !alt_down && can_ctrl_adjust_opacity && is_over_canvas
+            if opacity_gesture_down && !size_gesture_down && can_ctrl_adjust_opacity && is_over_canvas
                 && !any_modal_open && self.canvas_quick_menu.is_none() {
                 if let Some(pos)=pointer_pos {
                     if let Some((origin,start_opacity))=self.ctrl_opacity_drag_origin {
@@ -7879,7 +7916,8 @@ impl eframe::App for StickApp {
                 self.ctrl_opacity_drag_origin=None;
             }
 
-            if scroll_y != 0.0 && is_over_canvas && !any_modal_open && !alt_down && !ctrl_down {
+            if scroll_y != 0.0 && is_over_canvas && !any_modal_open
+                && !size_gesture_down && !opacity_gesture_down {
                 let old_zoom = self.zoom_level;
                 let new_zoom = (old_zoom * (1.0 + scroll_y * 0.0018).clamp(0.82, 1.22)).clamp(0.1, 6.0);
                 if let Some(pointer) = pointer_pos {
@@ -8061,8 +8099,8 @@ impl eframe::App for StickApp {
             }
 
             let can_use_tool = self.active_tool_ui == ActiveToolUI::Eyedropper || !self.is_active_layer_locked();
-            let opacity_gesture=ctrl_down && self.active_tool_opacity().is_some();
-            if !space_down && !alt_down && !opacity_gesture
+            let opacity_gesture=opacity_gesture_down && self.active_tool_opacity().is_some();
+            if !space_down && !size_gesture_down && !opacity_gesture
                 && self.canvas_quick_menu.is_none()
                 && self.active_tool_ui != ActiveToolUI::HandCanvas
                 && is_over_canvas && !any_modal_open && can_use_tool {
