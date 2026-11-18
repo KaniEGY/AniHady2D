@@ -5664,7 +5664,7 @@ impl eframe::App for StickApp {
                                 "اختار شكل واجهة Stick المحفوظ."));
                             ui.separator();
                             for (id,en,ar) in [
-                                (0u8,"Current Stick","واجهة Stick الحالية"),
+                                (0u8,"Main Interface","الواجهة الرئيسية"),
                                 (1,"Interface 1","واجهة 1"),
                                 (2,"Interface 2","واجهة 2"),
                                 (3,"Interface 3","واجهة 3"),
@@ -7363,18 +7363,22 @@ impl eframe::App for StickApp {
                     egui::Color32::from_rgba_unmultiplied(80, 190, 255, 155),
                 );
                 match self.symmetry_mode {
-                    SymmetryMode::Horizontal => painter.line_segment(
-                        [to_screen(egui::pos2(stage_w * 0.5, 0.0)),
-                         to_screen(egui::pos2(stage_w * 0.5, stage_h))],
-                        guide,
-                    ),
-                    SymmetryMode::Vertical => painter.line_segment(
-                        [to_screen(egui::pos2(0.0, stage_h * 0.5)),
-                         to_screen(egui::pos2(stage_w, stage_h * 0.5))],
-                        guide,
-                    ),
-                    SymmetryMode::Off => egui::ShapeIdx::new(usize::MAX),
-                };
+                    SymmetryMode::Horizontal => {
+                        painter.line_segment(
+                            [to_screen(egui::pos2(stage_w * 0.5, 0.0)),
+                             to_screen(egui::pos2(stage_w * 0.5, stage_h))],
+                            guide,
+                        );
+                    }
+                    SymmetryMode::Vertical => {
+                        painter.line_segment(
+                            [to_screen(egui::pos2(0.0, stage_h * 0.5)),
+                             to_screen(egui::pos2(stage_w, stage_h * 0.5))],
+                            guide,
+                        );
+                    }
+                    SymmetryMode::Off => {}
+                }
             }
 
             // Non-destructive drawing guides; composed in stage coordinates and transformed
