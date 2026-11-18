@@ -195,8 +195,8 @@ pub fn apply_shape_fill(strokes: &mut [Stroke], x: f32, y: f32, color: [u8; 4]) 
 /// flood the connected transparent area, then trace the outermost pixel edge
 /// back to a vector polygon. The resulting fill stays BELOW the linework.
 /// This is an independently implemented adaptation of the general method
-/// described in AniCraft's permissively licensed paint-bucket documentation.
-/// Blender-inspired controls adapted to Stick's bounded vector-region solver.
+/// implemented as a standalone bounded Stick Studio paint-bucket solver.
+/// Advanced fill controls for Stick's own bounded vector-region solver.
 /// Precision changes the raster sampling resolution, Thickness expands the
 /// temporary boundary mask and Dilate/Contract adjusts color under the ink.
 #[derive(Clone, Copy, Debug)]
@@ -335,7 +335,7 @@ pub fn flood_fill_polygon_with_options(
     }
     let visited=selected?;
 
-    // Krita/AniCraft-style fill growth under drawn linework. The wall mask
+    // Stick Studio fill expansion under drawn linework. The wall mask
     // includes a gap-closing dilation. Tracing the bare transparent area
     // leaves a white hairline between the color and the visible brush.
     // Grow the selected component INTO wall cells only, never into another
