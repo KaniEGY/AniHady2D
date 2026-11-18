@@ -166,8 +166,9 @@ pub fn draw_size_feedback(
     value: f32,
 ) {
     let r = radius_px.clamp(3.0, 220.0);
-    painter.circle_stroke(center, r, egui::Stroke::new(1.5, color));
-    painter.circle_stroke(center, r + 1.5, egui::Stroke::new(1.0, egui::Color32::BLACK));
+    painter.circle_stroke(center, r + 2.0, egui::Stroke::new(2.4, egui::Color32::BLACK));
+    painter.circle_stroke(center, r + 1.0, egui::Stroke::new(1.2, egui::Color32::WHITE));
+    painter.circle_stroke(center, r, egui::Stroke::new(1.7, color));
     painter.text(
         center + egui::vec2(0.0, r + 9.0),
         egui::Align2::CENTER_TOP,
