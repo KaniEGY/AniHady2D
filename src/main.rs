@@ -17,6 +17,7 @@ mod eraser_tools;
 mod selection_tools;
 mod layer_ops;
 mod canvas_sizes;
+mod canvas_appearance;
 mod vector_path;
 mod timeline_ops;
 mod timeline_styles;
@@ -430,6 +431,12 @@ struct AppConfig {
     #[serde(default)]
     show_grid: bool,
     #[serde(default)]
+    canvas_appearance: canvas_appearance::CanvasAppearance,
+    #[serde(default)]
+    canvas_aspect_lock: bool,
+    #[serde(default = "default_canvas_aspect_ratio")]
+    canvas_locked_aspect_ratio: f32,
+    #[serde(default)]
     perspective_mode: u8,
     #[serde(default = "default_perspective_spacing")]
     perspective_spacing: f32,
@@ -532,6 +539,7 @@ struct AppConfig {
 }
 
 fn default_true_val() -> bool { true }
+fn default_canvas_aspect_ratio() -> f32 { 16.0 / 9.0 }
 fn default_perspective_spacing() -> f32 { 40.0 }
 fn default_perspective_width() -> f32 { 1.0 }
 fn default_perspective_color() -> [u8;4] { [58, 154, 227, 255] }
@@ -591,6 +599,9 @@ impl Default for AppConfig {
             recent_projects: Vec::new(),
             sound_effects_enabled: true,
             show_grid: false,
+            canvas_appearance: canvas_appearance::CanvasAppearance::default(),
+            canvas_aspect_lock: false,
+            canvas_locked_aspect_ratio: default_canvas_aspect_ratio(),
             perspective_mode: 0,
             perspective_spacing: default_perspective_spacing(),
             perspective_line_width: default_perspective_width(),
@@ -1168,6 +1179,7 @@ struct StickApp {
     vector_pen_cap: BrushTipShape,
     canvas_width_edit: u32,
     canvas_height_edit: u32,
+    pending_canvas_resize: Option<(u32, u32)>,
     sculpt_radius: f32,
     sculpt_strength: f32,
     transform_drag_anchor: Option<egui::Pos2>,
@@ -1327,6 +1339,7 @@ impl StickApp {
             vector_pen_cap: BrushTipShape::Round,
             canvas_width_edit: 1920,
             canvas_height_edit: 1080,
+            pending_canvas_resize: None,
             sculpt_radius: 64.0,
             sculpt_strength: 0.65,
             transform_drag_anchor: None,
@@ -3135,6 +3148,10 @@ impl StickApp {
         self.save_undo_state();
         self.project.width = width;
         self.project.height = height;
+        if self.config.canvas_aspect_lock {
+            self.config.canvas_locked_aspect_ratio = width as f32 / height as f32;
+            self.config.save();
+        }
         self.canvas_width_edit = width;
         self.canvas_height_edit = height;
         self.has_unsaved_changes = true;
@@ -5959,6 +5976,7 @@ impl eframe::App for StickApp {
         egui::CentralPanel::default().show(ctx, |ui| {
             let canvas_rect = ui.available_rect_before_wrap();
             let painter = ui.painter_at(canvas_rect);
+            painter.rect_filled(canvas_rect, 0.0, self.config.canvas_appearance.workspace_paint());
             let center = canvas_rect.center() + self.pan_offset;
             let scale = self.zoom_level.max(0.1);
             let (stage_w, stage_h) = (self.project.width as f32, self.project.height as f32);
@@ -6035,6 +6053,8 @@ impl eframe::App for StickApp {
                 if fv { ny = -ny; }
                 egui::pos2(nx + stage_w * 0.5, ny + stage_h * 0.5)
             };
+            canvas_appearance::draw_shadow(&painter,stage_w,stage_h,
+                &to_screen,&self.config.canvas_appearance);
             // Rotate the paper along with the artwork, rather than rotating
             // only the strokes over an unrotated white rectangle.
             painter.add(egui::Shape::convex_polygon(
@@ -6840,6 +6860,9 @@ impl eframe::App for StickApp {
                 }
                 draw_stroke_pro(&painter, &shape, None, 1.0, scale, 0.0, 0.0, &to_screen);
             }
+            // Display chrome only, intentionally excluded from all exports.
+            canvas_appearance::draw_chrome(&painter,stage_w,stage_h,scale,
+                &to_screen,&self.config.canvas_appearance);
             if let Some(session) = &mut self.online_session {
                 let now = std::time::Instant::now();
                 let stage = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(stage_w, stage_h));
