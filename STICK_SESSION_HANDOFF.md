@@ -1,5 +1,12 @@
 # Stick Studio — Session Handoff / سجل استكمال المشروع
 
+## 18 November 2026 — Work overhaul integrated review
+- PRs #40 (vector geometry), #41 (canvas appearance/sizes), #42 (pressure stroke smoothing), #43 (Advanced Timeline), #44 (five new brush presets) were merged in sequence into `integration/work-overhaul-20261118` using preserved source changes and explicitly resolved shared documentation / main.rs differences.
+- The build 213 released main was unchanged while staging. After one combined Windows cargo test/Clippy/release build and review, merge the integration PR to main and require the main push release workflow to succeed. Verify `Stick.exe`, `version.txt` and `SHA256SUMS.txt`.
+- **No backend relay or internet-wide collaboration replacement shipped in this batch.** Online external networking remains unverified.
+- Physical pen, multiple Windows machines, long video/audio files, live UI interaction and visually comparing SVG/PNG exports remain separate manual QA, not claimed as done.
+- Later Work/Codex tasks should check current GitHub main head and release first, not reimplement already-merged stage code.
+
 ## 18 November 2026 — five new functional drawing presets (PR pending)
 
 - Feature branch `feature/new-real-brush-presets-20261118` from main build 213.
