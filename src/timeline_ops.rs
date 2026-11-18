@@ -1,7 +1,7 @@
 //! Timeline editing logic shared by both timeline styles and keyboard shortcuts.
 //! Frame numbers are 1-based. A missing key holds the preceding exposure (or
 //! evaluates its tween). A blank key explicitly stops the preceding exposure.
-use crate::project::{AniProject, FrameData, TweenMode};
+use crate::project::{AniProject, FrameData, FrameMarkerKind, TweenMode};
 
 pub const MAX_TIMELINE_FRAMES: usize = 20_000;
 
@@ -69,9 +69,11 @@ fn insert_cel(project: &mut AniProject, index: usize, frame: usize, action: Fram
     let at = if duplicate { frame + 1 } else { frame };
     let layer = &project.layers[index];
     let inserted = if duplicate {
-        project.evaluate_layer_at_frame(layer, frame)
+        let mut data = project.evaluate_layer_at_frame(layer, frame);
+        data.timeline_marker = FrameMarkerKind::CopiedPose;
+        data
     } else {
-        FrameData::default()
+        FrameData { timeline_marker: FrameMarkerKind::InsertedEmpty, ..Default::default() }
     };
     // A blank cel in a hold must occupy exactly one frame. If there is an
     // explicit key here already it will move intact and resume the exposure.
@@ -145,10 +147,11 @@ pub fn apply_frame_edit(
         FrameAction::Clear | FrameAction::BlankKeyframe => {
             project.layers[layer_index]
                 .keyframes
-                .insert(frame, FrameData::default());
+                .insert(frame, FrameData { timeline_marker: FrameMarkerKind::Blank, ..Default::default() });
         }
         FrameAction::Keyframe => {
-            let data = project.evaluate_layer_at_frame(layer, frame);
+            let mut data = project.evaluate_layer_at_frame(layer, frame);
+            data.timeline_marker = FrameMarkerKind::CopiedPose;
             project.layers[layer_index].keyframes.insert(frame, data);
         }
         FrameAction::DeleteKeyframe => {
@@ -251,8 +254,10 @@ mod tests {
         apply_frame_edit(&mut p, 0, 6, FrameAction::Keyframe).unwrap();
         assert_eq!(p.layers[0].keyframes[&1].strokes.len(), 1);
         assert_eq!(p.layers[0].keyframes[&6].strokes.len(), 1);
+        assert_eq!(p.layers[0].keyframes[&6].timeline_marker, FrameMarkerKind::CopiedPose);
         apply_frame_edit(&mut p, 0, 7, FrameAction::BlankKeyframe).unwrap();
         assert!(p.layers[0].keyframes[&7].strokes.is_empty());
+        assert_eq!(p.layers[0].keyframes[&7].timeline_marker, FrameMarkerKind::Blank);
     }
 
     #[test]
@@ -380,6 +385,15 @@ mod tests {
         }
     }
 
+    #[test]
+    fn inserted_empty_and_duplicate_have_distinct_persistent_markers() {
+        let mut p = AniProject::default();
+        p.total_frames = 3;
+        apply_frame_edit(&mut p, 0, 2, FrameAction::InsertEmpty).unwrap();
+        assert_eq!(p.layers[0].keyframes[&2].timeline_marker, FrameMarkerKind::InsertedEmpty);
+        apply_frame_edit(&mut p, 0, 2, FrameAction::Duplicate).unwrap();
+        assert_eq!(p.layers[0].keyframes[&3].timeline_marker, FrameMarkerKind::CopiedPose);
+    }
     #[test]
     fn duplicate_can_append_and_insertion_failures_are_atomic() {
         let mut p = AniProject::default();
