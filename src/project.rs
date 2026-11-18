@@ -981,7 +981,7 @@ mod brush_tip_compat_tests {
     #[test]
     fn old_frame_data_loads_with_legacy_timeline_marker() {
         let frame: FrameData = serde_json::from_str(
-            r#"{\"strokes\":[],\"media_items\":[],\"symbol_instances\":[],\"text_items\":[]}"#
+            r#"{"strokes":[],"media_items":[],"symbol_instances":[],"text_items":[]}"#
         ).expect("old frame data");
         assert_eq!(frame.timeline_marker, FrameMarkerKind::Legacy);
     }
