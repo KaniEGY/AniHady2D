@@ -4,6 +4,15 @@
 
 ## English (US)
 
+### Top bar navigation polish
+- Added a visible **New project** command at the top of the hamburger menu.
+- Starting a new project clears the active document/path/history safely and preserves the current Drawing/Animation workspace.
+- If the current project has unsaved changes, Stick writes a recovery snapshot before creating the blank project.
+- Removed **Credits / About program** from the hamburger menu.
+- Added a separate **red heart** beside the yellow Support heart. The red heart opens the existing Stick links/credits window containing the YouTube and Instagram links.
+- The yellow heart remains dedicated to optional program support.
+
+
 ### Round 2 video QA — brush, fill, workspace and online moderation
 - Normal mouse G-Pen strokes no longer build a filled pressure polygon when pressure is effectively constant. This avoids self-intersecting black wedges on tight reversals and removes repeated full-outline triangulation from the common mouse drawing path; meaningful stylus pressure still uses the pressure-aware outline.
 - Paint Bucket now references all visible non-guide layers by default while always creating the new fill on the active layer. The UI explains this cross-layer boundary behavior explicitly.
