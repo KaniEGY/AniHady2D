@@ -2886,7 +2886,6 @@ impl StickApp {
                         }
                     }
                 });
-                break;
             }
         }
     }
@@ -2894,24 +2893,28 @@ impl StickApp {
     fn start_audio_playback(&mut self) {
         self.stop_audio_playback();
         let Ok((stream, handle)) = OutputStream::try_default() else { return; };
-        let fps = self.project.fps.max(1) as f64;
         let mut sinks = Vec::new();
         for track in &self.project.audio_tracks {
-            if track.muted || track.gain <= 0.0 || self.current_frame > track.end_frame { continue; }
+            let Some(window)=audio_timeline::playback_window(
+                track,self.current_frame,self.project.fps) else {continue};
             let Ok(file) = File::open(&track.file_path) else { continue; };
             let Ok(source) = Decoder::new(BufReader::new(file)) else { continue; };
             let Ok(sink) = Sink::try_new(&handle) else { continue; };
-            let skip = self.current_frame.saturating_sub(track.start_frame) as f64 / fps;
-            let delay = track.start_frame.saturating_sub(self.current_frame) as f64 / fps;
-            let audible = (track.end_frame.saturating_sub(track.start_frame) + 1) as f64 / fps - skip;
-            if audible <= 0.0 { continue; }
+            // Build every track paused first, then start all sinks together.
+            // This avoids the first decoded file getting a head-start while
+            // later files are still opening/decoding.
+            sink.pause();
             sink.set_volume(track.gain.clamp(0.0,2.0));
-            sink.append(source.skip_duration(Duration::from_secs_f64(skip))
-                .take_duration(Duration::from_secs_f64(audible))
-                .delay(Duration::from_secs_f64(delay)));
+            sink.append(source
+                .skip_duration(Duration::from_secs_f64(window.skip_secs))
+                .take_duration(Duration::from_secs_f64(window.audible_secs))
+                .delay(Duration::from_secs_f64(window.delay_secs)));
             sinks.push(sink);
         }
-        if !sinks.is_empty() { self.audio_sink = Some((stream,sinks)); }
+        if !sinks.is_empty() {
+            for sink in &sinks {sink.play();}
+            self.audio_sink = Some((stream,sinks));
+        }
     }
 
     fn stop_audio_playback(&mut self) {
