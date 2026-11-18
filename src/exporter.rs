@@ -344,7 +344,7 @@ fn draw_skia_stroke(pixmap: &mut Pixmap, s: &crate::project::Stroke, ts: Transfo
             RoundMark::Line { width } => {
                 let path = centerline.get_or_insert_with(|| {
                     let mut pb = PathBuilder::new();
-                    if s.is_vector {
+                    if s.is_vector || s.brush_preset == crate::project::KritaBrushPreset::Fineliner {
                         let path = crate::vector_path::smoothed_path(&s.points);
                         if let Some(&(x,y)) = path.first() {
                             pb.move_to(x,y);
