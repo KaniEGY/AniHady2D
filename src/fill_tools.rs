@@ -252,11 +252,36 @@ pub fn flood_fill_polygon_with_options(
         let thickness = if options.boundary_thickness.is_finite() { options.boundary_thickness.clamp(0.0, 20.0) } else { 0.0 };
         let edge_margin = (stroke.base_width.abs() * 0.5
             + gap.clamp(0.0, 14.0) + thickness * 0.5 + cell * 1.5).max(2.0);
-        for p in &stroke.points {
-            if p.x <= edge_margin { canvas_contacts[0].push(p.y.clamp(0.0, ch)); }
-            if p.x >= cw - edge_margin { canvas_contacts[1].push(p.y.clamp(0.0, ch)); }
-            if p.y <= edge_margin { canvas_contacts[2].push(p.x.clamp(0.0, cw)); }
-            if p.y >= ch - edge_margin { canvas_contacts[3].push(p.x.clamp(0.0, cw)); }
+        let mut record_endpoint = |p: &StrokePoint| {
+            if p.x.abs() <= edge_margin { canvas_contacts[0].push(p.y.clamp(0.0, ch)); }
+            if (p.x-cw).abs() <= edge_margin { canvas_contacts[1].push(p.y.clamp(0.0, ch)); }
+            if p.y.abs() <= edge_margin { canvas_contacts[2].push(p.x.clamp(0.0, cw)); }
+            if (p.y-ch).abs() <= edge_margin { canvas_contacts[3].push(p.x.clamp(0.0, cw)); }
+        };
+        if let Some(first) = stroke.points.first() { record_endpoint(first); }
+        if let Some(last) = stroke.points.last() { record_endpoint(last); }
+        for pair in stroke.points.windows(2) {
+            let (a,b)=(&pair[0],&pair[1]);
+            let dx=b.x-a.x;
+            let dy=b.y-a.y;
+            if dx.abs()>1e-6 {
+                for (edge_x, slot) in [(0.0_f32,0usize),(cw,1usize)] {
+                    let t=(edge_x-a.x)/dx;
+                    if (0.0..=1.0).contains(&t) {
+                        let y=a.y+dy*t;
+                        if (0.0..=ch).contains(&y) { canvas_contacts[slot].push(y); }
+                    }
+                }
+            }
+            if dy.abs()>1e-6 {
+                for (edge_y, slot) in [(0.0_f32,2usize),(ch,3usize)] {
+                    let t=(edge_y-a.y)/dy;
+                    if (0.0..=1.0).contains(&t) {
+                        let x=a.x+dx*t;
+                        if (0.0..=cw).contains(&x) { canvas_contacts[slot].push(x); }
+                    }
+                }
+            }
         }
         let r = ((stroke.base_width.abs() * 0.5 + gap.clamp(0.0, 14.0) + thickness * 0.5) / cell)
             .clamp(1.15, 9.0);
@@ -284,24 +309,44 @@ pub fn flood_fill_polygon_with_options(
             }
         }
     }
-    // The physical paper edge is a valid paint-bucket boundary. This lets
-    // artists close a region against the canvas border (for example, a
-    // three-sided shape touching the left edge) without leaking into the
-    // temporary padding used by the bounded flood solver. Drawing itself is
-    // still allowed outside the paper; this wall exists only for bucket math.
+    // The paper edge participates in filling only when real linework reaches
+    // that same edge at two positions with the clicked seed between them.
+    // We rasterize only that bracketed edge segment. This closes an incomplete
+    // circle/shape against the canvas while preserving the safety rule that a
+    // random open contour in the middle of the page is not fillable.
     let left = 2usize;
     let top = 2usize;
     let right = ((cw / cell).ceil() as usize + 2).min(w.saturating_sub(2));
     let bottom = ((ch / cell).ceil() as usize + 2).min(h.saturating_sub(2));
-    if left < right && top < bottom {
-        for x in left..=right {
-            wall[top * w + x] = true;
-            wall[bottom * w + x] = true;
-        }
-        for y in top..=bottom {
-            wall[y * w + left] = true;
-            wall[y * w + right] = true;
-        }
+    let mut bracket = |contacts: &mut Vec<f32>, seed_coord: f32| -> Option<(f32,f32)> {
+        contacts.sort_by(f32::total_cmp);
+        let merge = (cell * 3.0 + gap.clamp(0.0,14.0) + 3.0).max(5.0);
+        contacts.dedup_by(|a,b| (*a-*b).abs() <= merge);
+        contacts.windows(2)
+            .filter(|pair| pair[0] <= seed_coord && seed_coord <= pair[1]
+                && pair[1]-pair[0] > merge)
+            .min_by(|a,b| (a[1]-a[0]).total_cmp(&(b[1]-b[0])))
+            .map(|pair|(pair[0],pair[1]))
+    };
+    if let Some((a,b))=bracket(&mut canvas_contacts[0],sy) {
+        let ya=(a/cell+2.0).floor().clamp(top as f32,bottom as f32) as usize;
+        let yb=(b/cell+2.0).ceil().clamp(top as f32,bottom as f32) as usize;
+        for y in ya..=yb { wall[y*w+left]=true; }
+    }
+    if let Some((a,b))=bracket(&mut canvas_contacts[1],sy) {
+        let ya=(a/cell+2.0).floor().clamp(top as f32,bottom as f32) as usize;
+        let yb=(b/cell+2.0).ceil().clamp(top as f32,bottom as f32) as usize;
+        for y in ya..=yb { wall[y*w+right]=true; }
+    }
+    if let Some((a,b))=bracket(&mut canvas_contacts[2],sx) {
+        let xa=(a/cell+2.0).floor().clamp(left as f32,right as f32) as usize;
+        let xb=(b/cell+2.0).ceil().clamp(left as f32,right as f32) as usize;
+        for x in xa..=xb { wall[top*w+x]=true; }
+    }
+    if let Some((a,b))=bracket(&mut canvas_contacts[3],sx) {
+        let xa=(a/cell+2.0).floor().clamp(left as f32,right as f32) as usize;
+        let xb=(b/cell+2.0).ceil().clamp(left as f32,right as f32) as usize;
+        for x in xa..=xb { wall[bottom*w+x]=true; }
     }
 
     let (px, py) = world_to_px(sx, sy);
@@ -354,64 +399,7 @@ pub fn flood_fill_polygon_with_options(
                 }
             }
         }
-        let canvas_edge_bounded = if hits_edge {
-            false
-        } else {
-            // Closed interior regions never touch the paper wall and remain
-            // valid. A component adjacent to a paper edge is accepted only
-            // when real ink reaches that same edge at two separated positions
-            // bracketing the component. This preserves the old safety rule for
-            // arbitrary open contours while allowing intentional edge closure.
-            let mut touched_any = false;
-            let mut valid = true;
-            let tolerance = (cell * 4.0 + gap.clamp(0.0, 14.0) + 6.0).max(8.0);
-            for edge in 0..4 {
-                let mut component_min = f32::INFINITY;
-                let mut component_max = f32::NEG_INFINITY;
-                match edge {
-                    0 | 1 => {
-                        let x = if edge == 0 { left + 1 } else { right.saturating_sub(1) };
-                        for y in (top + 1)..bottom {
-                            if x < w && visited[y*w+x] {
-                                let world = ((y as f32 - 2.0) * cell).clamp(0.0, ch);
-                                component_min = component_min.min(world);
-                                component_max = component_max.max(world);
-                            }
-                        }
-                    }
-                    _ => {
-                        let y = if edge == 2 { top + 1 } else { bottom.saturating_sub(1) };
-                        for x in (left + 1)..right {
-                            if y < h && visited[y*w+x] {
-                                let world = ((x as f32 - 2.0) * cell).clamp(0.0, cw);
-                                component_min = component_min.min(world);
-                                component_max = component_max.max(world);
-                            }
-                        }
-                    }
-                }
-                if component_min.is_finite() {
-                    touched_any = true;
-                    let mut contacts = canvas_contacts[edge].clone();
-                    contacts.sort_by(f32::total_cmp);
-                    contacts.dedup_by(|a,b| (*a-*b).abs() <= tolerance * 0.35);
-                    if contacts.len() < 2 {
-                        valid = false;
-                        break;
-                    }
-                    let first = contacts[0];
-                    let last = *contacts.last().unwrap();
-                    if last - first < tolerance
-                        || first > component_min + tolerance
-                        || last < component_max - tolerance {
-                        valid = false;
-                        break;
-                    }
-                }
-            }
-            !touched_any || valid
-        };
-        if count>=8 && canvas_edge_bounded {
+        if !hits_edge && count>=8 {
             selected=Some(visited);
             break;
         }
