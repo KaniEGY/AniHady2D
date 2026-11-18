@@ -461,7 +461,7 @@ impl OnlineSession {
     fn join_room_internal(address: String, password: String, nickname: String,
         level: u32, mode: OnlineMode, is_handoff: bool) -> Result<Self, String> {
         let address = crate::online_invite::validate_endpoint(&address)
-            .map_err(str::to_string)?;
+            .map_err(|reason| reason.to_string())?;
         let address = if address.starts_with('[') {
             if address.ends_with(']') { format!("{}:{}", address, TCP_PORT) } else { address }
         } else if address.contains(':') { address } else { format!("{}:{}", address, TCP_PORT) };
