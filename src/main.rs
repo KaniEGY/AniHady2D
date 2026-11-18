@@ -5398,6 +5398,8 @@ impl eframe::App for StickApp {
         }
 
         let mut frame_menu_action: Option<(usize, usize, timeline_ops::FrameAction)> = None;
+        let mut audio_move_request: Option<(usize, usize)> = None;
+        let mut audio_drag_started = false;
         let mut timeline_seek = None;
         let mut timeline_visibility_toggle: Option<usize> = None;
         let mut timeline_lock_toggle: Option<usize> = None;
@@ -5698,9 +5700,94 @@ impl eframe::App for StickApp {
                             }
                         });
                     }
+                    // Audio lanes share the exact frame ruler and horizontal scroll
+                    // with visual layers; each clip can be dragged without moving art.
+                    for (audio_index, track) in self.project.audio_tracks.iter().enumerate() {
+                        ui.horizontal(|ui| {
+                            ui.allocate_ui(egui::vec2(label_w, row_h), |ui| {
+                                let is_active=self.selected_audio_idx==Some(audio_index);
+                                let label=format!("♫ {}",track.name);
+                                if ui.selectable_label(is_active,egui::RichText::new(&label)
+                                    .color(if is_active {egui::Color32::from_rgb(118,234,176)}
+                                        else {egui::Color32::from_rgb(173,221,192)}))
+                                    .on_hover_text(tr(lang,"Audio track properties (right panel)",
+                                        "خصائص الصوت في الشريط اليمين")).clicked() {
+                                    self.selected_audio_idx=Some(audio_index);
+                                    self.config.show_right_dock=true;
+                                }
+                                ui.small(if track.muted {tr(lang,"Muted","مكتوم")}
+                                    else {tr(lang,"Waveform / Drag ↔","موجات / اسحب ↔")});
+                            });
+                            let lane_width=cell_w * cols as f32;
+                            let (rect,resp)=ui.allocate_exact_size(
+                                egui::vec2(lane_width,row_h),egui::Sense::click_and_drag());
+                            ui.painter().rect_filled(rect,3.0,egui::Color32::from_rgb(30,39,46));
+                            let left=rect.left()+(track.start_frame.saturating_sub(1) as f32)*cell_w;
+                            let right=rect.left()+(track.end_frame.min(cols) as f32)*cell_w;
+                            if right>left && left<rect.right() {
+                                let clip=egui::Rect::from_min_max(
+                                    egui::pos2(left.max(rect.left()),rect.top()+2.0),
+                                    egui::pos2(right.min(rect.right()),rect.bottom()-2.0));
+                                let selected=self.selected_audio_idx==Some(audio_index);
+                                let base=if selected {egui::Color32::from_rgb(24,107,81)}
+                                    else if track.muted {egui::Color32::from_rgb(61,68,70)}
+                                    else {egui::Color32::from_rgb(34,77,70)};
+                                ui.painter().rect_filled(clip,4.0,base);
+                                ui.painter().rect_stroke(clip,4.0,egui::Stroke::new(1.0,
+                                    egui::Color32::from_rgb(87,191,146)));
+                                let bars=((clip.width()/6.0) as usize).clamp(1,600);
+                                let duration=track.end_frame.saturating_sub(track.start_frame)+1;
+                                let palette=if track.muted {egui::Color32::from_gray(128)}
+                                    else {egui::Color32::from_rgb(120,241,187)};
+                                for b in 0..bars {
+                                    let progress=(b as f32+0.5)/bars as f32;
+                                    let frame_offset=(progress*duration as f32) as usize;
+                                    let peak=audio_timeline::peak_for_frame(
+                                        &track.waveform_peaks,frame_offset,duration);
+                                    let x=clip.left()+progress*clip.width();
+                                    let height=peak*(clip.height()-8.0).max(3.0);
+                                    ui.painter().line_segment([
+                                        egui::pos2(x,clip.center().y-height*0.5),
+                                        egui::pos2(x,clip.center().y+height*0.5)
+                                    ],egui::Stroke::new(2.0,palette));
+                                }
+                                if resp.drag_started() && resp.interact_pointer_pos()
+                                    .is_some_and(|pos| clip.contains(pos)) {
+                                    self.audio_drag_origin=Some((audio_index,track.start_frame));
+                                    audio_drag_started=true;
+                                    self.selected_audio_idx=Some(audio_index);
+                                }
+                                if resp.dragged() {
+                                    if let Some((drag_index,origin))=self.audio_drag_origin {
+                                        if drag_index==audio_index {
+                                            let shift=(resp.drag_delta().x/cell_w).round() as i64;
+                                            let start=(origin as i64+shift)
+                                                .clamp(1,timeline_ops::MAX_TIMELINE_FRAMES as i64) as usize;
+                                            audio_move_request=Some((audio_index,start));
+                                        }
+                                    }
+                                }
+                                if resp.drag_stopped() { self.audio_drag_origin=None; }
+                                if resp.clicked() && resp.interact_pointer_pos()
+                                    .is_some_and(|pos|clip.contains(pos)) {
+                                    self.selected_audio_idx=Some(audio_index);
+                                }
+                            }
+                        });
+                    }
                 });
             });
             // The grip and the height slider both modify the same persisted value.
+        }
+        if audio_drag_started { self.save_undo_state(); }
+        if let Some((index,start)) = audio_move_request {
+            if let Some(track)=self.project.audio_tracks.get_mut(index) {
+                if audio_timeline::move_clip(track,start,timeline_ops::MAX_TIMELINE_FRAMES) {
+                    self.timeline_length=self.timeline_length.max(track.end_frame);
+                    self.project.total_frames=self.timeline_length;
+                    self.has_unsaved_changes=true;
+                }
+            }
         }
         if let Some((layer, frame)) = timeline_seek {
             if frame > self.timeline_length {
