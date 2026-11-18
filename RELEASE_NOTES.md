@@ -4,6 +4,11 @@
 
 ## English (US)
 
+### Pressure stroke quality (under review; not yet released)
+- Shared G-Pen outline now de-jitters small accidental movements on straight-ish strokes, resamples long movements by distance and limits hard-corner joins while keeping pressure variation.
+- Renderer geometry is bounded, with no alteration of saved raw project stroke data and no change to the .stick schema.
+- **Validation status:** unit regressions added; Windows CI and physical tablet/preview/export QA still required.
+
 ### Canvas appearance and preset sizes (under review; not yet released)
 - General preferences: display-only border visibility/color/width, rounded stage corners, optional shadow, workspace background, live preview and defaults reset.
 - Canvas Size Mode: explicit YouTube Thumbnail, HD and Full HD entries, aspect ratio locking and a confirmation when shrinking could hide existing artwork; preexisting sizes are retained.
