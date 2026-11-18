@@ -6062,6 +6062,8 @@ impl eframe::App for StickApp {
                         self.active_layer_idx = idx;
                         self.selected_stroke_indices.clear();
                         self.selected_media_idx = None;
+                        self.selected_audio_idx = None;
+                        if self.right_panel_tab==2 {self.right_panel_tab=0;}
                     }
                     if layer_response.double_clicked() { rename_layer_index = Some(idx); }
                     layer_response.context_menu(|ui| {
@@ -6658,6 +6660,7 @@ impl eframe::App for StickApp {
                                             else {egui::Color32::from_rgb(229,192,145)}));
                                 if response.clicked() {
                                     self.active_layer_idx=video_layer;
+                                    self.current_frame=video_start;
                                     self.selected_media_idx=Some(0);
                                     self.selected_audio_idx=None;
                                     self.right_panel_tab=2;
@@ -6698,6 +6701,7 @@ impl eframe::App for StickApp {
                                     self.video_drag_pointer_x=pointer_pos.map(|p|p.x);
                                     self.video_drag_undo_captured=false;
                                     self.active_layer_idx=video_layer;
+                                    self.current_frame=video_start;
                                     self.selected_media_idx=Some(0);
                                     self.selected_audio_idx=None;
                                     self.right_panel_tab=2;
@@ -7584,6 +7588,13 @@ impl eframe::App for StickApp {
                                         self.selected_media_idx = frame.media_items.iter().enumerate().rev()
                                             .find(|(_,item)| media_transform::hit_test(item,stage_pos.x,stage_pos.y))
                                             .map(|(index,_)| index);
+                                    }
+                                    self.selected_audio_idx=None;
+                                    if self.selected_media_idx.is_some() {
+                                        self.right_panel_tab=2;
+                                        self.config.show_right_dock=true;
+                                    } else if self.right_panel_tab==2 {
+                                        self.right_panel_tab=0;
                                     }
                                     if self.selected_text_item_index.is_none() && self.selected_media_idx.is_none() {
                                         if let Some((index, _)) = frame.strokes.iter().enumerate().rev()
