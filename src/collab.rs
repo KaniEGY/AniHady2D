@@ -473,10 +473,11 @@ impl OnlineSession {
         let running_worker = running.clone();
         let cursor_wake = CursorWake::default();
         let worker_wake = cursor_wake.clone();
+        let address_for_worker=address.clone();
         thread::spawn(move || {
             let result = (|| -> Result<(), String> {
-                let addrs: Vec<SocketAddr> = address.to_socket_addrs()
-                    .map_err(|_| format!("Cannot resolve host address: {address}"))?
+                let addrs: Vec<SocketAddr> = address_for_worker.to_socket_addrs()
+                    .map_err(|_| format!("Cannot resolve host address: {address_for_worker}"))?
                     .take(8).collect();
                 if addrs.is_empty() { return Err("No IP addresses found for this host".into()); }
                 let mut retry_count = 0;
