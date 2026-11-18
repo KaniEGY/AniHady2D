@@ -32,7 +32,12 @@ pub fn visit_round_marks(stroke: &Stroke, mut paint: impl FnMut(RoundMark, f32))
     for &(size, flow) in layers {
         let width = stroke.base_width * size;
         if stroke.points.len() == 1 {
-            paint(RoundMark::Dot(dab_for(first, width)), flow);
+            let dab = dab_for(first, width);
+            if stroke.is_vector && stroke.tip_shape == BrushTipShape::Square {
+                paint(RoundMark::Outline(dab_polygon(BrushTipShape::Square, dab)), flow);
+            } else {
+                paint(RoundMark::Dot(dab), flow);
+            }
         } else {
             if varying || (!stroke.is_vector && stroke.brush_preset == KritaBrushPreset::GPenInk) {
                 let outline = crate::stroke_geometry::pressure_outline(&stroke.points, width);
