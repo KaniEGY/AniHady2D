@@ -15,6 +15,8 @@ pub enum TextureBrush {
     Chalk,
     Charcoal,
     Pastel,
+    Calligraphy,
+    SoftSketch,
 }
 
 impl TextureBrush {
@@ -27,12 +29,14 @@ impl TextureBrush {
             KritaBrushPreset::Chalk => Some(Self::Chalk),
             KritaBrushPreset::Charcoal => Some(Self::Charcoal),
             KritaBrushPreset::SoftPastel => Some(Self::Pastel),
+            KritaBrushPreset::Calligraphy => Some(Self::Calligraphy),
+            KritaBrushPreset::SoftSketchPencil => Some(Self::SoftSketch),
             _ => None,
         }
     }
 
     fn mask(self, tip: BrushTipShape) -> &'static [u8; AREA] {
-        static MASKS: [OnceLock<[u8; AREA]>; 24] = [const { OnceLock::new() }; 24];
+        static MASKS: [OnceLock<[u8; AREA]>; 36] = [const { OnceLock::new() }; 36];
         MASKS[self as usize * 6 + tip as usize].get_or_init(|| self.make_mask(tip))
     }
 
@@ -56,7 +60,13 @@ impl TextureBrush {
             let v = (2.0 * y as f32 + 1.0) / SIZE as f32 - 1.0;
             // Clockwise vertices in canvas coordinates; signed distance to the
             // nearest side also gives polygon tips a naturally broken edge.
-            let inside = if polygon.is_empty() {
+            let inside = if self == Self::Calligraphy {
+                // A fixed 30-degree chisel nib, not the circular/stroke-
+                // tangent aligned tip used by the other brush presets.
+                let dx=u*0.866_025_4+v*0.5;
+                let dy=-u*0.5+v*0.866_025_4;
+                (1.0-dx.abs()).min(0.38-dy.abs())
+            } else if polygon.is_empty() {
                 1.0 - u.hypot(v)
             } else {
                 polygon
@@ -97,6 +107,12 @@ impl TextureBrush {
                     if grain < 0.17 { 0.0 }
                     else { (0.34 + 0.48 * grain) * soft }
                 }
+                Self::Calligraphy => 1.0,
+                Self::SoftSketch => {
+                    let pencil = noise((x * 13 + y * 71 + 91_001) as u32);
+                    if grain < 0.22 { 0.0 }
+                    else { (0.10 + 0.30 * grain) * (0.65 + 0.35 * pencil) }
+                }
             };
             // Keep taps visible even when the tip is smaller than a pixel.
             let ink = if u.abs() < 0.07 && v.abs() < 0.07 {
@@ -119,18 +135,21 @@ impl TextureBrush {
             let pressure = (2.0 * dab.radius / stroke.base_width).clamp(0.0, 1.0);
             let variation = noise(ordinal.wrapping_add(3201));
             // Bristles follow the hand. Chalk rolls slightly about the center.
-            let (sin, cos) = if matches!(self, Self::Chalk | Self::Charcoal | Self::Pastel) {
+            let (sin, cos) = if matches!(self, Self::Chalk | Self::Charcoal | Self::Pastel | Self::SoftSketch) {
                 ((variation - 0.5) * 0.8).sin_cos()
             } else {
                 (0.0, 1.0)
             };
-            let (tx, ty) = (dx * cos - dy * sin, dx * sin + dy * cos);
+            let (tx, ty) = if self == Self::Calligraphy {
+                (1.0,0.0) // nib angle is independent of travel direction
+            } else {(dx * cos - dy * sin, dx * sin + dy * cos)};
             let r = dab.radius;
             emit(Stamp {
                 center: [dab.x, dab.y],
                 along: [tx * r * wide, ty * r * wide],
                 across: [-ty * r * tall, tx * r * tall],
-                flow: (0.38 + 0.62 * pressure) * (0.72 + 0.28 * variation),
+                flow: if self == Self::Calligraphy { 0.9 }
+                    else { (0.38 + 0.62 * pressure) * (0.72 + 0.28 * variation) },
             });
             ordinal = ordinal.wrapping_add(1);
         });
@@ -246,4 +265,18 @@ fn noise(mut seed: u32) -> f32 {
     seed ^= seed >> 15;
     seed = seed.wrapping_mul(0x846ca68b);
     ((seed ^ (seed >> 16)) >> 8) as f32 / 16_777_216.0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn calligraphy_chisel_and_soft_sketch_are_distinct_real_masks() {
+        let chisel=TextureBrush::Calligraphy.make_mask(BrushTipShape::Round);
+        let pencil=TextureBrush::SoftSketch.make_mask(BrushTipShape::Round);
+        let normal=TextureBrush::Pastel.make_mask(BrushTipShape::Round);
+        assert_ne!(chisel,pencil);
+        assert_ne!(pencil,normal);
+        assert!(chisel.iter().any(|&px|px>0));
+    }
 }

@@ -1,5 +1,17 @@
 # Stick Studio — Session Handoff / سجل استكمال المشروع
 
+## 18 November 2026 — five new functional drawing presets (PR pending)
+
+- Feature branch `feature/new-real-brush-presets-20261118` from main build 213.
+- Appended 5 `KritaBrushPreset` enum variants after the original nine to preserve legacy enum order and maintain .stick schema compatibility. Added actual bilingual UI icons.
+- **Fineliner:** fixed geometric width independent of sampled stylus pressure; smoothed centerline shared by egui and raster/video export.
+- **Smooth Ink:** cross-track micro-jitter reduction at gentle bends and pressure-aware continuous outline; intentional sharp turns maintained.
+- **Tapered Pen:** travel-distance-based smoothly easing tip width at both ends while retaining real pressure through the main stroke.
+- **Calligraphy:** fixed-angle 30-degree chisel texture stamp, independent of draw direction, with shared procedural preview/export alpha mask.
+- **Soft Sketch Pencil:** distinct lightweight textured/grainy mask and semi-transparent pressure-sensitive stamping.
+- Added brush geometry and texture mask tests. No user project files were edited or deleted. Existing 9 presets remain.
+- **Pending:** GitHub CI, physical pen/mouse and PNG/video comparison, texture visual QA. Hardness/pressure-curve/spacing sliders remain future work; do not misrepresent them as implemented.
+
 ## 18 November 2026 — Advanced Timeline core (PR pending)
 
 - Feature branch `feature/advanced-timeline-keyframe-edit-20261118`, based on main build 213.
