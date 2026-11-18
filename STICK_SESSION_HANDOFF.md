@@ -1,5 +1,14 @@
 # Stick Studio — Session Handoff / سجل استكمال المشروع
 
+## 18 November 2026 — Canvas Appearance and Canvas Size Mode (PR pending)
+
+- Branch: `feature/canvas-appearance-sizes-20261118` from main build 213 (`fa5136795b6e6f14802ae2afeb661a2aba753dc9`).
+- New `src/canvas_appearance.rs`: display-only configurable border color/width, rounded corner mask, optional shadow, workspace color. Settings are user-local AppConfig with serde defaults (old settings still load), never .stick file content or exporter decorations.
+- General settings now include a bilingual Canvas Appearance section, live sample and reset button.
+- Canvas Size Mode includes named YouTube Thumbnail/HD/Full HD presets, custom ratio lock, and confirmation on shrinking the stage; the existing Undo-backed size action is reused. Original legacy presets remain offered.
+- Old artwork is not rescaled or erased when changing canvas bounds. Old .stick schema remains unchanged.
+- Requires Windows CI, real GUI inspection, rotation/zoom display checks and actual file preservation/export QA before release; no verification of those physical checks is asserted here.
+
 ## 18 November 2026 — imported media, audio timeline and bounded fill controls
 
 - Branch: `feature/media-audio-fill-studio-20261118`. This entry records work in progress until the Windows CI run passes and a merge/release is confirmed.
