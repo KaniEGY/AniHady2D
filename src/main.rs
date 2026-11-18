@@ -1672,6 +1672,13 @@ impl StickApp {
                 ui.add_space(10.0);
                 ui.label(tr(lang, "Your computer hosts the room. No dedicated Stick server.",
                     "جهاز صاحب الغرفة هو الهوست، بدون سيرفر مخصص للبرنامج."));
+                ui.add_space(10.0);
+                if ui.add(egui::Button::new(egui::RichText::new(
+                    tr(lang,"📄  ONLINE GUIDE • How to join","📄  دليل الأونلاين • إزاي تدخل غرفة؟"))
+                    .size(16.0).strong().color(egui::Color32::WHITE))
+                    .fill(egui::Color32::from_rgb(29,105,165))).clicked() {
+                    self.show_online_guide=true;
+                }
                 ui.add_space(12.0);
                 if ui.checkbox(&mut self.online_enabled,
                     tr(lang, "Enable online networking for this session",
@@ -2908,6 +2915,100 @@ impl StickApp {
         self.show_feedback_dialog = open && !close_clicked;
     }
 
+    fn render_guides(&mut self, ctx: &egui::Context, lang: AppLang) {
+        if (self.show_online_guide || self.show_features_guide)
+            && ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+            self.show_online_guide=false;
+            self.show_features_guide=false;
+        }
+        if self.show_online_guide {
+            let mut open=true;
+            let mut close=false;
+            egui::Window::new(tr(lang,"Online Room Guide • Stick Studio","📄 دليل الأونلاين • ستيك ستوديو"))
+                .open(&mut open).resizable(true).default_width(630.0)
+                .default_height(460.0).collapsible(false)
+                .show(ctx, |ui| {
+                    ui.heading(tr(lang,"Create and join a room","إنشاء غرفة والانضمام ليها"));
+                    egui::ScrollArea::vertical().max_height(380.0).show(ui,|ui| {
+                        ui.label(tr(lang,
+                            "1. Turn on online networking explicitly in the lobby. Choose Drawing or Animation.",
+                            "١. شغّل الأونلاين من اللوبي بنفسك، واختار الرسم أو الأنيميشن."));
+                        ui.add_space(6.0);
+                        ui.label(tr(lang,
+                            "2. To host, choose Create Room. Set the room name, an optional password and participant limit. Your computer becomes the host.",
+                            "٢. لإنشاء غرفة: اختار إنشاء، واكتب الاسم وكلمة السر لو عايز، وحدد عدد المشاركين. جهازك هو الهوست."));
+                        ui.add_space(6.0);
+                        ui.label(tr(lang,
+                            "3. On the same LAN, friends can join through the discovered room listing or its address. The 8-digit code identifies a room but is NOT global discovery.",
+                            "٣. على نفس الشبكة، أصحابك يقدروا يدخلوا من قائمة الغرف أو العنوان. كود الـ٨ أرقام مش دليل بحث عالمي عن الغرف."));
+                        ui.add_space(6.0);
+                        ui.label(tr(lang,
+                            "4. For friends on different networks, use an authorized Tailscale connection and enter the host's 100.x address (TCP port 47554).",
+                            "٤. لو على شبكات مختلفة، استخدموا Tailscale المسموح بين الأجهزة، واكتبوا عنوان الهوست 100.x (بورت TCP 47554)."));
+                        ui.add_space(6.0);
+                        ui.label(tr(lang,
+                            "5. Keep the host PC running. The host can manage participants, shared tool colors and resync the project.",
+                            "٥. لازم جهاز الهوست يفضل شغال. الهوست يقدر يدير الأعضاء وألوانهم ويزامن المشروع."));
+                        ui.add_space(6.0);
+                        ui.label(tr(lang,
+                            "6. Use matching Stick versions. Cursor sync and drawing protocol v5 require compatible peers.",
+                            "٦. لازم كل الأجهزة تستخدم نسخ متوافقة من Stick؛ تحريك المؤشر والرسم محتاجين بروتوكول v5."));
+                        ui.add_space(8.0);
+                        ui.colored_label(egui::Color32::from_rgb(255,204,105),tr(lang,
+                            "Security: direct LAN traffic is not end-to-end encrypted by Stick. Do not disable your firewall. Allow TCP 47554 and UDP 47553 only as appropriate.",
+                            "الأمان: اتصال الشبكة المباشر مش مشفّر من طرف لطرف داخل Stick. متوقفش جدار الحماية؛ اسمح بـTCP 47554 وUDP 47553 حسب حاجتك."));
+                        ui.add_space(8.0);
+                        ui.small(tr(lang,
+                            "Graceful host handoff may work, but sudden disconnects are not guaranteed. Test the room between two computers before important sessions.",
+                            "نقل الهوست ممكن يشتغل عند الخروج الطبيعي، لكن مش مضمون عند انقطاع الجهاز فجأة. جرّب على جهازين قبل الشغل المهم."));
+                        ui.hyperlink_to(tr(lang,"Online guide on GitHub","الدليل الكامل على GitHub"),
+                            "https://github.com/KaniEGY/Stick/blob/main/STICK_ONLINE_GUIDE.md");
+                    });
+                    ui.separator();
+                    if ui.button(tr(lang,"Close guide","إغلاق الدليل")).clicked() {close=true;}
+                });
+            self.show_online_guide=open && !close;
+        }
+        if self.show_features_guide {
+            let mut open=true;
+            let mut close=false;
+            egui::Window::new(tr(lang,"! Stick Studio • Features","! دليل مميزات ستيك ستوديو"))
+                .open(&mut open).resizable(true).default_width(610.0)
+                .default_height(430.0).collapsible(false)
+                .show(ctx,|ui| {
+                    ui.heading(tr(lang,"Choose your creative workspace","اختار مساحة شغلك"));
+                    egui::ScrollArea::vertical().max_height(360.0).show(ui,|ui| {
+                        ui.strong(tr(lang,"Drawing Mode • 🎨","وضع الرسم • 🎨"));
+                        ui.label(tr(lang,
+                            "Brushes including textured DryBrush, Chalk, Charcoal and Pastel; layers, selection, erasers, vector pen, color picker, shapes, canvas sizes and image exports.",
+                            "فرش بخامات مختلفة منها الجافة والطباشير والفحم والباستيل، وطبقات وتحديد وممحاة وقلم فيكتور وقطّارة وأشكال ومقاسات كانفا وتصدير صور."));
+                        ui.separator();
+                        ui.strong(tr(lang,"Animation Mode • 🎬","وضع الأنيميشن • 🎬"));
+                        ui.label(tr(lang,
+                            "Frame timeline, keyframes, blank cels, Duplicate/Insert Empty, Onion Skin, undo/redo, and supported animation exports.",
+                            "تايم لاين وفريمات وكي فريم وفريمات فاضية ودبلكيت وإضافة خلية فارغة وأونين سكين وتراجع وإعادة وتصدير أنيميشن."));
+                        ui.separator();
+                        ui.strong(tr(lang,"Online Rooms • 🌐","غرف الأونلاين • 🌐"));
+                        ui.label(tr(lang,
+                            "Host drawing or animation on your PC with invited friends. Join by local discovery, address or compatible room code; remote networks may need Tailscale.",
+                            "اعمل غرفة رسم أو أنيميشن على جهازك مع أصحابك، والانضمام من قائمة الشبكة أو العنوان أو كود غرفة متوافق، والشبكات المختلفة ممكن تحتاج Tailscale."));
+                        ui.separator();
+                        ui.strong(tr(lang,"Projects, account and updates","المشاريع والحساب والتحديثات"));
+                        ui.label(tr(lang,
+                            "Save local projects and artwork, export files, check for updates, and optionally connect Google Drive backups while the Google login is in staged testing.",
+                            "احفظ مشاريعك محليًا وصدّر رسوماتك وشوف التحديثات، وممكن تستخدم النسخ الاحتياطي الاختياري على Google Drive لما حسابك مسموح في الاختبار."));
+                        ui.separator();
+                        ui.small(tr(lang,
+                            "Shortcuts: press F1 inside the editor. Use the right tool properties dock for brush and canvas settings.",
+                            "الاختصارات: اضغط F1 داخل مساحة الرسم، واستعمل خصائص الأدوات يمين لتعديل الفرش والكانفا."));
+                    });
+                    ui.separator();
+                    if ui.button(tr(lang,"Close","إغلاق")).clicked(){close=true;}
+                });
+            self.show_features_guide=open && !close;
+        }
+    }
+
     fn apply_canvas_size(&mut self, width: u32, height: u32) {
         if let Err(message) = canvas_sizes::validate_canvas_size(width, height) {
             self.status_message = message.to_string();
@@ -3184,6 +3285,14 @@ impl eframe::App for StickApp {
                     ui.add_space(90.0);
                     ui.heading(egui::RichText::new("Stick Studio").size(36.0).color(egui::Color32::from_rgb(255, 215, 25)));
                     ui.add_space(12.0);
+                    if ui.add(egui::Button::new(egui::RichText::new(
+                        tr(lang,"!  Explore features & modes","!  اعرف مميزات البرنامج"))
+                        .size(17.0).strong().color(egui::Color32::BLACK))
+                        .fill(egui::Color32::from_rgb(255,202,74))
+                        .min_size(egui::vec2(285.0,40.0))).clicked() {
+                        self.show_features_guide=true;
+                    }
+                    ui.add_space(12.0);
                     ui.label(egui::RichText::new(tr(lang, "Are you here to draw or animate?", "هل أنت داخل ترسم؟")).size(24.0).color(egui::Color32::WHITE));
                     ui.add_space(30.0);
                     ui.horizontal(|ui| {
@@ -3250,11 +3359,13 @@ impl eframe::App for StickApp {
             // need to start a drawing project just to install a new build.
             self.render_update_dialog(ctx, lang);
             self.render_feedback_dialog(ctx);
+            self.render_guides(ctx,lang);
             return;
         }
 
         if self.workspace_mode == WorkspaceMode::OnlineLobby {
             self.render_online_lobby(ctx);
+            self.render_guides(ctx,lang);
             return;
         }
 
@@ -3381,7 +3492,8 @@ impl eframe::App for StickApp {
         let any_modal_open = self.show_symbol_dialog || self.show_text_dialog || self.show_export_studio
             || self.show_command_palette || self.show_exit_dialog || self.show_update_dialog
             || self.show_settings_dialog || self.show_credits_dialog
-            || self.show_support_dialog || self.layer_rename_index.is_some()
+            || self.show_support_dialog || self.show_online_guide
+            || self.show_features_guide || self.layer_rename_index.is_some()
             || self.show_timeline_settings || self.show_project_notice
             || self.show_recovery_dialog || self.show_project_details;
         if any_modal_open { typing_in_textbox = true; }
@@ -4419,6 +4531,11 @@ impl eframe::App for StickApp {
                                 "أول ضيف دخل الغرفة يستلم الهوست لما تخرج طبيعي. لو الجهاز فصل فجأة، النقل مش مضمون."));
                         });
                         if ui.small_button(tr(lang, "Sync full project", "مزامنة المشروع بالكامل")).clicked() { resync = true; }
+                    }
+                    if ui.add(egui::Button::new(
+                        tr(lang,"📄 Online Guide","📄 دليل الأونلاين"))
+                        .fill(egui::Color32::from_rgb(35,96,148))).clicked() {
+                        self.show_online_guide=true;
                     }
                     if ui.small_button(tr(lang, "Leave Room", "مغادرة الغرفة")).clicked() { leave = true; }
                 });
@@ -6537,6 +6654,7 @@ impl eframe::App for StickApp {
             }
         }
 
+        self.render_guides(ctx,lang);
         // Positioned relative to the full window, not just remaining menu
         // space: the optional-support heart stays in the TOP CENTER.
         if !self.show_support_dialog && !self.show_settings_dialog {
