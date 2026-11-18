@@ -44,18 +44,17 @@ pub fn show(
                 egui::Sense::hover(),
             );
             let center = rect.center();
-            let painter = ui.painter();
-            painter.circle_filled(
+            ui.painter().circle_filled(
                 center,
                 31.0,
                 egui::Color32::from_rgba_unmultiplied(18, 24, 33, 246),
             );
-            painter.circle_stroke(
+            ui.painter().circle_stroke(
                 center,
                 31.0,
                 egui::Stroke::new(1.4, egui::Color32::from_rgb(66, 205, 242)),
             );
-            painter.circle_stroke(
+            ui.painter().circle_stroke(
                 center,
                 104.0,
                 egui::Stroke::new(1.0, egui::Color32::from_rgba_unmultiplied(66, 205, 242, 72)),
@@ -63,7 +62,7 @@ pub fn show(
 
             match state.kind {
                 QuickMenuKind::Shapes => {
-                    painter.text(
+                    ui.painter().text(
                         center,
                         egui::Align2::CENTER_CENTER,
                         "SHAPE",
@@ -84,8 +83,8 @@ pub fn show(
                         } else {
                             egui::Color32::from_rgb(28, 34, 43)
                         };
-                        painter.circle_filled(p, 20.0, fill);
-                        painter.circle_stroke(
+                        ui.painter().circle_filled(p, 20.0, fill);
+                        ui.painter().circle_stroke(
                             p,
                             20.0,
                             egui::Stroke::new(
@@ -97,7 +96,7 @@ pub fn show(
                                 },
                             ),
                         );
-                        painter.text(
+                        ui.painter().text(
                             p,
                             egui::Align2::CENTER_CENTER,
                             *label,
@@ -110,7 +109,7 @@ pub fn show(
                     }
                 }
                 QuickMenuKind::Colors => {
-                    painter.text(
+                    ui.painter().text(
                         center,
                         egui::Align2::CENTER_CENTER,
                         "COLOR",
@@ -127,8 +126,8 @@ pub fn show(
                         let fill = egui::Color32::from_rgba_unmultiplied(
                             color[0], color[1], color[2], color[3],
                         );
-                        painter.circle_filled(p, 13.0, fill);
-                        painter.circle_stroke(
+                        ui.painter().circle_filled(p, 13.0, fill);
+                        ui.painter().circle_stroke(
                             p,
                             if color == selected_color { 16.0 } else { 14.0 },
                             egui::Stroke::new(
@@ -166,10 +165,10 @@ pub fn draw_size_feedback(
     value: f32,
 ) {
     let r = radius_px.clamp(3.0, 220.0);
-    painter.circle_stroke(center, r + 2.0, egui::Stroke::new(2.4, egui::Color32::BLACK));
-    painter.circle_stroke(center, r + 1.0, egui::Stroke::new(1.2, egui::Color32::WHITE));
-    painter.circle_stroke(center, r, egui::Stroke::new(1.7, color));
-    painter.text(
+    ui.painter().circle_stroke(center, r + 2.0, egui::Stroke::new(2.4, egui::Color32::BLACK));
+    ui.painter().circle_stroke(center, r + 1.0, egui::Stroke::new(1.2, egui::Color32::WHITE));
+    ui.painter().circle_stroke(center, r, egui::Stroke::new(1.7, color));
+    ui.painter().text(
         center + egui::vec2(0.0, r + 9.0),
         egui::Align2::CENTER_TOP,
         format!("{:.0}", value),
@@ -186,10 +185,10 @@ pub fn draw_opacity_feedback(
 ) {
     let alpha = ((color[3] as f32) * opacity.clamp(0.0, 1.0)).round() as u8;
     let fill = egui::Color32::from_rgba_unmultiplied(color[0], color[1], color[2], alpha);
-    painter.circle_filled(center, 10.0, fill);
-    painter.circle_stroke(center, 11.5, egui::Stroke::new(1.3, egui::Color32::WHITE));
-    painter.circle_stroke(center, 13.0, egui::Stroke::new(1.0, egui::Color32::BLACK));
-    painter.text(
+    ui.painter().circle_filled(center, 10.0, fill);
+    ui.painter().circle_stroke(center, 11.5, egui::Stroke::new(1.3, egui::Color32::WHITE));
+    ui.painter().circle_stroke(center, 13.0, egui::Stroke::new(1.0, egui::Color32::BLACK));
+    ui.painter().text(
         center + egui::vec2(0.0, 18.0),
         egui::Align2::CENTER_TOP,
         format!("{}%", (opacity.clamp(0.0, 1.0) * 100.0).round() as u32),
