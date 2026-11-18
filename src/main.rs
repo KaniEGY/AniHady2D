@@ -2617,6 +2617,17 @@ impl StickApp {
                                 "If both PCs join the same authorized ZeroTier network, enter the host's assigned IPv4 in Direct Join or in an invite. This is optional and LAN/Tailscale still work.",
                                 "لو الجهازين على نفس شبكة ZeroTier المصرح بيها، استخدم IPv4 الخاص بالهوست في الدخول المباشر أو رابط الدعوة. LAN وTailscale مستمرين."));
                             ui.hyperlink_to("ZeroTier","https://www.zerotier.com/download/");
+                            ui.separator();
+                            ui.strong(tr(lang,
+                                "Advanced public tunnel / endpoint",
+                                "نفق أو عنوان عام للمستخدم المتقدم"));
+                            ui.small(tr(lang,
+                                "Stick only needs a reachable TCP endpoint that forwards to local TCP 47554. Paste the provider's host:port in Direct Join or into a Stick invitation. Provider plans and limits can change.",
+                                "Stick محتاج فقط عنوان TCP قابل للوصول يتحول للبورت المحلي 47554. حط host:port بتاع الخدمة في الدخول المباشر أو رابط الدعوة. خطط وحدود الخدمات ممكن تتغير."));
+                            ui.horizontal_wrapped(|ui|{
+                                ui.hyperlink_to("ngrok TCP","https://ngrok.com/docs/gateway/endpoints/tcp");
+                                ui.hyperlink_to("playit.gg","https://playit.gg/");
+                            });
                             ui.small(tr(lang,
                                 "The host must keep Stick open; both devices must be permitted to reach each other. TCP 47554 must be allowed in the host firewall. Do not disable the firewall.",
                                 "لازم صاحب الغرفة يسيب Stick شغال، والأجهزة تكون مسموح لها تتواصل. اسمح لـStick ببورت TCP 47554 في جدار حماية الهوست، من غير تعطيل الحماية."));
@@ -3986,12 +3997,16 @@ impl StickApp {
                             "٤. جديد: من غرفة الهوست انسخ رابط الدعوة بدون كلمة السر، وصاحبك يلصقه في الدخول. LAN وTailscale لسه شغالين."));
                         ui.add_space(6.0);
                         ui.label(tr(lang,
-                            "5. On different networks, ZeroTier is an optional alternative to Tailscale when both PCs join the same trusted virtual network. Direct public IPv4/DNS requires a reachable TCP port 47554.",
-                            "٥. على شبكات مختلفة ينفع ZeroTier بدل Tailscale لو الجهازين متصلين بنفس الشبكة الخاصة. الدخول المباشر عبر IP عام أو DNS محتاج وصول لبورت TCP 47554."));
+                            "5. On different networks, Tailscale is the recommended private path. ZeroTier is an alternative when both PCs join the same trusted virtual network.",
+                            "٥. على شبكات مختلفة، Tailscale هو الطريق الخاص الموصى به. ZeroTier بديل لو الجهازين داخلين نفس الشبكة الموثوقة."));
                         ui.add_space(6.0);
                         ui.label(tr(lang,
-                            "6. Keep the host open and use matching Stick versions. A room code or invitation is not a global rendezvous or NAT traversal relay.",
-                            "٦. خليك فاتح الهوست واستخدموا نسخ Stick متوافقة. كود الغرفة أو رابط الدعوة مش سيرفر بحث عالمي ومش بيتجاوز حجب الراوتر."));
+                            "6. Advanced option: any public TCP tunnel/endpoint that forwards to local port 47554 can work with Direct Join. Paste its host:port; Stick does not require a specific tunnel provider.",
+                            "٦. اختيار متقدم: أي نفق أو عنوان TCP عام يحوّل للبورت المحلي 47554 ينفع مع الدخول المباشر. الصق host:port؛ Stick مش مربوط بخدمة نفق معينة."));
+                        ui.add_space(6.0);
+                        ui.label(tr(lang,
+                            "7. Keep the host open and use matching Stick versions. A room code or invitation is not a global rendezvous or NAT traversal relay.",
+                            "٧. خليك فاتح الهوست واستخدموا نسخ Stick متوافقة. كود الغرفة أو رابط الدعوة مش سيرفر بحث عالمي ومش بيتجاوز حجب الراوتر."));
                         ui.add_space(8.0);
                         ui.colored_label(egui::Color32::from_rgb(255,204,105),tr(lang,
                             "Security: direct LAN traffic is not end-to-end encrypted by Stick. Do not disable your firewall. Allow TCP 47554 and UDP 47553 only as appropriate.",
