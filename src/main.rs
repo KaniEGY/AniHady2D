@@ -8242,6 +8242,42 @@ mod tool_discovery_tests {
     }
 
     #[test]
+    fn imported_video_layer_moves_as_one_timeline_clip() {
+        let mut keyframes=HashMap::new();
+        for frame in 5..=8 {
+            let mut data=FrameData::default();
+            data.media_items.push(MediaItem {
+                path:format!("frame_{frame}.png"),media_type:MediaType::VideoFrame,
+                x:0.0,y:0.0,width:100.0,height:100.0,rotation_deg:0.0,
+                flip_h:false,flip_v:false,
+            });
+            keyframes.insert(frame,data);
+        }
+        let mut layer=Layer{name:"Video".into(),visible:true,locked:false,is_guide:false,
+            xp_first_paint_rewarded:false,opacity:1.0,keyframes};
+        assert_eq!(StickApp::video_layer_range(&layer),Some((5,8)));
+        assert!(StickApp::move_video_layer(&mut layer,20,100));
+        assert_eq!(StickApp::video_layer_range(&layer),Some((20,23)));
+        assert_eq!(layer.keyframes.len(),4);
+    }
+
+    #[test]
+    fn image_layer_can_end_while_preserving_source_keyframe() {
+        let mut data=FrameData::default();
+        data.media_items.push(MediaItem {
+            path:"image.png".into(),media_type:MediaType::Image,x:0.0,y:0.0,
+            width:100.0,height:100.0,rotation_deg:0.0,flip_h:false,flip_v:false,
+        });
+        let mut layer=Layer{name:"Image".into(),visible:true,locked:false,is_guide:false,
+            xp_first_paint_rewarded:false,opacity:1.0,keyframes:HashMap::from([(3,data)])};
+        assert_eq!(StickApp::image_layer_range(&layer,30),Some((3,30)));
+        assert!(StickApp::set_image_layer_end(&mut layer,12,30));
+        assert_eq!(StickApp::image_layer_range(&layer,30),Some((3,12)));
+        assert!(layer.keyframes.get(&3).is_some_and(|f|!f.media_items.is_empty()));
+        assert!(layer.keyframes.get(&13).is_some_and(|f|f.media_items.is_empty()));
+    }
+
+    #[test]
     fn new_project_resets_document_path_history_and_timeline() {
         let mut app = StickApp::new(&egui::Context::default());
         app.workspace_mode = WorkspaceMode::DrawingOnly;
