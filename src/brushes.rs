@@ -288,8 +288,11 @@ pub fn draw_stroke_pro<F: Fn(egui::Pos2) -> egui::Pos2>(
             screen_pts.get_or_insert_with(project_points).clone()
         };
         painter.add(egui::Shape::line(points, egui::Stroke::new(width * scale, ink)));
-        if (stroke.is_vector || stroke.brush_preset == KritaBrushPreset::Fineliner)
-            && stroke.tip_shape == BrushTipShape::Round {
+        // egui's polyline body does not guarantee circular end caps.
+        // Apply explicit caps to every round-tip line brush (including G-Pen),
+        // not only vector/Fineliner strokes. Polygon/pressure-outline brushes
+        // return above and keep their own geometry.
+        if stroke.tip_shape == BrushTipShape::Round {
             if let (Some(first), Some(last)) = (stroke.points.first(), stroke.points.last()) {
                 let radius = (width * scale * 0.5).max(0.25);
                 painter.circle_filled(screen(first.x,first.y),radius,ink);
@@ -316,6 +319,20 @@ mod viewport_tests {
             brush_texture_id: None,
             tip_shape: BrushTipShape::Round,
         }
+    }
+
+    #[test]
+    fn ordinary_gpen_round_tip_remains_round_cap_eligible() {
+        let s = stroke(&[(0.0,0.0),(20.0,0.0)]);
+        assert_eq!(s.brush_preset, KritaBrushPreset::GPenInk);
+        assert_eq!(s.tip_shape, BrushTipShape::Round);
+        let mut line_marks = 0;
+        crate::brush_engine::visit_round_marks(&s, |mark, _| {
+            if matches!(mark, crate::brush_engine::RoundMark::Line { .. }) {
+                line_marks += 1;
+            }
+        });
+        assert_eq!(line_marks, 1);
     }
 
     #[test]
