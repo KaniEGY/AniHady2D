@@ -15,6 +15,8 @@ pub fn draw_brush_preset_icon(painter: &egui::Painter, rect: egui::Rect, preset:
             KritaBrushPreset::SketchPencil => egui::Color32::from_rgb(250, 204, 21),
             KritaBrushPreset::DryBrush => egui::Color32::from_rgb(225, 156, 102),
             KritaBrushPreset::Chalk => egui::Color32::from_rgb(196, 222, 226),
+            KritaBrushPreset::Charcoal => egui::Color32::from_rgb(149, 165, 178),
+            KritaBrushPreset::SoftPastel => egui::Color32::from_rgb(255, 171, 208),
         }
     };
 
@@ -83,8 +85,22 @@ pub fn draw_brush_preset_icon(painter: &egui::Painter, rect: egui::Rect, preset:
         KritaBrushPreset::Chalk => {
             painter.line_segment([c + egui::vec2(-4.0,5.0), c + egui::vec2(5.0,-6.0)],
                 egui::Stroke::new(5.5,col));
-            for (x,y) in [(-7.0,7.0),(-3.0,8.0),(-8.0,3.0)] {
+            for (x,y) in [(-7.0,7.0),(-3.0,8.0)] {
                 painter.circle_filled(c + egui::vec2(x,y),1.1,col);
+            }
+        }
+        KritaBrushPreset::Charcoal => {
+            for i in 0..7 {
+                let d=i as f32 - 3.0;
+                painter.line_segment([c+egui::vec2(d-4.0,8.0),c+egui::vec2(d+4.0,-8.0)],
+                    egui::Stroke::new(if i%2==0 {1.6}else{2.5},col));
+            }
+        }
+        KritaBrushPreset::SoftPastel => {
+            painter.circle_filled(c,7.0,col);
+            for i in 0..5 {
+                let x = i as f32 * 3.0 - 6.0;
+                painter.circle_filled(c+egui::vec2(x,5.0-(i%2) as f32*3.0),1.5,col);
             }
         }
     }
@@ -217,13 +233,30 @@ pub fn draw_stroke_pro<F: Fn(egui::Pos2) -> egui::Pos2>(
             }
             RoundMark::Line { width } => width,
         };
-        let project_points = || stroke.points.iter().map(|p| screen(p.x,p.y)).collect();
+        let project_points = || {
+            if stroke.is_vector {
+                let mut path = crate::vector_path::smoothed_path(&stroke.points);
+                if stroke.tip_shape == BrushTipShape::Square {
+                    crate::vector_path::extend_square_caps(&mut path, width);
+                }
+                path.into_iter().map(|(x,y)| screen(x,y)).collect()
+            } else {
+                stroke.points.iter().map(|p| screen(p.x,p.y)).collect()
+            }
+        };
         let points = if flow == 1.0 {
             screen_pts.take().unwrap_or_else(project_points)
         } else {
             screen_pts.get_or_insert_with(project_points).clone()
         };
         painter.add(egui::Shape::line(points, egui::Stroke::new(width * scale, ink)));
+        if stroke.is_vector && stroke.tip_shape == BrushTipShape::Round {
+            if let (Some(first), Some(last)) = (stroke.points.first(), stroke.points.last()) {
+                let radius = (width * scale * 0.5).max(0.25);
+                painter.circle_filled(screen(first.x,first.y),radius,ink);
+                painter.circle_filled(screen(last.x,last.y),radius,ink);
+            }
+        }
     });
 }
 
