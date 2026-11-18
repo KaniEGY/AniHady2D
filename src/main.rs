@@ -33,6 +33,7 @@ mod online_invite;
 mod transform_handles;
 mod media_transform;
 mod audio_timeline;
+mod canvas_quick_menu;
 
 use arabic_reshaper::arabic_reshape;
 use brushes::{draw_brush_preset_icon, draw_stroke_pro};
@@ -46,7 +47,7 @@ use project::{
     BrushTipShape, Stroke, StrokePoint, Symbol, SymbolInstance, TextItem, TweenMode, PROJECT_SCHEMA_VERSION,
 };
 // Game UI sounds are generated as samples without shipping external audio assets.
-use rodio::{Decoder, OutputStream, Sink, Source};
+use rodio::{Decoder, OutputStream, OutputStreamHandle, Sink, Source};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs::File;
@@ -1075,54 +1076,6 @@ fn apply_stick_theme(ctx: &egui::Context) {
     ctx.set_style(style);
 }
 
-#[derive(Clone, Copy)]
-enum TimelineQuickAction { DuplicateNext, MoveNext, ClearSelection }
-
-fn timeline_quick_action(
-    ui: &mut egui::Ui,
-    action: TimelineQuickAction,
-    enabled: bool,
-    tooltip: String,
-) -> egui::Response {
-    let sense=if enabled { egui::Sense::click() } else { egui::Sense::hover() };
-    let (rect,response)=ui.allocate_exact_size(egui::vec2(30.0,27.0),sense);
-    let painter=ui.painter();
-    let cyan=egui::Color32::from_rgb(67,205,242);
-    let gold=egui::Color32::from_rgb(250,197,67);
-    let fg=if enabled { if response.hovered(){gold}else{cyan} } else {egui::Color32::from_gray(92)};
-    let bg=if response.hovered() && enabled {
-        egui::Color32::from_rgb(24,52,67)
-    } else {egui::Color32::from_rgb(37,41,48)};
-    painter.rect_filled(rect,4.0,bg);
-    painter.rect_stroke(rect,4.0,egui::Stroke::new(1.0,fg));
-    let p=rect.center();
-    match action {
-        TimelineQuickAction::DuplicateNext => {
-            let back=egui::Rect::from_center_size(p+egui::vec2(-3.0,-2.0),egui::vec2(10.0,10.0));
-            let front=egui::Rect::from_center_size(p+egui::vec2(3.0,2.0),egui::vec2(10.0,10.0));
-            painter.rect_stroke(back,1.0,egui::Stroke::new(1.4,fg));
-            painter.rect_stroke(front,1.0,egui::Stroke::new(1.8,fg));
-            painter.line_segment([p+egui::vec2(7.0,0.0),p+egui::vec2(11.0,0.0)],egui::Stroke::new(1.5,fg));
-            painter.line_segment([p+egui::vec2(9.0,-2.0),p+egui::vec2(11.0,0.0)],egui::Stroke::new(1.5,fg));
-            painter.line_segment([p+egui::vec2(9.0,2.0),p+egui::vec2(11.0,0.0)],egui::Stroke::new(1.5,fg));
-        }
-        TimelineQuickAction::MoveNext => {
-            painter.rect_stroke(egui::Rect::from_center_size(p+egui::vec2(-5.0,0.0),egui::vec2(8.0,10.0)),
-                1.0,egui::Stroke::new(1.5,fg));
-            painter.line_segment([p+egui::vec2(0.0,0.0),p+egui::vec2(10.0,0.0)],egui::Stroke::new(2.0,fg));
-            painter.add(egui::Shape::convex_polygon(vec![
-                p+egui::vec2(10.0,0.0),p+egui::vec2(5.0,-4.0),p+egui::vec2(5.0,4.0)
-            ],fg,egui::Stroke::NONE));
-        }
-        TimelineQuickAction::ClearSelection => {
-            painter.circle_stroke(p,7.5,egui::Stroke::new(1.4,fg));
-            painter.line_segment([p+egui::vec2(-5.0,-5.0),p+egui::vec2(5.0,5.0)],egui::Stroke::new(2.0,fg));
-            painter.line_segment([p+egui::vec2(-5.0,5.0),p+egui::vec2(5.0,-5.0)],egui::Stroke::new(2.0,fg));
-        }
-    }
-    response.on_hover_text(tooltip)
-}
-
 fn draw_system_hud_chrome(painter: &egui::Painter, rect: egui::Rect) {
     let cyan=egui::Color32::from_rgb(0,216,255);
     let cyan_dim=egui::Color32::from_rgba_unmultiplied(0,216,255,115);
@@ -1740,9 +1693,13 @@ struct StickApp {
     texture_cache: HashMap<String, egui::TextureHandle>,
     status_message: String,
     audio_sink: Option<(OutputStream, Vec<Sink>)>,
+    audio_scrub_output: Option<(OutputStream, OutputStreamHandle)>,
+    audio_scrub_sinks: Vec<Sink>,
     last_pointer_pos: Option<egui::Pos2>,
     last_secondary_pointer_pos: Option<egui::Pos2>,
     alt_size_drag_origin: Option<(egui::Pos2, f32)>,
+    ctrl_opacity_drag_origin: Option<(egui::Pos2, f32)>,
+    canvas_quick_menu: Option<canvas_quick_menu::QuickMenuState>,
 }
 
 impl StickApp {
@@ -1926,9 +1883,13 @@ impl StickApp {
             texture_cache: HashMap::new(),
             status_message: "Stick Studio Ready".to_string(),
             audio_sink: None,
+            audio_scrub_output: None,
+            audio_scrub_sinks: Vec::new(),
             last_pointer_pos: None,
             last_secondary_pointer_pos: None,
             alt_size_drag_origin: None,
+            ctrl_opacity_drag_origin: None,
+            canvas_quick_menu: None,
         }
     }
 
@@ -2797,6 +2758,34 @@ impl StickApp {
         }
     }
 
+
+    fn active_tool_opacity(&self) -> Option<f32> {
+        match self.active_tool_ui {
+            ActiveToolUI::Brush => Some(self.brush_opacity),
+            ActiveToolUI::VectorPen => Some(self.vector_pen_opacity),
+            ActiveToolUI::ShapeLine => Some(self.shape_opacity),
+            _ => None,
+        }
+    }
+
+    fn set_active_tool_opacity(&mut self, value: f32) {
+        let value=value.clamp(0.02,1.0);
+        match self.active_tool_ui {
+            ActiveToolUI::Brush => self.brush_opacity=value,
+            ActiveToolUI::VectorPen => self.vector_pen_opacity=value,
+            ActiveToolUI::ShapeLine => self.shape_opacity=value,
+            _ => {}
+        }
+    }
+
+    fn active_tool_visual_radius_px(&self, scale: f32) -> Option<f32> {
+        let size=self.active_sizable_tool_size()?;
+        Some(match self.active_tool_ui {
+            ActiveToolUI::Sculpt => size*scale,
+            _ => size*scale*0.5,
+        })
+    }
+
     fn commit_stroke_with_symmetry(&mut self, stroke: Stroke, now_time: f64) {
         if let Some(ref sym_name) = self.editing_symbol_name.clone() {
             if let Some(sym) = self.project.library_symbols.get_mut(sym_name) {
@@ -3245,34 +3234,48 @@ impl StickApp {
         true
     }
 
-    fn trigger_audio_stream_scrub(&mut self) {
-        if self.is_playing { return; }
-        let fps = self.project.fps.max(1) as f64;
-        for track in &self.project.audio_tracks {
-            if track.sync_mode == AudioSyncMode::Stream && !track.muted && track.gain > 0.0
-                && self.current_frame >= track.start_frame && self.current_frame <= track.end_frame {
-                let seek_secs = (self.current_frame - track.start_frame) as f64 / fps;
-                let path = track.file_path.clone();
-                let gain = track.gain.clamp(0.0,2.0);
-                let frame_dur_ms = (1000.0 / fps).clamp(40.0, 120.0) as u64;
-                std::thread::spawn(move || {
-                    if let Ok((_s, h)) = OutputStream::try_default() {
-                        if let Ok(sink) = Sink::try_new(&h) {
-                            if let Ok(file) = File::open(&path) {
-                                if let Ok(src) = Decoder::new(BufReader::new(file)) {
-                                    sink.set_volume(gain);
-                                    sink.append(src.skip_duration(Duration::from_secs_f64(seek_secs)).take_duration(Duration::from_millis(frame_dur_ms)));
-                                    sink.sleep_until_end();
-                                }
-                            }
-                        }
-                    }
-                });
-            }
+    fn stop_audio_scrub_preview(&mut self) {
+        for sink in self.audio_scrub_sinks.drain(..) {
+            sink.stop();
         }
     }
 
+    fn trigger_audio_stream_scrub(&mut self) {
+        if self.is_playing { return; }
+        // Frame-by-frame lip-sync preview must not overlap old snippets; the
+        // previous thread-per-frame implementation stacked tiny clips and made
+        // speech sound muddy. Reuse one output stream and replace its sinks.
+        self.stop_audio_scrub_preview();
+        if self.audio_scrub_output.is_none() {
+            let Ok(output)=OutputStream::try_default() else {return};
+            self.audio_scrub_output=Some(output);
+        }
+        let Some((_,handle))=self.audio_scrub_output.as_ref() else{return};
+        let fps=self.project.fps.max(1) as f64;
+        let preview_secs=(6.0/fps).clamp(0.22,0.34);
+        let pre_roll=(1.5/fps).clamp(0.045,0.080);
+        let mut sinks=Vec::new();
+        for track in &self.project.audio_tracks {
+            if track.sync_mode != AudioSyncMode::Stream || track.muted || track.gain<=0.0
+                || self.current_frame<track.start_frame || self.current_frame>track.end_frame {
+                continue;
+            }
+            let target=(self.current_frame-track.start_frame) as f64/fps;
+            let seek_secs=(target-pre_roll).max(0.0);
+            let Ok(file)=File::open(&track.file_path) else{continue};
+            let Ok(src)=Decoder::new(BufReader::new(file)) else{continue};
+            let Ok(sink)=Sink::try_new(handle) else{continue};
+            sink.set_volume(track.gain.clamp(0.0,2.0));
+            sink.append(src
+                .skip_duration(Duration::from_secs_f64(seek_secs))
+                .take_duration(Duration::from_secs_f64(preview_secs)));
+            sinks.push(sink);
+        }
+        self.audio_scrub_sinks=sinks;
+    }
+
     fn start_audio_playback(&mut self) {
+        self.stop_audio_scrub_preview();
         self.stop_audio_playback();
         let Ok((stream, handle)) = OutputStream::try_default() else { return; };
         let mut sinks = Vec::new();
@@ -3393,6 +3396,7 @@ impl StickApp {
 
     fn replace_document(&mut self, project: AniProject) {
         self.stop_audio_playback();
+        self.stop_audio_scrub_preview();
         self.is_playing = false;
         self.timeline_length = project.total_frames.max(1);
         self.loop_start_frame = 1;
@@ -3547,7 +3551,10 @@ impl StickApp {
     }
 
     fn import_audio_dialog(&mut self) {
-        if let Some(path) = rfd::FileDialog::new().add_filter("Audio", &["mp3", "wav"]).pick_file() {
+        if let Some(path) = rfd::FileDialog::new()
+            .add_filter("Audio", &["mp3", "wav", "wave", "ogg", "flac"])
+            .add_filter("WAV", &["wav", "wave"])
+            .pick_file() {
             let name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
             let p_str = path.to_string_lossy().to_string();
             let duration = File::open(&path).ok()
@@ -4644,6 +4651,7 @@ impl eframe::App for StickApp {
             || self.show_features_guide || self.layer_rename_index.is_some()
             || self.show_timeline_settings || self.show_project_notice
             || self.show_recovery_dialog || self.show_project_details
+            || self.show_feedback_dialog
             || transient_system_overlay;
         if any_modal_open { typing_in_textbox = true; }
 
