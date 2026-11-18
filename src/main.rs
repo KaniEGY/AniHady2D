@@ -134,7 +134,9 @@ enum SfxType {
     ExportSuccess,
     ExitFarewell,
     LevelUpFanfare(u8),
-    ArtistSystemLightning,
+    SystemUiAppear,
+    SystemUiDismiss,
+    SystemUiActivate,
     ToolSelect(u8),
 }
 
@@ -151,7 +153,9 @@ fn game_ui_samples(sfx: SfxType) -> Vec<f32> {
         SfxType::ExportSuccess => 0.340,
         SfxType::ExitFarewell => 0.190,
         SfxType::LevelUpFanfare(_) => 0.520,
-        SfxType::ArtistSystemLightning => 0.780,
+        SfxType::SystemUiAppear => 0.620,
+        SfxType::SystemUiDismiss => 0.420,
+        SfxType::SystemUiActivate => 0.280,
         SfxType::ToolSelect(_) => 0.090,
     };
     let rate = 44_100.0f32;
@@ -177,7 +181,9 @@ fn game_ui_samples(sfx: SfxType) -> Vec<f32> {
                 let band = 420. + (variation/10) as f32*24.;
                 (band,band*1.8,0.18,0.03)
             }
-            SfxType::ArtistSystemLightning => (1850., 135., 0.24, 0.58),
+            SfxType::SystemUiAppear => (1780., 170., 0.23, 0.46),
+            SfxType::SystemUiDismiss => (760., 115., 0.16, 0.12),
+            SfxType::SystemUiActivate => (520., 1390., 0.18, 0.055),
             SfxType::ToolSelect(index) => {
                 let base = 535. + (index as f32)*26.;
                 (base,base*1.21,0.095,0.05)
@@ -192,9 +198,20 @@ fn game_ui_samples(sfx: SfxType) -> Vec<f32> {
             let arpeggio = [1.0,1.25,1.5,2.0][note.min(3)];
             tone = (phase*arpeggio).sin()*0.8 + (phase*arpeggio*2.0).sin()*0.18;
         }
-        if matches!(sfx, SfxType::ArtistSystemLightning) {
-            let snap = ((t * 31.0).sin().abs().powf(7.0) * 0.9 + 0.15).clamp(0.0, 1.0);
-            tone = tone * 0.30 + (phase * 3.7).sin() * 0.17 * snap;
+        match sfx {
+            SfxType::SystemUiAppear => {
+                let snap = ((t * 31.0).sin().abs().powf(7.0) * 0.9 + 0.15).clamp(0.0, 1.0);
+                tone = tone * 0.34 + (phase * 3.7).sin() * 0.19 * snap;
+            }
+            SfxType::SystemUiDismiss => {
+                let gate = ((t * 18.0).sin().abs() * (1.0-progress)).clamp(0.0,1.0);
+                tone = tone * 0.44 + (phase * 0.51).sin() * 0.16 * gate;
+            }
+            SfxType::SystemUiActivate => {
+                let step = [1.0, 1.5, 2.0][((progress*3.0).floor() as usize).min(2)];
+                tone = (phase*step).sin()*0.74 + (phase*step*2.0).sin()*0.16;
+            }
+            _ => {}
         }
         seed ^= seed<<13;
         seed ^= seed>>17;
@@ -307,6 +324,116 @@ fn support_message_lines(lang: AppLang) -> Vec<String> {
     SUPPORT_MESSAGE_LINES.iter().map(|(en, ar)| tr(lang, en, ar)).collect()
 }
 
+const SYSTEM_MESSAGES: [(&str, &str); 100] = [
+    ("FOCUS", "تركيز"),
+    ("FLOW", "انسياب"),
+    ("PRECISION", "دقة"),
+    ("MOMENTUM", "زخم"),
+    ("VISION", "رؤية"),
+    ("CONTROL", "تحكم"),
+    ("RHYTHM", "إيقاع"),
+    ("BALANCE", "توازن"),
+    ("CLARITY", "وضوح"),
+    ("ENERGY", "طاقة"),
+    ("SPARK", "شرارة"),
+    ("MOTION", "حركة"),
+    ("CRAFT", "حرفة"),
+    ("MASTERY", "إتقان"),
+    ("EDGE", "تميّز"),
+    ("PULSE", "نبض"),
+    ("DRIVE", "دافع"),
+    ("CALM", "هدوء"),
+    ("POWER", "قوة"),
+    ("SPEED", "سرعة"),
+    ("IMPACT", "تأثير"),
+    ("DEPTH", "عمق"),
+    ("FORM", "تكوين"),
+    ("LINE", "خط"),
+    ("FRAME", "فريم"),
+    ("TIMING", "توقيت"),
+    ("POSE", "وضعية"),
+    ("ARC", "قوس"),
+    ("WEIGHT", "وزن"),
+    ("SPACE", "مساحة"),
+    ("CONTRAST", "تباين"),
+    ("LIGHT", "إضاءة"),
+    ("SHADOW", "ظل"),
+    ("COLOR", "لون"),
+    ("TEXTURE", "ملمس"),
+    ("SHAPE", "شكل"),
+    ("GESTURE", "إيماءة"),
+    ("SILHOUETTE", "هيئة"),
+    ("PERSPECTIVE", "منظور"),
+    ("VOLUME", "حجم"),
+    ("DESIGN", "تصميم"),
+    ("INTENT", "هدف"),
+    ("RESOLVE", "عزم"),
+    ("DISCIPLINE", "انضباط"),
+    ("PATIENCE", "صبر"),
+    ("PRACTICE", "تدريب"),
+    ("PROGRESS", "تقدم"),
+    ("LEVEL", "مستوى"),
+    ("RANK", "رتبة"),
+    ("SKILL", "مهارة"),
+    ("TALENT", "موهبة"),
+    ("GROWTH", "تطور"),
+    ("CREATE", "ابتكر"),
+    ("DRAW", "ارسم"),
+    ("ANIMATE", "حرّك"),
+    ("BUILD", "ابنِ"),
+    ("REFINE", "صقّل"),
+    ("POLISH", "حسّن"),
+    ("EXPLORE", "استكشف"),
+    ("EXPERIMENT", "جرّب"),
+    ("OBSERVE", "راقب"),
+    ("IMAGINE", "تخيّل"),
+    ("COMPOSE", "كوّن"),
+    ("SIMPLIFY", "بسّط"),
+    ("ADVANCE", "تقدّم"),
+    ("ADAPT", "تكيّف"),
+    ("LEARN", "تعلّم"),
+    ("REPEAT", "كرّر"),
+    ("FINISH", "كمّل"),
+    ("START", "ابدأ"),
+    ("CONTINUE", "استمر"),
+    ("UNLOCK", "افتح"),
+    ("EVOLVE", "تطوّر"),
+    ("RISE", "ارتقِ"),
+    ("AIM", "استهدف"),
+    ("COMMIT", "التزم"),
+    ("PERSIST", "ثابر"),
+    ("EXECUTE", "نفّذ"),
+    ("ITERATE", "طوّر"),
+    ("REVIEW", "راجع"),
+    ("CORRECT", "صحّح"),
+    ("SMOOTH", "نعّم"),
+    ("ALIGN", "حاذِ"),
+    ("ANCHOR", "ثبّت"),
+    ("TRANSFORM", "حوّل"),
+    ("TRACE", "تتبّع"),
+    ("CAPTURE", "التقط"),
+    ("STAGE", "مشهد"),
+    ("LAYOUT", "تخطيط"),
+    ("KEYFRAME", "كي فريم"),
+    ("ONION", "تتبّع بصري"),
+    ("STROKE", "ضربة قلم"),
+    ("DETAIL", "تفصيل"),
+    ("CLEAN", "نظافة"),
+    ("BOLD", "جرأة"),
+    ("FLEX", "مرونة"),
+    ("SYNC", "تزامن"),
+    ("PACE", "إيقاع زمني"),
+    ("FOCUS+", "تركيز أعلى"),
+    ("READY", "جاهز"),
+];
+
+fn pick_system_message_index() -> usize {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let nanos = SystemTime::now().duration_since(UNIX_EPOCH)
+        .unwrap_or_default().as_nanos() as usize;
+    (nanos ^ nanos.rotate_left(13)) % SYSTEM_MESSAGES.len()
+}
+
 // Notification strings are shaped once in the notice window itself.
 // Using tr() here would reshape Arabic twice and scramble its word order.
 fn tr_notice(lang: AppLang, en: &str, ar: &str) -> String {
@@ -317,8 +444,7 @@ fn tr_notice(lang: AppLang, en: &str, ar: &str) -> String {
 }
 
 
-const TOOLBAR_ITEMS: [ActiveToolUI; 14] = [
-    ActiveToolUI::SelectNormal,
+const TOOLBAR_ITEMS: [ActiveToolUI; 13] = [
     ActiveToolUI::SelectLasso,
     ActiveToolUI::FreeTransform,
     ActiveToolUI::VectorDirectSelect,
@@ -860,7 +986,7 @@ fn load_artist_avatar(ctx: &egui::Context, path: Option<&str>) -> Option<egui::T
 }
 
 fn apply_interface_preset(config: &mut AppConfig, preset: u8) {
-    config.ui_style_preset=preset.min(6);
+    config.ui_style_preset=preset.min(7);
     let (panel,accent,tl_bg,tl_cell,tl_head,icon_scale,right_split,timeline_style)=match config.ui_style_preset {
         1 => ([26,38,58,255],[74,200,255,255],[20,31,50,255],[36,56,80,255],
             [255,204,71,255],1.12,0.48,1), // Cartoon
@@ -874,6 +1000,8 @@ fn apply_interface_preset(config: &mut AppConfig, preset: u8) {
             [232,84,84,255],0.98,0.43,1), // Krita Style
         6 => ([34,37,42,255],[230,126,34,255],[27,29,33,255],[48,52,58,255],
             [255,151,53,255],0.96,0.40,1), // Blender Style
+        7 => ([5,18,31,255],[0,216,255,255],[3,13,26,255],[8,31,52,255],
+            [255,205,63,255],1.04,0.44,2), // The System
         _ => ([30,31,36,255],[0,122,204,255],[28,29,34,255],[40,42,48,255],
             [225,55,55,255],1.0,0.45,0),
     };
@@ -893,6 +1021,7 @@ fn apply_interface_preset(config: &mut AppConfig, preset: u8) {
 
 fn apply_user_theme(ctx: &egui::Context, config: &AppConfig) {
     let mut style = (*ctx.style()).clone();
+    style.visuals = egui::Visuals::dark();
     let c = config.ui_panel_color;
     let a = config.ui_accent_color;
     style.visuals.panel_fill = egui::Color32::from_rgb(c[0], c[1], c[2]);
@@ -907,10 +1036,27 @@ fn apply_user_theme(ctx: &egui::Context, config: &AppConfig) {
         4 => (egui::vec2(5.0,4.0),egui::vec2(7.0,4.0)),
         5 => (egui::vec2(4.5,4.5),egui::vec2(6.5,3.5)),
         6 => (egui::vec2(4.0,4.0),egui::vec2(6.0,3.0)),
+        7 => (egui::vec2(5.0,5.0),egui::vec2(8.0,4.0)),
         _ => (egui::vec2(5.0,5.0),egui::vec2(7.0,4.0)),
     };
     style.spacing.item_spacing=item;
     style.spacing.button_padding=pad;
+    style.interaction.tooltip_delay = 2.0;
+    if config.ui_style_preset == 7 {
+        let cyan=egui::Color32::from_rgb(0,216,255);
+        let deep=egui::Color32::from_rgb(3,13,26);
+        style.visuals.window_fill=egui::Color32::from_rgb(5,22,43);
+        style.visuals.extreme_bg_color=deep;
+        style.visuals.window_stroke=egui::Stroke::new(1.4,cyan);
+        style.visuals.hyperlink_color=cyan;
+        style.visuals.selection.stroke=egui::Stroke::new(1.2,egui::Color32::from_rgb(255,215,82));
+        style.visuals.widgets.inactive.bg_fill=egui::Color32::from_rgb(8,31,52);
+        style.visuals.widgets.inactive.bg_stroke=egui::Stroke::new(0.8,egui::Color32::from_rgb(0,112,143));
+        style.visuals.widgets.hovered.bg_fill=egui::Color32::from_rgb(8,55,77);
+        style.visuals.widgets.hovered.bg_stroke=egui::Stroke::new(1.2,cyan);
+        style.visuals.widgets.active.bg_fill=egui::Color32::from_rgb(10,70,90);
+        style.visuals.widgets.active.bg_stroke=egui::Stroke::new(1.4,egui::Color32::from_rgb(255,205,63));
+    }
     ctx.set_style(style);
 }
 
@@ -1480,6 +1626,8 @@ struct StickApp {
     level_up_custom_msg: String,
     artist_intro_timer: f64,
     artist_intro_pending: bool,
+    artist_intro_was_visible: bool,
+    artist_intro_message_index: usize,
     has_unsaved_changes: bool,
     show_exit_dialog: bool,
     show_symbol_dialog: bool,
@@ -1664,6 +1812,8 @@ impl StickApp {
             level_up_custom_msg: String::new(),
             artist_intro_timer: 0.0,
             artist_intro_pending: false,
+            artist_intro_was_visible: false,
+            artist_intro_message_index: 0,
             has_unsaved_changes: false,
             show_exit_dialog: false,
             show_symbol_dialog: false,
@@ -2820,9 +2970,11 @@ impl StickApp {
             }
         } else {
             let data = if blank {
-                FrameData::default()
+                FrameData { timeline_marker: FrameMarkerKind::Blank, ..Default::default() }
             } else {
-                self.project.evaluate_layer_at_frame(layer, self.current_frame)
+                let mut data = self.project.evaluate_layer_at_frame(layer, self.current_frame);
+                data.timeline_marker = FrameMarkerKind::CopiedPose;
+                data
             };
             self.save_undo_state();
             self.project.layers[layer_index].keyframes.insert(next, data);
@@ -2850,7 +3002,8 @@ impl StickApp {
         {
             return;
         }
-        if let Some(clip) = self.clipboard_frame.clone() {
+        if let Some(mut clip) = self.clipboard_frame.clone() {
+            clip.timeline_marker = FrameMarkerKind::CopiedPose;
             self.save_undo_state();
             self.project.layers[layer_idx].keyframes.insert(frame_idx, clip);
             self.active_layer_idx = layer_idx;
@@ -3855,11 +4008,12 @@ impl StickApp {
         }
         match self.active_tool_ui {
             ActiveToolUI::SelectNormal | ActiveToolUI::SelectLasso | ActiveToolUI::FreeTransform | ActiveToolUI::VectorDirectSelect => {
-                ui.strong(tr(lang, "Transform & Selection", "خصائص التحديد والتحويل الحر"));
-                ui.horizontal(|ui| {
-                    if ui.selectable_label(self.active_tool_ui == ActiveToolUI::SelectNormal, tr(lang, "Select (V)", "تحديد (V)")).clicked() { self.active_tool_ui = ActiveToolUI::SelectNormal; }
-                    if ui.selectable_label(self.active_tool_ui == ActiveToolUI::FreeTransform, tr(lang, "Transform (Q)", "تحويل حر (Q)")).clicked() { self.active_tool_ui = ActiveToolUI::FreeTransform; }
-                });
+                ui.strong(tr(lang, "Transform", "خصائص التحويل"));
+                if self.active_tool_ui == ActiveToolUI::FreeTransform {
+                    ui.small(tr(lang,
+                        "Click an object to select it, drag empty space for a box selection, then move/scale/rotate with the same tool.",
+                        "اضغط على العنصر لتحديده، أو اسحب في مساحة فاضية للتحديد بالمربع، وبعدها حرّك أو كبّر أو لف بنفس الأداة."));
+                }
                 ui.horizontal(|ui| {
                     if ui.button(" -10% ").clicked() { self.save_undo_state(); self.transform_selected_items(0.90, 0.0, false, false); }
                     if ui.button(" +10% ").clicked() { self.save_undo_state(); self.transform_selected_items(1.10, 0.0, false, false); }
@@ -3983,8 +4137,8 @@ impl StickApp {
             ActiveToolUI::Text => {
                 ui.strong(tr(lang, "Text Properties", "خصائص النص"));
                 ui.add(egui::DragValue::new(&mut self.text_font_size).range(10.0..=180.0));
-                ui.small(tr(lang, "To move text, switch to Selection (V), click the text, then drag.",
-                    "عشان تحرك النص: اختار تحديد (V)، دوس على النص واسحبه."));
+                ui.small(tr(lang, "To move text, switch to Transform (Q), click the text, then drag.",
+                    "عشان تحرك النص: اختار التحويل (Q)، دوس على النص واسحبه."));
                 ui.add(egui::Slider::new(&mut self.text_opacity, 0.0..=1.0)
                     .text(tr(lang, "Text Opacity", "شفافية النص")));
             }
@@ -4102,11 +4256,19 @@ impl eframe::App for StickApp {
         if self.artist_intro_pending {
             self.artist_intro_pending = false;
             if self.config.artist_project_intro_enabled {
-                self.artist_intro_timer = now_time + 8.0;
-                self.play_sfx(SfxType::ArtistSystemLightning);
+                self.artist_intro_message_index = pick_system_message_index();
+                self.artist_intro_timer = now_time + 4.0;
+                self.artist_intro_was_visible = true;
+                self.play_sfx(SfxType::SystemUiAppear);
             }
         }
-        if self.config.artist_project_intro_enabled && now_time < self.artist_intro_timer {
+        let artist_intro_visible =
+            self.config.artist_project_intro_enabled && now_time < self.artist_intro_timer;
+        if self.artist_intro_was_visible && !artist_intro_visible {
+            self.artist_intro_was_visible = false;
+            self.play_sfx(SfxType::SystemUiDismiss);
+        }
+        if artist_intro_visible {
             let (lvl, cxp, rxp) = self.user_profile.get_level_progress();
             let rank = self.user_profile.get_hunter_rank();
             let progress = (cxp as f32 / rxp.max(1) as f32).clamp(0.0,1.0);
@@ -4153,10 +4315,12 @@ impl eframe::App for StickApp {
                     ui.add_space(14.0);
                     ui.add(egui::ProgressBar::new(progress).desired_width(590.0)
                         .text(format!("{} / {} XP",cxp,rxp)));
-                    ui.label(egui::RichText::new(tr(lang,
-                        "Every masterpiece begins with one frame.",
-                        "كل لوحة عظيمة بتبدأ بخط واحد."))
-                        .size(15.0).color(egui::Color32::from_rgb(226,236,247)));
+                    let (system_en,system_ar)=SYSTEM_MESSAGES[
+                        self.artist_intro_message_index % SYSTEM_MESSAGES.len()
+                    ];
+                    ui.label(egui::RichText::new(format!(
+                        "SYSTEM WORD • {}", tr(lang,system_en,system_ar)
+                    )).size(15.0).strong().color(egui::Color32::from_rgb(226,236,247)));
                 });
             draw_artist_lightning_fx(ctx, fx_rect, now_time);
             ctx.request_repaint_after(Duration::from_millis(16));
@@ -4384,20 +4548,19 @@ impl eframe::App for StickApp {
 
         if let (Some(idx), Some(k_name)) = (self.listening_shortcut_idx, pressed_key_name) {
             match idx {
-                0 => self.config.tool_select = k_name,
-                1 => self.config.tool_lasso = k_name,
-                2 => self.config.tool_free_transform = k_name,
-                3 => self.config.tool_vector_select = k_name,
-                4 => self.config.tool_sculpt = k_name,
-                5 => self.config.tool_pen = k_name,
-                6 => self.config.tool_brush = k_name,
-                7 => self.config.tool_eraser = k_name,
-                8 => self.config.tool_eraser_partial = k_name,
-                9 => self.config.tool_bucket = k_name,
-                10 => self.config.tool_eyedropper = k_name,
-                11 => self.config.tool_text = k_name,
-                12 => self.config.tool_shape = k_name,
-                13 => self.config.tool_hand = k_name,
+                0 => self.config.tool_lasso = k_name,
+                1 => self.config.tool_free_transform = k_name,
+                2 => self.config.tool_vector_select = k_name,
+                3 => self.config.tool_sculpt = k_name,
+                4 => self.config.tool_pen = k_name,
+                5 => self.config.tool_brush = k_name,
+                6 => self.config.tool_eraser = k_name,
+                7 => self.config.tool_eraser_partial = k_name,
+                8 => self.config.tool_bucket = k_name,
+                9 => self.config.tool_eyedropper = k_name,
+                10 => self.config.tool_text = k_name,
+                11 => self.config.tool_shape = k_name,
+                12 => self.config.tool_hand = k_name,
                 _ => {}
             }
             self.config.save();
@@ -4405,13 +4568,15 @@ impl eframe::App for StickApp {
             typing_in_textbox = true;
         }
 
+        let transient_system_overlay = artist_intro_visible || now_time < self.level_up_banner_timer;
         let any_modal_open = self.show_symbol_dialog || self.show_text_dialog || self.show_export_studio
             || self.show_command_palette || self.show_exit_dialog || self.show_update_dialog
             || self.show_settings_dialog || self.show_credits_dialog
             || self.show_support_dialog || self.show_online_guide
             || self.show_features_guide || self.layer_rename_index.is_some()
             || self.show_timeline_settings || self.show_project_notice
-            || self.show_recovery_dialog || self.show_project_details;
+            || self.show_recovery_dialog || self.show_project_details
+            || transient_system_overlay;
         if any_modal_open { typing_in_textbox = true; }
 
         let old_selected_tool = self.active_tool_ui;
@@ -4446,9 +4611,9 @@ impl eframe::App for StickApp {
             }
 
             if sc_reset_canvas { self.pan_offset = egui::Vec2::ZERO; self.zoom_level = 0.75; self.canvas_rotation_deg = 0.0; self.canvas_flip_h = false; self.canvas_flip_v = false; }
-            if sc_select { self.active_tool_ui = ActiveToolUI::SelectNormal; }
+            // The retired Selection shortcut remains a compatibility alias for Transform.
+            if sc_select || sc_free_tr { self.active_tool_ui = ActiveToolUI::FreeTransform; }
             if sc_lasso { self.active_tool_ui = ActiveToolUI::SelectLasso; }
-            if sc_free_tr { self.active_tool_ui = ActiveToolUI::FreeTransform; }
             if sc_vec_sel { self.active_tool_ui = ActiveToolUI::VectorDirectSelect; }
             if sc_sculpt { self.active_tool_ui = ActiveToolUI::Sculpt; }
             if sc_pen { self.active_tool_ui = ActiveToolUI::VectorPen; }
@@ -4779,7 +4944,7 @@ impl eframe::App for StickApp {
                         }
                         if ui.checkbox(&mut self.config.artist_project_intro_enabled,
                             tr(lang, "Show Artist System intro on every new project",
-                                "اظهر نافذة نظام الفنان 8 ثواني مع كل مشروع جديد")).changed() {
+                                "اظهر نافذة نظام الفنان 4 ثواني مع كل مشروع جديد")).changed() {
                             if !self.config.artist_project_intro_enabled {
                                 self.artist_intro_pending = false;
                                 self.artist_intro_timer = 0.0;
@@ -4787,8 +4952,8 @@ impl eframe::App for StickApp {
                             self.config.save();
                         }
                         ui.small(tr(lang,
-                            "The intro uses animated electric effects; global sound effects control its lightning sound.",
-                            "النافذة فيها مؤثرات برق متحركة؛ زر الأصوات العام بيتحكم في صوت البرق."));
+                            "The intro uses separate system boot and dismiss sounds plus one of 100 rotating System words.",
+                            "النافذة لها صوت ظهور واختفاء مختلفين، وبتعرض كلمة مميزة من 100 كلمة كل مرة."));
                         if ui.checkbox(&mut self.config.show_grid,
                             tr(lang, "Show Grid", "إظهار شبكة الرسم")).changed() {
                             self.config.save();
@@ -5802,9 +5967,12 @@ impl eframe::App for StickApp {
                                 (4,"Interface 4","واجهة 4"),
                                 (5,"Interface 5","واجهة 5"),
                                 (6,"Interface 6","واجهة 6"),
+                                (7,"The System","The System"),
                             ] {
                                 if ui.selectable_label(self.config.ui_style_preset==id,tr(lang,en,ar)).clicked() {
+                                    let changed=self.config.ui_style_preset!=id;
                                     apply_interface_preset(&mut self.config,id);
+                                    if changed && id==7 { self.play_sfx(SfxType::SystemUiActivate); }
                                     self.config.save();
                                     ui.close_menu();
                                 }
@@ -8717,8 +8885,13 @@ mod tool_discovery_tests {
         assert_ne!(cfg.ui_panel_color,base);
         assert_eq!(cfg.ui_accent_color,[244,118,190,255]);
         apply_interface_preset(&mut cfg,99);
-        assert_eq!(cfg.ui_style_preset,6);
-        assert_eq!(cfg.ui_accent_color,[230,126,34,255]);
+        assert_eq!(cfg.ui_style_preset,7);
+        assert_eq!(cfg.ui_accent_color,[0,216,255,255]);
+    }
+
+    #[test]
+    fn artist_system_has_exactly_one_hundred_rotating_words() {
+        assert_eq!(SYSTEM_MESSAGES.len(),100);
     }
 
     #[test]
