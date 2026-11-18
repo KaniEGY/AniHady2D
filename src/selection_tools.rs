@@ -95,7 +95,7 @@ pub fn nearest_vector_node(
         if !stroke.is_vector { continue; }
         for (pi, point) in stroke.points.iter().enumerate() {
             let distance = (point.x - cursor.x).powi(2) + (point.y - cursor.y).powi(2);
-            if distance.is_finite() && distance <= best {
+            if distance.is_finite() && distance < best {
                 nearest = Some((si, pi));
                 best = distance;
             }

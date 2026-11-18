@@ -12,6 +12,13 @@ pub enum FrameAction {
     DeleteFrame,
     Keyframe,
     BlankKeyframe,
+    /// Duplicate the current frame's visible content into the next frame
+    /// (frame + 1), inserting a new keyframe there if one doesn't already
+    /// exist.  The timeline length stays the same.
+    Duplicate,
+    /// Insert a blank frame at `frame`, shifting every keyframe at or after
+    /// that position forward by one.  `total_frames` grows by one.
+    InsertEmpty,
 }
 
 pub fn apply_frame_edit(
@@ -29,6 +36,35 @@ pub fn apply_frame_edit(
     if matches!(action, FrameAction::Copy | FrameAction::Paste) {
         return Err("Clipboard operations need the editor clipboard.");
     }
+
+    // ── InsertEmpty ────────────────────────────────────────────────────────
+    // Inserts a blank keyframe at `frame` on *every* layer, shifting keyframes
+    // at or after that position forward by one, and grows total_frames by one.
+    if action == FrameAction::InsertEmpty {
+        if project.layers.iter().any(|layer| layer.locked) {
+            return Err("Unlock all layers before inserting time across the timeline.");
+        }
+        for layer in project.layers.iter_mut() {
+            // Collect keys that need shifting, in descending order so we never
+            // overwrite a key that hasn't been shifted yet.
+            let mut to_shift: Vec<usize> = layer
+                .keyframes
+                .keys()
+                .copied()
+                .filter(|&k| k >= frame)
+                .collect();
+            to_shift.sort_unstable_by(|a, b| b.cmp(a)); // descending
+            for k in to_shift {
+                let data = layer.keyframes.remove(&k).unwrap();
+                layer.keyframes.insert(k + 1, data);
+            }
+            // Guarantee a blank keyframe at the insertion point.
+            layer.keyframes.entry(frame).or_insert_with(FrameData::default);
+        }
+        project.total_frames += 1;
+        return Ok(());
+    }
+
     if action == FrameAction::DeleteFrame {
         if project.total_frames <= 1 {
             return Err("Cannot delete the last frame.");
@@ -65,7 +101,7 @@ pub fn apply_frame_edit(
     }
 
     // Compute from the old timeline before changing this layer's keyframes.
-    let evaluated = if action == FrameAction::Keyframe {
+    let evaluated = if matches!(action, FrameAction::Keyframe | FrameAction::Duplicate) {
         let layer = &project.layers[layer_index];
         Some(project.evaluate_layer_at_frame(layer, frame))
     } else {
@@ -88,7 +124,19 @@ pub fn apply_frame_edit(
                 layer.keyframes.insert(1, FrameData::default());
             }
         }
-        FrameAction::DeleteFrame | FrameAction::Copy | FrameAction::Paste => unreachable!(),
+        FrameAction::Duplicate => {
+            // `frame + 1` must exist in the timeline.
+            if frame >= project.total_frames {
+                return Err("Cannot duplicate the last frame — no next frame exists.");
+            }
+            let next = frame + 1;
+            // Clone the evaluated content of `frame` into `next`.
+            // We only create a new keyframe at `next` if one doesn't already
+            // live there; existing keyframes intentionally override held content.
+            layer.keyframes.entry(next).or_insert_with(|| evaluated.unwrap_or_default());
+        }
+        FrameAction::DeleteFrame | FrameAction::Copy | FrameAction::Paste
+        | FrameAction::InsertEmpty => unreachable!(),
     }
     Ok(())
 }
@@ -179,5 +227,118 @@ mod tests {
         apply_frame_edit(&mut p, 0, 5, FrameAction::DeleteKeyframe).unwrap();
         assert_eq!(p.total_frames, 10);
         assert!(!p.layers[0].keyframes.contains_key(&5));
+    }
+
+    // ── Duplicate tests ───────────────────────────────────────────────────
+
+    #[test]
+    fn duplicate_copies_visible_content_into_next_frame() {
+        let mut p = AniProject::default();
+        p.total_frames = 10;
+        p.layers[0].keyframes.get_mut(&1).unwrap().strokes.push(dab());
+        // Duplicate frame 1 — its content should appear as a new keyframe at 2.
+        apply_frame_edit(&mut p, 0, 1, FrameAction::Duplicate).unwrap();
+        assert_eq!(p.total_frames, 10, "Duplicate must not change timeline length");
+        assert_eq!(p.layers[0].keyframes[&2].strokes.len(), 1,
+            "frame 2 should hold a copy of the stroke from frame 1");
+        // The original must be unchanged.
+        assert_eq!(p.layers[0].keyframes[&1].strokes.len(), 1,
+            "original frame 1 must not be modified");
+    }
+
+    #[test]
+    fn duplicate_uses_held_content_not_just_explicit_keyframes() {
+        let mut p = AniProject::default();
+        p.total_frames = 10;
+        // Frame 1 has a stroke; frame 5 is not a keyframe — it holds frame 1's art.
+        p.layers[0].keyframes.get_mut(&1).unwrap().strokes.push(dab());
+        apply_frame_edit(&mut p, 0, 5, FrameAction::Duplicate).unwrap();
+        // Frame 6 should now have a keyframe with the held content of frame 5.
+        assert!(p.layers[0].keyframes.contains_key(&6),
+            "frame 6 must become a keyframe");
+        assert_eq!(p.layers[0].keyframes[&6].strokes.len(), 1,
+            "frame 6 should hold the stroke that was visible at frame 5");
+    }
+
+    #[test]
+    fn duplicate_last_frame_returns_error() {
+        let mut p = AniProject::default();
+        p.total_frames = 5;
+        let err = apply_frame_edit(&mut p, 0, 5, FrameAction::Duplicate);
+        assert!(err.is_err(), "duplicating the last frame should fail");
+    }
+
+    #[test]
+    fn duplicate_respects_locked_layer() {
+        let mut p = AniProject::default();
+        p.total_frames = 10;
+        p.layers[0].locked = true;
+        let err = apply_frame_edit(&mut p, 0, 1, FrameAction::Duplicate);
+        assert!(err.is_err(), "locked layer should reject Duplicate");
+    }
+
+    // ── InsertEmpty tests ─────────────────────────────────────────────────
+
+    #[test]
+    fn insert_empty_shifts_keyframes_forward_and_grows_timeline() {
+        let mut p = AniProject::default();
+        p.total_frames = 10;
+        // Existing keyframe at frame 5.
+        p.layers[0].keyframes.insert(5, FrameData { strokes: vec![dab()], ..Default::default() });
+        apply_frame_edit(&mut p, 0, 3, FrameAction::InsertEmpty).unwrap();
+        assert_eq!(p.total_frames, 11, "total_frames must grow by 1");
+        // Old frame 5 should now be at 6.
+        assert!(p.layers[0].keyframes.contains_key(&6),
+            "keyframe that was at 5 should now be at 6");
+        assert!(!p.layers[0].keyframes.contains_key(&5),
+            "nothing should sit at old position 5 after shift — except the new blank");
+        // The insertion point must have a blank keyframe.
+        assert!(p.layers[0].keyframes.contains_key(&3),
+            "a blank keyframe must exist at the insertion point");
+        assert!(p.layers[0].keyframes[&3].strokes.is_empty(),
+            "inserted frame must be blank");
+    }
+
+    #[test]
+    fn insert_empty_at_frame1_shifts_all_existing_keyframes() {
+        let mut p = AniProject::default();
+        p.total_frames = 5;
+        p.layers[0].keyframes.get_mut(&1).unwrap().strokes.push(dab());
+        apply_frame_edit(&mut p, 0, 1, FrameAction::InsertEmpty).unwrap();
+        assert_eq!(p.total_frames, 6);
+        // Old frame 1 (with the stroke) must now be at frame 2.
+        assert_eq!(p.layers[0].keyframes[&2].strokes.len(), 1,
+            "content of old frame 1 should now live at frame 2");
+        // Frame 1 must be the newly inserted blank.
+        assert!(p.layers[0].keyframes[&1].strokes.is_empty(),
+            "new frame 1 must be blank");
+    }
+
+    #[test]
+    fn insert_empty_affects_all_layers_simultaneously() {
+        let mut p = AniProject::default();
+        p.total_frames = 8;
+        // Add a second layer with its own keyframe at frame 4.
+        let mut layer2 = p.layers[0].clone();
+        layer2.keyframes.clear();
+        layer2.keyframes.insert(4, FrameData { strokes: vec![dab()], ..Default::default() });
+        p.layers.push(layer2);
+        apply_frame_edit(&mut p, 0, 2, FrameAction::InsertEmpty).unwrap();
+        assert_eq!(p.total_frames, 9);
+        // Both layers must have the keyframe that was at 4 shifted to 5.
+        for (i, layer) in p.layers.iter().enumerate() {
+            assert!(layer.keyframes.contains_key(&5),
+                "layer {i}: keyframe from pos 4 should be at pos 5 after insert");
+        }
+    }
+
+    #[test]
+    fn insert_empty_locked_layer_returns_error() {
+        let mut p = AniProject::default();
+        p.total_frames = 5;
+        p.layers[0].locked = true;
+        let err = apply_frame_edit(&mut p, 0, 2, FrameAction::InsertEmpty);
+        assert!(err.is_err(), "locked layer should block InsertEmpty");
+        assert_eq!(p.total_frames, 5, "total_frames must not change on error");
     }
 }
