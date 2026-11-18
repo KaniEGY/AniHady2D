@@ -2817,6 +2817,19 @@ impl StickApp {
         })
     }
 
+    fn active_tool_size_percent(&self) -> Option<f32> {
+        let value=self.active_sizable_tool_size()?;
+        let (min,max)=match self.active_tool_ui {
+            ActiveToolUI::Brush => (1.0,120.0),
+            ActiveToolUI::VectorPen => (1.0,100.0),
+            ActiveToolUI::EraserRed | ActiveToolUI::EraserGreen => (2.0,120.0),
+            ActiveToolUI::ShapeLine => (1.0,120.0),
+            ActiveToolUI::Sculpt => (8.0,360.0),
+            _ => return None,
+        };
+        Some(((value-min)/(max-min)*100.0).clamp(0.0,100.0))
+    }
+
     fn commit_stroke_with_symmetry(&mut self, stroke: Stroke, now_time: f64) {
         if let Some(ref sym_name) = self.editing_symbol_name.clone() {
             if let Some(sym) = self.project.library_symbols.get_mut(sym_name) {
