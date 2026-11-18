@@ -2,7 +2,34 @@
 //! These helpers do not mutate project data or timeline commands: OLD and
 //! NEW share the exact same frames, keyframes, and context-menu actions.
 use eframe::egui;
-use crate::project::TweenMode;
+use crate::project::{FrameMarkerKind, TweenMode};
+
+/// Draw action-specific circular frame markers shared by every timeline skin.
+/// Returns true when a special marker was painted; callers can render their
+/// legacy marker when this returns false.
+pub fn draw_action_marker(
+    painter: &egui::Painter, center: egui::Pos2, radius: f32,
+    marker: FrameMarkerKind, has_content: bool,
+) -> bool {
+    match marker {
+        FrameMarkerKind::InsertedEmpty if !has_content => {
+            painter.circle_filled(center, radius, egui::Color32::from_rgb(55, 205, 105));
+            painter.circle_stroke(center, radius, egui::Stroke::new(1.1, egui::Color32::from_rgb(18, 76, 43)));
+            true
+        }
+        FrameMarkerKind::CopiedPose => {
+            painter.circle_filled(center, radius, egui::Color32::from_rgb(232, 67, 67));
+            painter.circle_stroke(center, radius, egui::Stroke::new(1.0, egui::Color32::from_rgb(91, 22, 22)));
+            true
+        }
+        FrameMarkerKind::Blank if !has_content => {
+            painter.circle_filled(center, radius, egui::Color32::WHITE);
+            painter.circle_stroke(center, radius, egui::Stroke::new(1.5, egui::Color32::BLACK));
+            true
+        }
+        _ => false,
+    }
+}
 
 /// Frame 1 is time zero. Display compact minute:second:subframe timing.
 pub fn label_for_frame(frame: usize, fps: u32, timecodes: bool) -> String {
@@ -59,6 +86,7 @@ pub fn draw_cell(
     rect: egui::Rect,
     is_keyframe: bool,
     has_content: bool,
+    marker: FrameMarkerKind,
     tween: TweenMode,
     active: bool,
     locked: bool,
@@ -89,13 +117,15 @@ pub fn draw_cell(
     if is_keyframe {
         let center=egui::pos2(rect.left() + rect.width().min(17.0) * 0.5,rect.center().y);
         let radius = if rect.width() >= 28.0 { 5.6 } else { 4.3 };
-        let color=if has_content { egui::Color32::from_rgb(247, 194, 66) }
-            else { egui::Color32::from_rgb(194, 219, 235) };
-        painter.add(egui::Shape::convex_polygon(
-            vec![center + egui::vec2(0.0,-radius), center + egui::vec2(radius,0.0),
-                 center + egui::vec2(0.0,radius), center + egui::vec2(-radius,0.0)],
-            color, egui::Stroke::new(0.6,egui::Color32::from_rgb(23,30,37)),
-        ));
+        if !draw_action_marker(painter, center, radius, marker, has_content) {
+            let color=if has_content { egui::Color32::from_rgb(247, 194, 66) }
+                else { egui::Color32::from_rgb(194, 219, 235) };
+            painter.add(egui::Shape::convex_polygon(
+                vec![center + egui::vec2(0.0,-radius), center + egui::vec2(radius,0.0),
+                     center + egui::vec2(0.0,radius), center + egui::vec2(-radius,0.0)],
+                color, egui::Stroke::new(0.6,egui::Color32::from_rgb(23,30,37)),
+            ));
+        }
     } else if has_content {
         let x=rect.center().x;
         painter.circle_filled(egui::pos2(x,rect.center().y), 1.8,
