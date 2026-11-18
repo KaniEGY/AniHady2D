@@ -675,7 +675,7 @@ impl Default for AppConfig {
             tool_text: "N".to_string(),
             tool_shape: "U".to_string(),
             tool_hand: "H".to_string(),
-            delete_frame_key: "X".to_string(),
+            delete_frame_key: "F4".to_string(),
             insert_frame: "F5".to_string(),
             insert_keyframe: "F6".to_string(),
             insert_blank_kf: "F7".to_string(),
@@ -1289,6 +1289,11 @@ struct StickApp {
     audio_drag_origin: Option<(usize,usize)>,
     audio_drag_pointer_x: Option<f32>,
     audio_drag_undo_captured: bool,
+    video_drag_origin: Option<(usize,usize)>,
+    video_drag_pointer_x: Option<f32>,
+    video_drag_undo_captured: bool,
+    right_panel_tab: u8,
+    vector_node_quick_edit: bool,
     timeline_scrub_active: bool,
     active_tool_ui: ActiveToolUI,
     active_krita_brush: KritaBrushPreset,
@@ -1457,6 +1462,11 @@ impl StickApp {
             audio_drag_origin: None,
             audio_drag_pointer_x: None,
             audio_drag_undo_captured: false,
+            video_drag_origin: None,
+            video_drag_pointer_x: None,
+            video_drag_undo_captured: false,
+            right_panel_tab: 0,
+            vector_node_quick_edit: false,
             timeline_scrub_active: false,
             active_tool_ui: ActiveToolUI::Brush,
             active_krita_brush: KritaBrushPreset::GPenInk,
@@ -2712,6 +2722,144 @@ impl StickApp {
         }
         self.clear_cel_selection();
         self.has_unsaved_changes = true;
+        true
+    }
+
+    fn media_layer_is_import_only(layer: &Layer) -> bool {
+        let mut any_media=false;
+        for frame in layer.keyframes.values() {
+            if !frame.strokes.is_empty() || !frame.text_items.is_empty()
+                || !frame.symbol_instances.is_empty() { return false; }
+            any_media |= !frame.media_items.is_empty();
+        }
+        any_media
+    }
+
+    fn video_layer_range(layer: &Layer) -> Option<(usize,usize)> {
+        let mut frames=layer.keyframes.iter().filter_map(|(&frame,data)|
+            data.media_items.iter().any(|m|m.media_type==MediaType::VideoFrame).then_some(frame));
+        let first=frames.next()?;
+        let mut min=first;
+        let mut max=first;
+        for frame in frames {min=min.min(frame);max=max.max(frame);}
+        Some((min,max))
+    }
+
+    fn image_layer_range(layer: &Layer, timeline_length: usize) -> Option<(usize,usize)> {
+        const END_MARKER:&str="__stick_image_end__";
+        let start=layer.keyframes.iter()
+            .filter(|(_,data)|data.media_items.iter().any(|m|m.media_type==MediaType::Image))
+            .map(|(&frame,_)|frame).min()?;
+        let end=layer.keyframes.iter()
+            .filter(|(_,data)|data.label==END_MARKER)
+            .map(|(&frame,_)|frame.saturating_sub(1))
+            .filter(|&frame|frame>=start).min()
+            .unwrap_or(timeline_length.max(start));
+        Some((start,end))
+    }
+
+    fn set_image_layer_end(layer: &mut Layer, end: usize, timeline_length: usize) -> bool {
+        const END_MARKER:&str="__stick_image_end__";
+        let Some((start,current_end))=Self::image_layer_range(layer,timeline_length) else{return false};
+        let end=end.max(start);
+        if end==current_end {return false;}
+        layer.keyframes.retain(|_,data|data.label!=END_MARKER);
+        if end<timeline_length {
+            let mut blank=FrameData::default();
+            blank.label=END_MARKER.to_string();
+            layer.keyframes.insert(end+1,blank);
+        }
+        true
+    }
+
+    fn move_video_layer(layer: &mut Layer, requested_start: usize, max_frames: usize) -> bool {
+        let Some((start,end))=Self::video_layer_range(layer) else{return false};
+        let duration=end.saturating_sub(start);
+        if duration>=max_frames || max_frames==0{return false;}
+        let next_start=requested_start.clamp(1,max_frames-duration);
+        if next_start==start{return false;}
+        let delta=next_start as i64-start as i64;
+        let moved:HashMap<usize,FrameData>=std::mem::take(&mut layer.keyframes).into_iter()
+            .map(|(frame,data)|(((frame as i64)+delta).max(1) as usize,data)).collect();
+        layer.keyframes=moved;
+        true
+    }
+
+    fn delete_audio_track(&mut self, index: usize) -> bool {
+        if index>=self.project.audio_tracks.len(){return false;}
+        self.stop_audio_playback();
+        self.save_undo_state();
+        self.project.audio_tracks.remove(index);
+        self.selected_audio_idx=None;
+        if self.right_panel_tab==2 {self.right_panel_tab=0;}
+        self.has_unsaved_changes=true;
+        true
+    }
+
+    fn duplicate_audio_track(&mut self, index: usize) -> bool {
+        self.save_undo_state();
+        if let Some(new_index)=audio_timeline::duplicate_clip(
+            &mut self.project.audio_tracks,index,timeline_ops::MAX_TIMELINE_FRAMES) {
+            self.selected_audio_idx=Some(new_index);
+            self.selected_media_idx=None;
+            self.right_panel_tab=2;
+            if let Some(track)=self.project.audio_tracks.get(new_index) {
+                self.timeline_length=self.timeline_length.max(track.end_frame);
+                self.project.total_frames=self.timeline_length;
+            }
+            self.has_unsaved_changes=true;
+            true
+        } else {
+            self.undo_stack.pop();
+            false
+        }
+    }
+
+    fn delete_media_item_or_layer(&mut self, layer_index: usize, media_index: usize) -> bool {
+        if layer_index>=self.project.layers.len(){return false;}
+        self.save_undo_state();
+        if Self::media_layer_is_import_only(&self.project.layers[layer_index])
+            && self.project.layers.len()>1 {
+            self.project.layers.remove(layer_index);
+            self.active_layer_idx=self.active_layer_idx.min(self.project.layers.len()-1);
+        } else {
+            let frame=self.current_frame;
+            if let Some(layer)=self.project.layers.get_mut(layer_index) {
+                let key=Self::get_effective_keyframe_index(layer,frame).unwrap_or(frame);
+                if let Some(data)=layer.keyframes.get_mut(&key) {
+                    if media_index<data.media_items.len(){data.media_items.remove(media_index);}
+                }
+            }
+        }
+        self.selected_media_idx=None;
+        if self.right_panel_tab==2 {self.right_panel_tab=0;}
+        self.has_unsaved_changes=true;
+        true
+    }
+
+    fn duplicate_media_item_or_layer(&mut self, layer_index: usize, media_index: usize) -> bool {
+        if layer_index>=self.project.layers.len(){return false;}
+        self.save_undo_state();
+        if Self::media_layer_is_import_only(&self.project.layers[layer_index]) {
+            let mut copy=self.project.layers[layer_index].clone();
+            copy.name=format!("{} Copy",copy.name);
+            copy.locked=false;
+            copy.xp_first_paint_rewarded=false;
+            self.project.layers.insert(layer_index,copy);
+            self.active_layer_idx=layer_index;
+            self.selected_media_idx=Some(media_index);
+        } else {
+            self.ensure_editable_keyframe();
+            let Some(layer)=self.project.layers.get_mut(layer_index) else{self.undo_stack.pop();return false};
+            let Some(data)=layer.keyframes.get_mut(&self.current_frame) else{self.undo_stack.pop();return false};
+            let Some(mut copy)=data.media_items.get(media_index).cloned() else{self.undo_stack.pop();return false};
+            copy.x+=12.0; copy.y+=12.0;
+            data.media_items.push(copy);
+            self.selected_media_idx=Some(data.media_items.len()-1);
+        }
+        self.selected_audio_idx=None;
+        self.right_panel_tab=2;
+        self.has_unsaved_changes=true;
         true
     }
 
