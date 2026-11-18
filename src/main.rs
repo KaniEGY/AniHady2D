@@ -5987,23 +5987,31 @@ impl eframe::App for StickApp {
                                         egui::pos2(x,clip.center().y+height*0.5)
                                     ],egui::Stroke::new(2.0,palette));
                                 }
-                                if resp.drag_started() && resp.interact_pointer_pos()
-                                    .is_some_and(|pos| clip.contains(pos)) {
+                                // Capture the initial pointer press, before egui's
+                                // drag threshold. Otherwise a short audio clip can
+                                // slip out from under the pointer before drag_started().
+                                if pointer_pressed && pointer_pos.is_some_and(|pos|clip.contains(pos)) {
                                     self.audio_drag_origin=Some((audio_index,track.start_frame));
-                                    audio_drag_started=true;
+                                    self.audio_drag_undo_captured=false;
                                     self.selected_audio_idx=Some(audio_index);
+                                    self.config.show_right_dock=true;
                                 }
-                                if resp.dragged() {
+                                if pointer_down {
                                     if let Some((drag_index,origin))=self.audio_drag_origin {
-                                        if drag_index==audio_index {
+                                        if drag_index==audio_index && resp.dragged() {
                                             let shift=(resp.drag_delta().x/cell_w).round() as i64;
                                             let start=(origin as i64+shift)
                                                 .clamp(1,timeline_ops::MAX_TIMELINE_FRAMES as i64) as usize;
-                                            audio_move_request=Some((audio_index,start));
+                                            if start != track.start_frame {
+                                                audio_move_request=Some((audio_index,start));
+                                                if !self.audio_drag_undo_captured {
+                                                    audio_drag_started=true;
+                                                    self.audio_drag_undo_captured=true;
+                                                }
+                                            }
                                         }
                                     }
                                 }
-                                if resp.drag_stopped() { self.audio_drag_origin=None; }
                                 if resp.clicked() && resp.interact_pointer_pos()
                                     .is_some_and(|pos|clip.contains(pos)) {
                                     self.selected_audio_idx=Some(audio_index);
