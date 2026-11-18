@@ -4189,7 +4189,8 @@ impl eframe::App for StickApp {
             if pan_left_nav { self.pan_offset.x -= 18.0; ctx.request_repaint(); }
 
             if self.workspace_mode == WorkspaceMode::AnimationStudio {
-                if shift_f5 || sc_del_frame {
+                let f4_delete=ctx.input(|i|i.key_pressed(egui::Key::F4));
+                if f4_delete || shift_f5 || sc_del_frame {
                     if self.edit_timeline_frame(self.active_layer_idx, self.current_frame, timeline_ops::FrameAction::DeleteFrame) {
                         self.play_sfx(SfxType::EraserRub);
                     }
@@ -4226,22 +4227,27 @@ impl eframe::App for StickApp {
             }
             if sc_smaller { self.brush_size = (self.brush_size - 2.0).max(1.0); }
             if sc_larger { self.brush_size = (self.brush_size + 2.0).min(120.0); }
-            if del_pressed && (!self.selected_stroke_indices.is_empty() || self.selected_text_item_index.is_some())
-                && !self.is_active_layer_locked()
-            {
-                self.save_undo_state();
-                self.ensure_editable_keyframe();
-                if let Some(layer) = self.project.layers.get_mut(self.active_layer_idx) {
-                    if let Some(frame) = layer.keyframes.get_mut(&self.current_frame) {
-                        let mut to_rem = self.selected_stroke_indices.clone();
-                        to_rem.sort_unstable_by(|a, b| b.cmp(a));
-                        to_rem.dedup();
-                        for idx in to_rem { if idx < frame.strokes.len() { frame.strokes.remove(idx); } }
-                        if let Some(index) = self.selected_text_item_index.take() {
-                            if index < frame.text_items.len() { frame.text_items.remove(index); }
+            if del_pressed {
+                if let Some(index)=self.selected_audio_idx {
+                    let _=self.delete_audio_track(index);
+                } else if let Some(index)=self.selected_media_idx {
+                    let _=self.delete_media_item_or_layer(self.active_layer_idx,index);
+                } else if (!self.selected_stroke_indices.is_empty()
+                    || self.selected_text_item_index.is_some()) && !self.is_active_layer_locked() {
+                    self.save_undo_state();
+                    self.ensure_editable_keyframe();
+                    if let Some(layer) = self.project.layers.get_mut(self.active_layer_idx) {
+                        if let Some(frame) = layer.keyframes.get_mut(&self.current_frame) {
+                            let mut to_rem = self.selected_stroke_indices.clone();
+                            to_rem.sort_unstable_by(|a, b| b.cmp(a));
+                            to_rem.dedup();
+                            for idx in to_rem { if idx < frame.strokes.len() { frame.strokes.remove(idx); } }
+                            if let Some(index) = self.selected_text_item_index.take() {
+                                if index < frame.text_items.len() { frame.text_items.remove(index); }
+                            }
+                            self.selected_stroke_indices.clear();
+                            self.has_unsaved_changes = true;
                         }
-                        self.selected_stroke_indices.clear();
-                        self.has_unsaved_changes = true;
                     }
                 }
             }
@@ -5646,6 +5652,21 @@ impl eframe::App for StickApp {
                                 }
                                 ActiveToolUI::VectorDirectSelect | ActiveToolUI::VectorPen => {
                                     ui.label(tr(lang,"Editable Vector Nodes","نقاط الفيكتور القابلة للتعديل"));
+                                    if tool==ActiveToolUI::VectorDirectSelect {
+                                        ui.checkbox(&mut self.vector_node_quick_edit,
+                                            tr(lang,
+                                                "Right-click inserts/removes nodes",
+                                                "الكلك اليمين يضيف/يحذف النقاط"));
+                                        ui.small(if self.vector_node_quick_edit {
+                                            tr(lang,
+                                                "Right-click a node to remove it; right-click a vector segment to insert a node.",
+                                                "كلك يمين على نقطة يحذفها، وعلى جزء من خط الفيكتور يضيف نقطة.")
+                                        } else {
+                                            tr(lang,
+                                                "Normal mode: click/select and drag nodes.",
+                                                "الوضع العادي: حدد النقاط واسحبها.")
+                                        });
+                                    }
                                     ui.add(egui::Slider::new(&mut self.vector_tolerance,0.4..=8.0)
                                         .text(tr(lang,"Simplify amount","تقليل النقط")));
                                     if ui.button(tr(lang,"Simplify selected strokes","قلل نقاط الخطوط المحددة")).clicked(){
@@ -6301,6 +6322,11 @@ impl eframe::App for StickApp {
                     ui.toggle_value(&mut self.loop_enabled, tr(lang, "🔁 Loop Range", "🔁 تكرار جزء"));
                     ui.label(egui::RichText::new(format!("Frame {} / {}", self.current_frame, self.timeline_length))
                         .color(egui::Color32::from_rgb(255, 214, 110)).strong());
+                    if ui.add_enabled(self.timeline_length>1,
+                        egui::Button::new(tr(lang, "− Frame (F4)", "− حذف فريم (F4)"))).clicked() {
+                        let _=self.edit_timeline_frame(self.active_layer_idx,self.current_frame,
+                            timeline_ops::FrameAction::DeleteFrame);
+                    }
                     if ui.button(tr(lang, "+ Frame (F5)", "+ فريم (F5)")).clicked() { self.action_insert_frame_f5(); }
                     if ui.button(tr(lang, "◆ Keyframe (F6)", "◆ كي فريم (F6)")).clicked() { self.insert_next_keyframe(false, now_time); }
                     if ui.button(tr(lang, "◇ Blank (F7)", "◇ فاضي (F7)")).clicked() { self.insert_next_keyframe(true, now_time); }
@@ -6922,7 +6948,8 @@ impl eframe::App for StickApp {
                 }
                 self.zoom_level = new_zoom;
             }
-            if (space_down || self.active_tool_ui == ActiveToolUI::HandCanvas) && pointer_down && !any_modal_open {
+            if (space_down || self.active_tool_ui == ActiveToolUI::HandCanvas)
+                && pointer_down && is_over_canvas && !any_modal_open {
                 if let (Some(c), Some(l)) = (pointer_pos, self.last_pointer_pos) { self.pan_offset += c - l; }
             }
             // With the hand tool, left drag pans; right drag rotates the entire stage view.
