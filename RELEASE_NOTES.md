@@ -4,6 +4,11 @@
 
 ## English (US)
 
+### Advanced Timeline keyframe editing foundation (under review; not yet released)
+- An optional third timeline mode keeps the existing OLD/NEW views and audio lanes, with a distinct ruler and exposure visualization.
+- Ctrl/Shift-click selects multiple authored keyframes. Drag moves them within/across unlocked tracks; Alt+drag duplicates them. Editing rejects collisions and out-of-bounds targets atomically, and successful operations use Undo.
+- **Still pending:** Windows CI/manual GUI verification, audio trimming, multi-selection clipboard operations, exposure edge stretching, magnetic snapping and thumbnail caching. This release note is an under-review engineering change, not a shipped claim.
+
 ### UI, canvas & brush update (experimental)
 - **Timeline layers:** replaced ambiguous glyph boxes with drawn visibility-eye and open/closed lock icons. Right-click a layer title in either timeline layout to Rename, Duplicate, or Delete (with the existing confirmation and Undo).
 - **Vector ink pen:** non-destructive smoothed rendering keeps editable control points. Choose round or square end caps, opacity, and stabilizer in tool properties; preview and PNG/video raster export use the same smoothed curve.
