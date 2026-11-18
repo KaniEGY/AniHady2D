@@ -1,16 +1,16 @@
 # Google Account + Drive Cloud Backups for Stick Studio
 
 ## Status
-An older saved `stick_config.json` may contain an empty `cloud_google_client_id`; updated builds now recover the app owner's embedded public Desktop client ID when that saved value is empty. The login button remains unavailable until a valid client ID is present.
+The public Stick Studio Desktop OAuth Client ID is embedded in official Windows builds, with an optional `STICK_GOOGLE_CLIENT_ID` build-time override. It is a **public application identifier**, not a secret. Earlier installations with an empty or malformed `cloud_google_client_id` recover the official identifier on startup. A valid user-supplied Desktop ID is preserved for developer testing.
 
-The Windows app has a Google sign-in/Drive backup **implementation**, but production sign-in **requires a Google Cloud OAuth client ID configured by the app owner**. A build without this value must not claim that Google sign-in is live. No Google credentials are shipped or requested from end users.
+The Google OAuth client and Drive API are provisioned for Google Cloud project `stick-studio-515102`, but the app starts in Google's **External / Testing** audience. Test accounts must be added in Google Auth Platform → Audience, and production launch still requires the appropriate Google publication and verification process. Embedding the client ID is not proof that real Windows sign-in, token refresh or cross-device Drive restore has passed manual testing.
 
 ## Google Cloud Console setup — required for every public release
 1. Open [Google Cloud Console](https://console.cloud.google.com/) and create/select a project for Stick Studio.
 2. Enable **Google Drive API** (Google APIs & Services → Library).
 3. Configure the Google Auth Platform/OAuth consent screen, app name **Stick Studio**, support information, requested scopes: `openid`, `email`, and `https://www.googleapis.com/auth/drive.appdata`. Add test users while the app is in Testing, then complete Google's production/verification requirements as applicable.
 4. Under Clients/Credentials, create an **OAuth Client ID → Desktop app**. This must be a Desktop client; the program uses browser login with an ephemeral `http://127.0.0.1:PORT` callback and PKCE-S256.
-5. On GitHub repository Settings → Secrets and variables → Actions → **Variables**, add `STICK_GOOGLE_CLIENT_ID` with the **public Desktop Client ID**, ending with `.apps.googleusercontent.com`. The `.github/workflows/build.yml` file passes this variable into the Rust compilation environment for the official EXE. **Do not add a Google Client Secret, password or refresh token.**
+5. Official releases embed the public Desktop Client ID. Optionally, GitHub Settings → Secrets and variables → Actions → **Variables** → `STICK_GOOGLE_CLIENT_ID` can override it with another valid public Desktop Client ID for a special build. The workflow passes this variable to Rust; if unset or invalid, the official embedded ID is used. **Never add a Client Secret, password or refresh token to source code, Actions variables or release assets.**
 6. Build and test a release. Sign in from **Settings → تسجيل دخول**, grant consent in the default web browser, then press **Back up level and saved projects** or enable **Automatically back up after saving a project**.
 
 Google's official source docs:
@@ -28,6 +28,9 @@ Google's official source docs:
 - Backup currently uploads the **project document file only**. If a project depends on external image or audio file paths, those external assets are **not bundled** and must be restored separately. Do not market this as a portable full media backup.
 - Google rejects OAuth without the correct configured/approved desktop app, relevant test users, or enabled Drive API.
 - Failed uploads or network errors are visible in Settings and do not erase local work. There is no silent bidirectional conflict resolution; restore is explicit.
+
+## Current Google testing requirement
+While Google's publishing status is **Testing**, sign-in is available only to accounts explicitly added under Google Auth Platform → Audience → Test users. Refresh tokens for this Drive-enabled external test app typically expire in seven days; the app should re-authenticate when a grant expires. Before public release, switch to production and complete any applicable verification, branding, privacy-policy, and consent requirements. The app requests the non-sensitive `drive.appdata` scope, not unrestricted Google Drive access.
 
 ## QA checklist
 - [ ] Google Cloud OAuth client ID and consent screen configured; user is authorized as tester or the app is published/verified as needed.

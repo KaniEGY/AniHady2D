@@ -542,8 +542,25 @@ fn default_right_split() -> f32 { 0.45 }
 fn default_grid_size() -> f32 { 40.0 }
 fn default_autosave_mins() -> u64 { 5 }
 fn default_cursor_scale() -> f32 { 1.0 }
+// Public Desktop OAuth identifier for the Stick Studio Google Cloud project.
+// Not a client secret. A valid build-time override is still supported.
+const OFFICIAL_GOOGLE_CLIENT_ID: &str =
+    "967385974403-pibvbod7si5snsrlrou64ugomasajoaf.apps.googleusercontent.com";
 fn default_google_client_id() -> String {
-    option_env!("STICK_GOOGLE_CLIENT_ID").unwrap_or("").to_string()
+    let compiled = option_env!("STICK_GOOGLE_CLIENT_ID").unwrap_or("").trim();
+    if cloud_sync::oauth_client_is_configured(compiled) {
+        compiled.to_owned()
+    } else {
+        OFFICIAL_GOOGLE_CLIENT_ID.to_owned()
+    }
+}
+fn resolve_saved_google_client_id(saved: &str) -> String {
+    let saved = saved.trim();
+    if cloud_sync::oauth_client_is_configured(saved) {
+        saved.to_owned()
+    } else {
+        default_google_client_id()
+    }
 }
 fn default_tl_bg() -> [u8; 4] { [28, 29, 34, 255] }
 fn default_tl_cell() -> [u8; 4] { [40, 42, 48, 255] }
@@ -654,9 +671,8 @@ impl AppConfig {
                     // Existing installations may persist an empty OAuth ID,
                     // overriding a newly configured public Desktop client ID
                     // embedded in updated official releases.
-                    if parsed.cloud_google_client_id.trim().is_empty() {
-                        parsed.cloud_google_client_id = default_google_client_id();
-                    }
+                    parsed.cloud_google_client_id =
+                        resolve_saved_google_client_id(&parsed.cloud_google_client_id);
                     return parsed;
                 }
             }
@@ -6257,6 +6273,16 @@ fn main() -> eframe::Result<()> {
 #[cfg(test)]
 mod tool_discovery_tests {
     use super::*;
+
+    #[test]
+    fn official_google_desktop_oauth_client_is_configured() {
+        let client = default_google_client_id();
+        assert!(cloud_sync::oauth_client_is_configured(&client));
+        assert_eq!(resolve_saved_google_client_id(""), client);
+        assert_eq!(resolve_saved_google_client_id("not-a-client"), client);
+        let custom = "1234-abc.apps.googleusercontent.com";
+        assert_eq!(resolve_saved_google_client_id(custom), custom);
+    }
 
     #[test]
     fn arabic_text_keeps_multiple_lines_without_dropping_content() {
