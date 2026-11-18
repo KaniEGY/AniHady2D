@@ -7666,13 +7666,22 @@ impl eframe::App for StickApp {
             let (stage_w, stage_h) = (self.project.width as f32, self.project.height as f32);
             let stage_rect = egui::Rect::from_center_size(center, egui::vec2(stage_w, stage_h) * scale);
 
-            let is_inside_workspace = pointer_pos.map_or(false, |p| canvas_rect.contains(p));
+            // Only hide/replace the OS cursor when this CentralPanel is the
+            // topmost layer under the pointer. Popup menus and floating windows
+            // often overlap the canvas rectangle; checking the rectangle alone
+            // made the cursor disappear behind settings/feedback/menu windows.
+            let pointer_on_canvas_layer = pointer_pos.is_some_and(|p|
+                canvas_rect.contains(p)
+                    && ctx.layer_id_at(p).is_some_and(|layer|layer==ui.layer_id()));
+            let is_inside_workspace = pointer_on_canvas_layer;
             let custom_brush_cursor = matches!(self.active_tool_ui,
                 ActiveToolUI::Brush | ActiveToolUI::VectorPen | ActiveToolUI::Sculpt
                     | ActiveToolUI::EraserRed | ActiveToolUI::EraserGreen);
-            let show_dot = is_inside_workspace && !any_modal_open && !space_down && !alt_down && custom_brush_cursor;
+            let show_dot = is_inside_workspace && !any_modal_open && !space_down
+                && !alt_down && !ctrl_down && custom_brush_cursor;
             let show_tool_icon = is_inside_workspace && !any_modal_open && !space_down
-                && !alt_down && !custom_brush_cursor && self.active_tool_ui != ActiveToolUI::HandCanvas;
+                && !alt_down && !ctrl_down && !custom_brush_cursor
+                && self.active_tool_ui != ActiveToolUI::HandCanvas;
             let tool_cursor = if show_dot || show_tool_icon {
                 egui::CursorIcon::None
             } else if space_down || self.active_tool_ui == ActiveToolUI::HandCanvas {
@@ -7693,18 +7702,83 @@ impl eframe::App for StickApp {
             };
             ctx.set_cursor_icon(tool_cursor);
 
-            let is_over_canvas = pointer_pos.map_or(false, |p| canvas_rect.contains(p));
+            let is_over_canvas = pointer_on_canvas_layer;
+            let secondary_clicked=ctx.input(|i|i.pointer.secondary_clicked());
+            if secondary_clicked && is_over_canvas && !any_modal_open {
+                if let Some(center)=pointer_pos {
+                    let kind=match self.active_tool_ui {
+                        ActiveToolUI::ShapeLine=>Some(canvas_quick_menu::QuickMenuKind::Shapes),
+                        ActiveToolUI::Brush | ActiveToolUI::VectorPen=>
+                            Some(canvas_quick_menu::QuickMenuKind::Colors),
+                        _=>None,
+                    };
+                    if let Some(kind)=kind {
+                        self.canvas_quick_menu=Some(canvas_quick_menu::QuickMenuState{kind,center});
+                    }
+                }
+            }
+
+            if let Some(menu)=self.canvas_quick_menu {
+                let mut colors:Vec<[u8;4]>=BASIC_COLORS.iter()
+                    .map(|(rgb,_)|[rgb[0],rgb[1],rgb[2],255]).collect();
+                if !colors.contains(&self.brush_color){colors.push(self.brush_color);}
+                let selected_shape=match self.selected_shape_kind {
+                    GeometricShapeKind::StraightLine=>0,
+                    GeometricShapeKind::Circle=>1,
+                    GeometricShapeKind::Square=>2,
+                    GeometricShapeKind::Rectangle=>3,
+                    GeometricShapeKind::Triangle=>4,
+                    GeometricShapeKind::Pentagon=>5,
+                };
+                if let Some(action)=canvas_quick_menu::show(
+                    ctx,menu,&["／","○","□","▭","△","⬠"],&colors,
+                    selected_shape,self.brush_color
+                ) {
+                    match action {
+                        canvas_quick_menu::QuickMenuAction::Shape(index)=>{
+                            self.selected_shape_kind=match index {
+                                0=>GeometricShapeKind::StraightLine,
+                                1=>GeometricShapeKind::Circle,
+                                2=>GeometricShapeKind::Square,
+                                3=>GeometricShapeKind::Rectangle,
+                                4=>GeometricShapeKind::Triangle,
+                                _=>GeometricShapeKind::Pentagon,
+                            };
+                            self.play_sfx(SfxType::UiClick);
+                            self.canvas_quick_menu=None;
+                        }
+                        canvas_quick_menu::QuickMenuAction::Color(color)=>{
+                            self.brush_color=color;
+                            self.play_sfx(SfxType::UiClick);
+                            self.canvas_quick_menu=None;
+                        }
+                        canvas_quick_menu::QuickMenuAction::Close=>{
+                            self.canvas_quick_menu=None;
+                        }
+                    }
+                }
+            }
+
             let can_alt_adjust_size = self.active_sizable_tool_size().is_some();
-            if alt_down && can_alt_adjust_size && is_over_canvas && !any_modal_open {
+            if alt_down && can_alt_adjust_size && is_over_canvas && !any_modal_open
+                && self.canvas_quick_menu.is_none() {
                 if let Some(pos) = pointer_pos {
                     if let Some((origin, start_size)) = self.alt_size_drag_origin {
-                        // Right/up grows; left/down shrinks. No mouse button is
-                        // required: holding Alt temporarily turns movement into
-                        // a brush-size gesture for the currently selected tool.
                         let delta = (pos.x - origin.x) - (pos.y - origin.y);
                         self.set_active_sizable_tool_size(start_size + delta * 0.22);
                     } else if let Some(start_size) = self.active_sizable_tool_size() {
                         self.alt_size_drag_origin = Some((pos, start_size));
+                    }
+                    if let (Some(radius),Some(value))=(
+                        self.active_tool_visual_radius_px(scale),
+                        self.active_sizable_tool_size()
+                    ) {
+                        canvas_quick_menu::draw_size_feedback(
+                            &painter,pos,radius,
+                            egui::Color32::from_rgb(
+                                self.brush_color[0],self.brush_color[1],self.brush_color[2]),
+                            value
+                        );
                     }
                 }
                 ctx.set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
@@ -7712,7 +7786,29 @@ impl eframe::App for StickApp {
             } else {
                 self.alt_size_drag_origin = None;
             }
-            if scroll_y != 0.0 && is_over_canvas && !any_modal_open && !alt_down {
+
+            let can_ctrl_adjust_opacity=self.active_tool_opacity().is_some();
+            if ctrl_down && !alt_down && can_ctrl_adjust_opacity && is_over_canvas
+                && !any_modal_open && self.canvas_quick_menu.is_none() {
+                if let Some(pos)=pointer_pos {
+                    if let Some((origin,start_opacity))=self.ctrl_opacity_drag_origin {
+                        let delta=(pos.x-origin.x)-(pos.y-origin.y);
+                        self.set_active_tool_opacity(start_opacity+delta*0.0045);
+                    } else if let Some(start)=self.active_tool_opacity() {
+                        self.ctrl_opacity_drag_origin=Some((pos,start));
+                    }
+                    if let Some(opacity)=self.active_tool_opacity() {
+                        canvas_quick_menu::draw_opacity_feedback(
+                            &painter,pos,self.brush_color,opacity);
+                    }
+                }
+                ctx.set_cursor_icon(egui::CursorIcon::None);
+                ctx.request_repaint();
+            } else {
+                self.ctrl_opacity_drag_origin=None;
+            }
+
+            if scroll_y != 0.0 && is_over_canvas && !any_modal_open && !alt_down && !ctrl_down {
                 let old_zoom = self.zoom_level;
                 let new_zoom = (old_zoom * (1.0 + scroll_y * 0.0018).clamp(0.82, 1.22)).clamp(0.1, 6.0);
                 if let Some(pointer) = pointer_pos {
@@ -7894,7 +7990,11 @@ impl eframe::App for StickApp {
             }
 
             let can_use_tool = self.active_tool_ui == ActiveToolUI::Eyedropper || !self.is_active_layer_locked();
-            if !space_down && !alt_down && self.active_tool_ui != ActiveToolUI::HandCanvas && is_over_canvas && !any_modal_open && can_use_tool {
+            let opacity_gesture=ctrl_down && self.active_tool_opacity().is_some();
+            if !space_down && !alt_down && !opacity_gesture
+                && self.canvas_quick_menu.is_none()
+                && self.active_tool_ui != ActiveToolUI::HandCanvas
+                && is_over_canvas && !any_modal_open && can_use_tool {
                 if let Some(pos) = pointer_pos {
                     let stage_pos = to_stage(pos);
                     let delta = self.last_pointer_pos.map_or(egui::Vec2::ZERO, |l| to_stage(pos) - to_stage(l));
@@ -8436,8 +8536,10 @@ impl eframe::App for StickApp {
                         }
                     }
                     if stroke.is_vector {
-                        // Keep control points editable. Eightfold Catmull-Rom
-                        // expansion was causing thousands of artificial nodes.
+                        // Vector Pen input keeps editable nodes, but remove
+                        // high-frequency mouse/tablet zig-zag before reducing
+                        // node count. Geometric shapes use a separate path.
+                        vector_path::smooth_freehand_nodes(&mut stroke.points,0.58);
                         stroke.simplify_vector_nodes(self.vector_tolerance);
                     } else {
                         // Freehand already has samples + smoothing stabilizer.
