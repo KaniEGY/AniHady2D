@@ -7815,24 +7815,57 @@ impl eframe::App for StickApp {
                 }
             }
 
-            for layer in self.project.layers.iter().rev() {
+            let mut canvas_media_select: Option<(usize,usize)> = None;
+            let mut canvas_media_action: Option<(usize,usize,bool)> = None; // true=duplicate
+            for (layer_index,layer) in self.project.layers.iter().enumerate().rev() {
                 if layer.visible {
                     let l_op = layer.opacity.clamp(0.0, 1.0);
                     if l_op == 0.0 { continue; }
                     let fd = self.project.evaluate_layer_at_frame(layer, self.current_frame);
-                    for m in &fd.media_items {
+                    for (media_index,m) in fd.media_items.iter().enumerate() {
+                        let corners=media_transform::corners(m);
                         if let Some(tex) = self.texture_cache.get(&m.path) {
                             let mut mesh = egui::Mesh::with_texture(tex.id());
                             let tint = egui::Color32::from_white_alpha((255.0 * l_op) as u8);
                             let (u0,u1) = if m.flip_h { (1.0,0.0) } else { (0.0,1.0) };
                             let (v0,v1) = if m.flip_v { (1.0,0.0) } else { (0.0,1.0) };
                             let uvs = [egui::pos2(u0,v0),egui::pos2(u1,v0),egui::pos2(u1,v1),egui::pos2(u0,v1)];
-                            for ((x,y), uv) in media_transform::corners(m).into_iter().zip(uvs) {
+                            for ((x,y), uv) in corners.into_iter().zip(uvs) {
                                 mesh.vertices.push(egui::epaint::Vertex {
                                     pos: to_screen(egui::pos2(x,y)), uv, color: tint });
                             }
                             mesh.indices.extend_from_slice(&[0, 1, 2, 0, 2, 3]);
                             paper_painter.add(egui::Shape::mesh(mesh));
+                        }
+                        // Give imported media its own hit target on the canvas.
+                        // This makes right-click Delete/Duplicate available without
+                        // having to hunt for the layer or timeline clip first.
+                        let screen_points:Vec<_>=media_transform::corners(m).into_iter()
+                            .map(|(x,y)|to_screen(egui::pos2(x,y))).collect();
+                        if !screen_points.is_empty() {
+                            let mut min=egui::pos2(f32::INFINITY,f32::INFINITY);
+                            let mut max=egui::pos2(f32::NEG_INFINITY,f32::NEG_INFINITY);
+                            for p in &screen_points {min=min.min(*p);max=max.max(*p);}
+                            let hit=ui.interact(
+                                egui::Rect::from_min_max(min,max),
+                                egui::Id::new(("canvas_media",layer_index,media_index)),
+                                egui::Sense::click());
+                            if hit.clicked() {
+                                canvas_media_select=Some((layer_index,media_index));
+                            }
+                            hit.context_menu(|ui| {
+                                ui.strong(if m.media_type==MediaType::VideoFrame {
+                                    tr(lang,"Video","فيديو")
+                                } else {tr(lang,"Image","صورة")});
+                                if ui.button(tr(lang,"Duplicate","دبلكيت")).clicked() {
+                                    canvas_media_action=Some((layer_index,media_index,true));
+                                    ui.close_menu();
+                                }
+                                if ui.button(tr(lang,"Delete","حذف")).clicked() {
+                                    canvas_media_action=Some((layer_index,media_index,false));
+                                    ui.close_menu();
+                                }
+                            });
                         }
                     }
                     for s in &fd.strokes { draw_stroke_pro(&paper_painter, s, None, l_op, scale, 0.0, 0.0, &to_screen); }
@@ -7849,6 +7882,22 @@ impl eframe::App for StickApp {
                         ).with_angle(self.canvas_rotation_deg.to_radians());
                         paper_painter.add(egui::Shape::Text(text_shape));
                     }
+                }
+            }
+
+            if let Some((layer_index,media_index))=canvas_media_select {
+                self.active_layer_idx=layer_index;
+                self.selected_media_idx=Some(media_index);
+                self.selected_audio_idx=None;
+                self.right_panel_tab=2;
+                self.config.show_right_dock=true;
+            }
+            if let Some((layer_index,media_index,duplicate))=canvas_media_action {
+                self.active_layer_idx=layer_index;
+                if duplicate {
+                    let _=self.duplicate_media_item_or_layer(layer_index,media_index);
+                } else {
+                    let _=self.delete_media_item_or_layer(layer_index,media_index);
                 }
             }
 
