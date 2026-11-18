@@ -63,6 +63,17 @@ mod tests {
     }
 
     #[test]
+    fn drag_tracks_one_two_and_ten_frames_across_zoom_levels() {
+        for cell_px in [4.0_f32, 12.5, 30.0, 64.0] {
+            assert_eq!(drag_target_frame(50, cell_px, cell_px, 500), Some(51));
+            assert_eq!(drag_target_frame(50, cell_px * 2.0, cell_px, 500), Some(52));
+            assert_eq!(drag_target_frame(50, cell_px * 10.0, cell_px, 500), Some(60));
+            assert_eq!(drag_target_frame(50, -cell_px, cell_px, 500), Some(49));
+            assert_eq!(drag_target_frame(50, -cell_px * 10.0, cell_px, 500), Some(40));
+        }
+    }
+
+    #[test]
     fn waveform_mapping_is_bounded() {
         let p = vec![0.0,0.2,0.8,0.1];
         assert_eq!(peak_for_frame(&p,0,100),0.0);
