@@ -1,5 +1,14 @@
 # Stick Studio — Session Handoff / سجل استكمال المشروع
 
+## 18 November 2026 — timeline layer icons, canvas sizes, smoother vector and help
+- Branch: `feature/ui-layer-vector-canvas-online-help-20261118` (base: `5b4c996ccdc169ac751c8c3d805c7c6864323b01`, release `v4.1.0.207`).
+- New `src/vector_path.rs` smoothed vector render/export geometry preserves editable nodes and reuses the already-serialized `Stroke.tip_shape` for round/square end caps (default Round). `src/brushes.rs`, `src/exporter.rs`, `src/brush_engine.rs` use consistent stroke geometry; old projects remain readable.
+- New `src/canvas_sizes.rs` preset and custom stage size validation caps at 16 MP to limit memory use. Stage resize does not rescale existing art. UI updates dimensions with Undo and keeps draft width/height in sync with project open/undo.
+- Bilingual modal guides and conspicuous launcher/online help controls, painted lock/eye icons, timeline label context actions, and Charcoal/Soft Pastel brushes in the existing texture brush pipeline.
+- REQUIRE GitHub Windows tests, `cargo clippy`, release build and packaging before merge. Manual GUI/tablet and real two-computer online verification remain pending. Do not claim real-device success based on CI.
+
+
+
 ## 18 November 2026 — brushes, cursors, timeline and tool audit
 
 - Base `9e1230e602fa7a6ba35259bb5bfee3a220299f8a`, published tag `v4.1.0.203`, development branch `codex/studio-development-audit`.
