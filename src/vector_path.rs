@@ -4,7 +4,7 @@ use crate::project::{Stroke, StrokePoint};
 
 const MAX_CONTROL_POINTS: usize = 5_000;
 const MAX_SUBDIVISIONS: usize = 24;
-const CORNER_COS_THRESHOLD: f32 = 0.55;
+const CORNER_COS_THRESHOLD: f32 = 0.15;
 
 type Point = (f32, f32);
 
@@ -34,6 +34,46 @@ fn tangent(before: Point, at: Point, after: Point, segment: Point, segment_len: 
     if total <= 0.0001 { return segment; }
     let scale = segment_len / total;
     ((after.0 - before.0) * scale, (after.1 - before.1) * scale)
+}
+
+
+/// Smooth freehand vector control nodes before simplification. Tiny hand
+/// oscillations are averaged while deliberate ~90°+ corners remain anchored.
+/// This mutates only Vector Pen input at commit time; geometric shapes and
+/// imported SVG control points are not passed through this function.
+pub fn smooth_freehand_nodes(points: &mut Vec<StrokePoint>, amount: f32) {
+    if points.len() < 3 || points.len() > MAX_CONTROL_POINTS { return; }
+    let amount=amount.clamp(0.0,0.75);
+    if amount<=0.001 {return;}
+    let closed=points.len()>3 && distance(
+        (points[0].x,points[0].y),
+        (points[points.len()-1].x,points[points.len()-1].y)
+    )<=0.001;
+    let unique=points.len()-usize::from(closed);
+    if unique<3{return;}
+
+    for _ in 0..2 {
+        let before=points.clone();
+        let range_start=if closed {0}else{1};
+        let range_end=if closed {unique}else{unique-1};
+        for i in range_start..range_end {
+            let prev=if i==0 {unique-1}else{i-1};
+            let next=if i+1==unique {0}else{i+1};
+            let a=(before[prev].x,before[prev].y);
+            let b=(before[i].x,before[i].y);
+            let d=(before[next].x,before[next].y);
+            if sharp_corner(a,b,d){continue;}
+            // Weighted moving average resists shrinkage while removing the
+            // high-frequency zig-zag visible in slow mouse/tablet input.
+            let tx=(a.0+2.0*b.0+d.0)*0.25;
+            let ty=(a.1+2.0*b.1+d.1)*0.25;
+            points[i].x=b.0+(tx-b.0)*amount;
+            points[i].y=b.1+(ty-b.1)*amount;
+        }
+        if closed {
+            points[unique]=points[0].clone();
+        }
+    }
 }
 
 /// Interpolate curved vector segments with an adaptive sample count. This
@@ -279,6 +319,19 @@ mod tests {
         }
         assert!(result.windows(2).all(|w|
             w.iter().all(|&(x, y)| x.is_finite() && y.is_finite())));
+    }
+
+    #[test]
+    fn freehand_smoothing_reduces_small_zigzag_but_keeps_right_angle_corner() {
+        let mut jitter=vec![p(0.,0.),p(10.,1.8),p(20.,-1.6),p(30.,1.4),p(40.,0.)];
+        let before=jitter.iter().map(|p|p.y.abs()).sum::<f32>();
+        smooth_freehand_nodes(&mut jitter,0.6);
+        let after=jitter.iter().map(|p|p.y.abs()).sum::<f32>();
+        assert!(after<before);
+
+        let mut corner=vec![p(0.,0.),p(30.,0.),p(30.,30.)];
+        smooth_freehand_nodes(&mut corner,0.7);
+        assert!((corner[1].x-30.).abs()<0.001 && corner[1].y.abs()<0.001);
     }
 
     #[test]

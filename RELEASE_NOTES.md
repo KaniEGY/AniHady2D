@@ -4,6 +4,18 @@
 
 ## English (US)
 
+### Direct keyframe drag, sculpt/fill, radial menus and lip-sync audio
+- Removed the temporary Copy +1 / Move +1 / Clear-selection quick icons from the timeline toolbar.
+- In OLD, NEW and New mine, click a real keyframe once to select it, then hold the left mouse button and drag that selected keyframe; releasing drops it at the new frame. A gold drop preview follows the drag. New mine keeps Ctrl/Shift multi-select and Alt-drag copy.
+- Vector Pen freehand input now applies bounded control-node smoothing before node reduction, reducing visible hand/tablet zig-zag while preserving deliberate hard corners.
+- Sculpt/Finger now deforms vector strokes and Bucket/contour fills, preserves closed seams, rejects far-away strokes early, and avoids rebuilding already-dense geometry on every pointer event.
+- Right-click on the Shapes tool canvas opens a circular six-shape chooser. Right-click with Brush or Vector Pen opens a circular color palette; choosing an item closes the menu.
+- Holding Alt over the canvas still changes tool size, but now shows the live effective radius/size on the canvas. Holding Ctrl changes Brush/Vector/Shape opacity and shows a live color dot at the selected opacity.
+- Floating menus/windows now restore the normal OS cursor and block drawing interactions behind them by checking the topmost egui layer; the feedback/developer window is part of the modal guard.
+- Frame-by-frame audio scrub reuses one audio output, cancels the previous snippet, adds short pre-roll and plays 220–340 ms of context so spoken audio is clearer for lip-sync work.
+- Audio import explicitly accepts WAV/WAVE in addition to the existing compressed formats.
+- Added `PERFORMANCE_REVIEW_2026-11-19.md`; the hot-path review reduced sculpt allocations and eliminated thread-per-frame scrub previews without changing the project schema.
+
 ### The System, Transform and timeline interaction update
 - Added **The System** as a seventh saved interface preset: deep navy HUD panels, cyan neon borders, gold accents, System-style canvas/timeline chrome, and a dedicated activation sound.
 - The standalone normal **Selection** tool is removed from the visible toolbar. **Transform** now owns click selection, box selection, move, resize and rotate; the old Selection shortcut remains a compatibility alias to Transform.

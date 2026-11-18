@@ -1,5 +1,17 @@
 # Stick Studio — Session Handoff / سجل استكمال المشروع
 
+## 19 November 2026 — direct timeline drag, radial canvas menus, sculpt/fill and scrub performance
+- Branch `fix/direct-keyframe-drag-sculpt-radial-audio-20261119` is based on main merge `4c70b5ae40d81968ffcad654574e2a094d896033`.
+- Removed the three temporary timeline quick-action icons (Copy +1 / Move +1 / Clear selection). OLD, NEW and New mine now use the same interaction: click a genuine keyframe to select it, then a subsequent left-button hold+drag moves it; release commits the destination. Selected keys get a cyan outline and the drag destination gets a gold preview. New mine retains multi-select and Alt-drag copy.
+- Added `src/canvas_quick_menu.rs`: right-click Shapes -> radial 6-shape chooser; right-click Brush/Vector Pen -> radial color chooser. Selection closes the menu.
+- Alt size gesture now paints the live tool radius/size on canvas. Ctrl opacity gesture covers Brush, Vector Pen and Shapes and displays a medium-sized selected-color dot whose alpha matches the current opacity.
+- Cursor routing now checks the topmost egui layer, so floating windows/popups over the canvas restore a normal OS cursor and do not feed drawing tools underneath. Feedback dialog was added to the modal guard.
+- Vector Pen commit path now calls bounded `vector_path::smooth_freehand_nodes` before simplification; hard right-angle-style corners remain fixed while small hand jitter is reduced.
+- Sculpt no longer skips `fill_color` strokes: vector paths, contour fills and polygon Bucket fills can deform. Closed seams are restored. Performance was improved with stroke-bounds rejection and conditional local densification instead of unconditional rebuilds on every pointer move.
+- Lip-sync scrub no longer creates one OS thread/output stream per frame step. It reuses one scrub output, stops old sinks, applies a tested short pre-roll and 220–340 ms context window. WAV/WAVE are explicit import filters.
+- Performance review is in `PERFORMANCE_REVIEW_2026-11-19.md`. No project schema change was required.
+- Publishing rule remains: merge to `main` so the existing Windows release/update path can build `Stick.exe`; do not wait indefinitely for Actions after GitHub accepts the merge.
+
 ## 18 November 2026 — The System / unified Transform / all-timeline quick actions
 - Branch `feat/the-system-transform-timeline-20261118` is based on main after PR #54.
 - Removed normal Selection from the visible toolbar/shortcut editor. Free Transform remains the unified object selector + box selector + move/scale/rotate tool; the legacy Selection key is accepted as a Transform alias for existing configs.

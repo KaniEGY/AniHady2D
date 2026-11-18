@@ -33,6 +33,7 @@ mod online_invite;
 mod transform_handles;
 mod media_transform;
 mod audio_timeline;
+mod canvas_quick_menu;
 
 use arabic_reshaper::arabic_reshape;
 use brushes::{draw_brush_preset_icon, draw_stroke_pro};
@@ -46,7 +47,7 @@ use project::{
     BrushTipShape, Stroke, StrokePoint, Symbol, SymbolInstance, TextItem, TweenMode, PROJECT_SCHEMA_VERSION,
 };
 // Game UI sounds are generated as samples without shipping external audio assets.
-use rodio::{Decoder, OutputStream, Sink, Source};
+use rodio::{Decoder, OutputStream, OutputStreamHandle, Sink, Source};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs::File;
@@ -1075,54 +1076,6 @@ fn apply_stick_theme(ctx: &egui::Context) {
     ctx.set_style(style);
 }
 
-#[derive(Clone, Copy)]
-enum TimelineQuickAction { DuplicateNext, MoveNext, ClearSelection }
-
-fn timeline_quick_action(
-    ui: &mut egui::Ui,
-    action: TimelineQuickAction,
-    enabled: bool,
-    tooltip: String,
-) -> egui::Response {
-    let sense=if enabled { egui::Sense::click() } else { egui::Sense::hover() };
-    let (rect,response)=ui.allocate_exact_size(egui::vec2(30.0,27.0),sense);
-    let painter=ui.painter();
-    let cyan=egui::Color32::from_rgb(67,205,242);
-    let gold=egui::Color32::from_rgb(250,197,67);
-    let fg=if enabled { if response.hovered(){gold}else{cyan} } else {egui::Color32::from_gray(92)};
-    let bg=if response.hovered() && enabled {
-        egui::Color32::from_rgb(24,52,67)
-    } else {egui::Color32::from_rgb(37,41,48)};
-    painter.rect_filled(rect,4.0,bg);
-    painter.rect_stroke(rect,4.0,egui::Stroke::new(1.0,fg));
-    let p=rect.center();
-    match action {
-        TimelineQuickAction::DuplicateNext => {
-            let back=egui::Rect::from_center_size(p+egui::vec2(-3.0,-2.0),egui::vec2(10.0,10.0));
-            let front=egui::Rect::from_center_size(p+egui::vec2(3.0,2.0),egui::vec2(10.0,10.0));
-            painter.rect_stroke(back,1.0,egui::Stroke::new(1.4,fg));
-            painter.rect_stroke(front,1.0,egui::Stroke::new(1.8,fg));
-            painter.line_segment([p+egui::vec2(7.0,0.0),p+egui::vec2(11.0,0.0)],egui::Stroke::new(1.5,fg));
-            painter.line_segment([p+egui::vec2(9.0,-2.0),p+egui::vec2(11.0,0.0)],egui::Stroke::new(1.5,fg));
-            painter.line_segment([p+egui::vec2(9.0,2.0),p+egui::vec2(11.0,0.0)],egui::Stroke::new(1.5,fg));
-        }
-        TimelineQuickAction::MoveNext => {
-            painter.rect_stroke(egui::Rect::from_center_size(p+egui::vec2(-5.0,0.0),egui::vec2(8.0,10.0)),
-                1.0,egui::Stroke::new(1.5,fg));
-            painter.line_segment([p+egui::vec2(0.0,0.0),p+egui::vec2(10.0,0.0)],egui::Stroke::new(2.0,fg));
-            painter.add(egui::Shape::convex_polygon(vec![
-                p+egui::vec2(10.0,0.0),p+egui::vec2(5.0,-4.0),p+egui::vec2(5.0,4.0)
-            ],fg,egui::Stroke::NONE));
-        }
-        TimelineQuickAction::ClearSelection => {
-            painter.circle_stroke(p,7.5,egui::Stroke::new(1.4,fg));
-            painter.line_segment([p+egui::vec2(-5.0,-5.0),p+egui::vec2(5.0,5.0)],egui::Stroke::new(2.0,fg));
-            painter.line_segment([p+egui::vec2(-5.0,5.0),p+egui::vec2(5.0,-5.0)],egui::Stroke::new(2.0,fg));
-        }
-    }
-    response.on_hover_text(tooltip)
-}
-
 fn draw_system_hud_chrome(painter: &egui::Painter, rect: egui::Rect) {
     let cyan=egui::Color32::from_rgb(0,216,255);
     let cyan_dim=egui::Color32::from_rgba_unmultiplied(0,216,255,115);
@@ -1740,9 +1693,13 @@ struct StickApp {
     texture_cache: HashMap<String, egui::TextureHandle>,
     status_message: String,
     audio_sink: Option<(OutputStream, Vec<Sink>)>,
+    audio_scrub_output: Option<(OutputStream, OutputStreamHandle)>,
+    audio_scrub_sinks: Vec<Sink>,
     last_pointer_pos: Option<egui::Pos2>,
     last_secondary_pointer_pos: Option<egui::Pos2>,
     alt_size_drag_origin: Option<(egui::Pos2, f32)>,
+    ctrl_opacity_drag_origin: Option<(egui::Pos2, f32)>,
+    canvas_quick_menu: Option<canvas_quick_menu::QuickMenuState>,
 }
 
 impl StickApp {
@@ -1926,9 +1883,13 @@ impl StickApp {
             texture_cache: HashMap::new(),
             status_message: "Stick Studio Ready".to_string(),
             audio_sink: None,
+            audio_scrub_output: None,
+            audio_scrub_sinks: Vec::new(),
             last_pointer_pos: None,
             last_secondary_pointer_pos: None,
             alt_size_drag_origin: None,
+            ctrl_opacity_drag_origin: None,
+            canvas_quick_menu: None,
         }
     }
 
@@ -2797,6 +2758,34 @@ impl StickApp {
         }
     }
 
+
+    fn active_tool_opacity(&self) -> Option<f32> {
+        match self.active_tool_ui {
+            ActiveToolUI::Brush => Some(self.brush_opacity),
+            ActiveToolUI::VectorPen => Some(self.vector_pen_opacity),
+            ActiveToolUI::ShapeLine => Some(self.shape_opacity),
+            _ => None,
+        }
+    }
+
+    fn set_active_tool_opacity(&mut self, value: f32) {
+        let value=value.clamp(0.02,1.0);
+        match self.active_tool_ui {
+            ActiveToolUI::Brush => self.brush_opacity=value,
+            ActiveToolUI::VectorPen => self.vector_pen_opacity=value,
+            ActiveToolUI::ShapeLine => self.shape_opacity=value,
+            _ => {}
+        }
+    }
+
+    fn active_tool_visual_radius_px(&self, scale: f32) -> Option<f32> {
+        let size=self.active_sizable_tool_size()?;
+        Some(match self.active_tool_ui {
+            ActiveToolUI::Sculpt => size*scale,
+            _ => size*scale*0.5,
+        })
+    }
+
     fn commit_stroke_with_symmetry(&mut self, stroke: Stroke, now_time: f64) {
         if let Some(ref sym_name) = self.editing_symbol_name.clone() {
             if let Some(sym) = self.project.library_symbols.get_mut(sym_name) {
@@ -3245,34 +3234,45 @@ impl StickApp {
         true
     }
 
-    fn trigger_audio_stream_scrub(&mut self) {
-        if self.is_playing { return; }
-        let fps = self.project.fps.max(1) as f64;
-        for track in &self.project.audio_tracks {
-            if track.sync_mode == AudioSyncMode::Stream && !track.muted && track.gain > 0.0
-                && self.current_frame >= track.start_frame && self.current_frame <= track.end_frame {
-                let seek_secs = (self.current_frame - track.start_frame) as f64 / fps;
-                let path = track.file_path.clone();
-                let gain = track.gain.clamp(0.0,2.0);
-                let frame_dur_ms = (1000.0 / fps).clamp(40.0, 120.0) as u64;
-                std::thread::spawn(move || {
-                    if let Ok((_s, h)) = OutputStream::try_default() {
-                        if let Ok(sink) = Sink::try_new(&h) {
-                            if let Ok(file) = File::open(&path) {
-                                if let Ok(src) = Decoder::new(BufReader::new(file)) {
-                                    sink.set_volume(gain);
-                                    sink.append(src.skip_duration(Duration::from_secs_f64(seek_secs)).take_duration(Duration::from_millis(frame_dur_ms)));
-                                    sink.sleep_until_end();
-                                }
-                            }
-                        }
-                    }
-                });
-            }
+    fn stop_audio_scrub_preview(&mut self) {
+        for sink in self.audio_scrub_sinks.drain(..) {
+            sink.stop();
         }
     }
 
+    fn trigger_audio_stream_scrub(&mut self) {
+        if self.is_playing { return; }
+        // Frame-by-frame lip-sync preview must not overlap old snippets; the
+        // previous thread-per-frame implementation stacked tiny clips and made
+        // speech sound muddy. Reuse one output stream and replace its sinks.
+        self.stop_audio_scrub_preview();
+        if self.audio_scrub_output.is_none() {
+            let Ok(output)=OutputStream::try_default() else {return};
+            self.audio_scrub_output=Some(output);
+        }
+        let Some((_,handle))=self.audio_scrub_output.as_ref() else{return};
+        let mut sinks=Vec::new();
+        for track in &self.project.audio_tracks {
+            if track.sync_mode != AudioSyncMode::Stream || track.muted || track.gain<=0.0
+                || self.current_frame<track.start_frame || self.current_frame>track.end_frame {
+                continue;
+            }
+            let preview=audio_timeline::scrub_preview_window(
+                self.current_frame-track.start_frame,self.project.fps);
+            let Ok(file)=File::open(&track.file_path) else{continue};
+            let Ok(src)=Decoder::new(BufReader::new(file)) else{continue};
+            let Ok(sink)=Sink::try_new(handle) else{continue};
+            sink.set_volume(track.gain.clamp(0.0,2.0));
+            sink.append(src
+                .skip_duration(Duration::from_secs_f64(preview.skip_secs))
+                .take_duration(Duration::from_secs_f64(preview.duration_secs)));
+            sinks.push(sink);
+        }
+        self.audio_scrub_sinks=sinks;
+    }
+
     fn start_audio_playback(&mut self) {
+        self.stop_audio_scrub_preview();
         self.stop_audio_playback();
         let Ok((stream, handle)) = OutputStream::try_default() else { return; };
         let mut sinks = Vec::new();
@@ -3393,6 +3393,7 @@ impl StickApp {
 
     fn replace_document(&mut self, project: AniProject) {
         self.stop_audio_playback();
+        self.stop_audio_scrub_preview();
         self.is_playing = false;
         self.timeline_length = project.total_frames.max(1);
         self.loop_start_frame = 1;
@@ -3547,7 +3548,10 @@ impl StickApp {
     }
 
     fn import_audio_dialog(&mut self) {
-        if let Some(path) = rfd::FileDialog::new().add_filter("Audio", &["mp3", "wav"]).pick_file() {
+        if let Some(path) = rfd::FileDialog::new()
+            .add_filter("Audio", &["mp3", "wav", "wave", "ogg", "flac"])
+            .add_filter("WAV", &["wav", "wave"])
+            .pick_file() {
             let name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
             let p_str = path.to_string_lossy().to_string();
             let duration = File::open(&path).ok()
@@ -4644,6 +4648,7 @@ impl eframe::App for StickApp {
             || self.show_features_guide || self.layer_rename_index.is_some()
             || self.show_timeline_settings || self.show_project_notice
             || self.show_recovery_dialog || self.show_project_details
+            || self.show_feedback_dialog
             || transient_system_overlay;
         if any_modal_open { typing_in_textbox = true; }
 
@@ -6897,46 +6902,6 @@ impl eframe::App for StickApp {
                     }
                     if ui.button("▶").on_hover_text(tr(lang, "Next frame", "الفريم الجاي")).clicked() && self.current_frame < self.timeline_length { self.current_frame += 1; }
                     ui.separator();
-                    let has_multi=!self.advanced_selected_cels.is_empty();
-                    let active_unlocked=self.project.layers.get(self.active_layer_idx)
-                        .is_some_and(|layer|!layer.locked);
-                    let duplicate_enabled=active_unlocked
-                        && self.current_frame<timeline_ops::MAX_TIMELINE_FRAMES;
-                    let duplicate=timeline_quick_action(ui,TimelineQuickAction::DuplicateNext,
-                        duplicate_enabled,tr(lang,"Copy to next frame","نسخ في الفريم اللي بعده"));
-                    if duplicate.clicked() {
-                        if has_multi {
-                            advanced_relocate_request=Some((
-                                self.advanced_selected_cels.clone(),0,1,
-                                advanced_timeline::RelocateMode::Copy));
-                        } else {
-                            self.insert_next_keyframe(false,now_time);
-                        }
-                    }
-                    let current_is_key=self.project.layers.get(self.active_layer_idx)
-                        .is_some_and(|layer|layer.keyframes.contains_key(&self.current_frame));
-                    let move_enabled=active_unlocked && self.current_frame<self.timeline_length
-                        && (has_multi || current_is_key);
-                    let move_next=timeline_quick_action(ui,TimelineQuickAction::MoveNext,
-                        move_enabled,tr(lang,"Move keyframe forward","حرّك فريم لقدّام"));
-                    if move_next.clicked() {
-                        let selection=if has_multi {
-                            self.advanced_selected_cels.clone()
-                        } else {
-                            vec![advanced_timeline::CelAddress{
-                                layer:self.active_layer_idx,frame:self.current_frame
-                            }]
-                        };
-                        advanced_relocate_request=Some((
-                            selection,0,1,advanced_timeline::RelocateMode::Move));
-                    }
-                    let clear=timeline_quick_action(ui,TimelineQuickAction::ClearSelection,true,
-                        tr(lang,"Clear selection","إلغاء التحديد"));
-                    if clear.clicked() {
-                        self.advanced_selected_cels.clear();
-                        self.clear_cel_selection();
-                    }
-                    ui.separator();
                     ui.toggle_value(&mut self.loop_enabled, tr(lang, "🔁 Loop Range", "🔁 تكرار جزء"));
                     ui.label(egui::RichText::new(format!("Frame {} / {}", self.current_frame, self.timeline_length))
                         .color(egui::Color32::from_rgb(255, 214, 110)).strong());
@@ -7009,12 +6974,12 @@ impl eframe::App for StickApp {
                         ui.label(tr(lang,"NEW MINE • KEYFRAMES","New mine • كي فريمات"));
                         ui.label(format!("{} selected",self.advanced_selected_cels.len()));
                         ui.small(tr(lang,
-                            "The icon actions above work on the current multi-selection.",
-                            "أيقونات الأوامر اللي فوق بتشتغل على التحديد المتعدد الحالي."));
+                            "Click a keyframe to select it, then hold left mouse and drag it to a new frame.",
+                            "حدد الكي فريم بكلك شمال، وبعدها اضغط مطول واسحبه للمكان الجديد."));
                     });
                     ui.small(tr(lang,
-                        "Ctrl/Shift+click keyframes to multi-select. Drag to move; Alt+drag to duplicate. Audio tracks stay aligned.",
-                        "Ctrl أو Shift مع الضغط لتحديد أكتر من كي فريم. اسحب للنقل، وAlt مع السحب للنسخ. الصوت مش بيتحرك."));
+                        "Ctrl/Shift keeps multi-selection here. Alt+drag duplicates the selected keys. Audio tracks stay aligned.",
+                        "Ctrl أو Shift للتحديد المتعدد هنا. Alt مع السحب يعمل نسخة. الصوت مش بيتحرك."));
                 }
                 let can_delete_global = self.timeline_length > 1 && self.project.layers.iter().all(|layer| !layer.locked);
                 egui::ScrollArea::both().id_salt("timeline_frame_scroller")
@@ -7117,6 +7082,8 @@ impl eframe::App for StickApp {
                                 let tw = eff.map(|fd| fd.tween_mode).unwrap_or(TweenMode::None);
                                 let (cr, cresp) = ui.allocate_exact_size(
                                     egui::vec2(cell_w,row_h),egui::Sense::click_and_drag());
+                                let address=advanced_timeline::CelAddress{layer:l_idx,frame:f};
+                                let selected_key=self.advanced_selected_cels.contains(&address);
                                 let cell = self.config.timeline_cell_color;
                                 let accent = self.config.ui_accent_color;
                                 let bg = if self.active_layer_idx == l_idx && self.current_frame == f {
@@ -7132,8 +7099,7 @@ impl eframe::App for StickApp {
                                 if advanced {
                                     advanced_timeline::render_exposure_cell(ui.painter(),cr,is_kf,
                                         has_d && !is_b,marker,tw,self.current_frame==f,
-                                        self.advanced_selected_cels.contains(
-                                            &advanced_timeline::CelAddress{layer:l_idx,frame:f}),
+                                        selected_key,
                                         layer.locked || is_b);
                                 } else if modern {
                                     // Continuous exposure strips and diamonds replace the
@@ -7154,34 +7120,57 @@ impl eframe::App for StickApp {
                                 }
                                 if !is_b { draw_stick_timeline_cell(ui.painter(), cr, is_kf, has_d, tw, marker); }
                                 }
+                                if selected_key && !advanced {
+                                    ui.painter().rect_stroke(
+                                        cr.shrink(1.5),4.0,
+                                        egui::Stroke::new(2.0,egui::Color32::from_rgb(75,210,255)));
+                                }
                                 if cresp.clicked() {
                                     timeline_seek = Some((l_idx, f));
-                                    if advanced && is_kf {
-                                        let cell=advanced_timeline::CelAddress{layer:l_idx,frame:f};
-                                        let extend=ui.input(|input|input.modifiers.shift||input.modifiers.ctrl);
+                                    let extend=advanced
+                                        && ui.input(|input|input.modifiers.shift||input.modifiers.ctrl);
+                                    if is_kf {
                                         if extend {
                                             if let Some(index)=self.advanced_selected_cels
-                                                .iter().position(|&k|k==cell) {
+                                                .iter().position(|&k|k==address) {
                                                 self.advanced_selected_cels.remove(index);
-                                            } else {self.advanced_selected_cels.push(cell);}
-                                        } else {self.advanced_selected_cels=vec![cell];}
-                                    } else if advanced && !ui.input(|input|input.modifiers.shift||input.modifiers.ctrl) {
+                                            } else {
+                                                self.advanced_selected_cels.push(address);
+                                            }
+                                        } else {
+                                            self.advanced_selected_cels=vec![address];
+                                        }
+                                    } else if !extend {
                                         self.advanced_selected_cels.clear();
                                     }
                                 }
-                                if is_kf && !layer.locked && cresp.drag_stopped() {
+                                if is_kf && selected_key && !layer.locked && cresp.dragged() {
+                                    let drag=cresp.drag_delta();
+                                    let dx=(drag.x/cell_w).round() as i32;
+                                    let dy=if advanced {(drag.y/row_h).round() as i32}else{0};
+                                    if dx!=0 || dy!=0 {
+                                        let ghost=cr.translate(egui::vec2(
+                                            dx as f32*cell_w,dy as f32*row_h));
+                                        ui.painter().rect_stroke(
+                                            ghost.shrink(2.0),4.0,
+                                            egui::Stroke::new(2.0,egui::Color32::from_rgb(255,205,63)));
+                                    }
+                                }
+                                if is_kf && selected_key && !layer.locked && cresp.drag_stopped() {
                                     let drag=cresp.drag_delta();
                                     let dx=(drag.x/cell_w).round() as i32;
                                     let dy=if advanced {(drag.y/row_h).round() as i32} else {0};
                                     if dx!=0 || dy!=0 {
-                                        let cell=advanced_timeline::CelAddress{layer:l_idx,frame:f};
-                                        let selection=if advanced
-                                            && self.advanced_selected_cels.contains(&cell) {
+                                        let selection=if advanced {
                                             self.advanced_selected_cels.clone()
-                                        } else {vec![cell]};
+                                        } else {
+                                            vec![address]
+                                        };
                                         let mode=if advanced && ui.input(|input|input.modifiers.alt) {
                                             advanced_timeline::RelocateMode::Copy
-                                        } else {advanced_timeline::RelocateMode::Move};
+                                        } else {
+                                            advanced_timeline::RelocateMode::Move
+                                        };
                                         advanced_relocate_request=Some((selection,dy,dx,mode));
                                     }
                                 }
@@ -7629,8 +7618,8 @@ impl eframe::App for StickApp {
                     self.advanced_selected_cels=destination;
                     self.has_unsaved_changes=true;
                     self.status_message=tr(lang,
-                        "New mine: keyframes updated.",
-                        "New mine: تم تعديل الكي فريمات.").to_string();
+                        "Keyframes moved to the new timeline position.",
+                        "تم نقل الكي فريمات للمكان الجديد في التايم لاين.").to_string();
                 }
                 Err(reason) => {self.status_message=reason.to_string();}
             }
@@ -7658,14 +7647,25 @@ impl eframe::App for StickApp {
             let (stage_w, stage_h) = (self.project.width as f32, self.project.height as f32);
             let stage_rect = egui::Rect::from_center_size(center, egui::vec2(stage_w, stage_h) * scale);
 
-            let is_inside_workspace = pointer_pos.map_or(false, |p| canvas_rect.contains(p));
+            // Only hide/replace the OS cursor when this CentralPanel is the
+            // topmost layer under the pointer. Popup menus and floating windows
+            // often overlap the canvas rectangle; checking the rectangle alone
+            // made the cursor disappear behind settings/feedback/menu windows.
+            let pointer_on_canvas_layer = pointer_pos.is_some_and(|p|
+                canvas_rect.contains(p)
+                    && ctx.layer_id_at(p).is_some_and(|layer|layer==ui.layer_id()));
+            let is_inside_workspace = pointer_on_canvas_layer;
             let custom_brush_cursor = matches!(self.active_tool_ui,
                 ActiveToolUI::Brush | ActiveToolUI::VectorPen | ActiveToolUI::Sculpt
                     | ActiveToolUI::EraserRed | ActiveToolUI::EraserGreen);
-            let show_dot = is_inside_workspace && !any_modal_open && !space_down && !alt_down && custom_brush_cursor;
+            let show_dot = is_inside_workspace && !any_modal_open && !space_down
+                && !alt_down && !ctrl_down && custom_brush_cursor;
             let show_tool_icon = is_inside_workspace && !any_modal_open && !space_down
-                && !alt_down && !custom_brush_cursor && self.active_tool_ui != ActiveToolUI::HandCanvas;
-            let tool_cursor = if show_dot || show_tool_icon {
+                && !alt_down && !ctrl_down && !custom_brush_cursor
+                && self.active_tool_ui != ActiveToolUI::HandCanvas;
+            let tool_cursor = if !is_inside_workspace || any_modal_open {
+                egui::CursorIcon::Default
+            } else if show_dot || show_tool_icon {
                 egui::CursorIcon::None
             } else if space_down || self.active_tool_ui == ActiveToolUI::HandCanvas {
                 if pointer_down || ctx.input(|i| i.pointer.secondary_down()) {
@@ -7685,18 +7685,83 @@ impl eframe::App for StickApp {
             };
             ctx.set_cursor_icon(tool_cursor);
 
-            let is_over_canvas = pointer_pos.map_or(false, |p| canvas_rect.contains(p));
+            let is_over_canvas = pointer_on_canvas_layer;
+            let secondary_clicked=ctx.input(|i|i.pointer.secondary_clicked());
+            if secondary_clicked && is_over_canvas && !any_modal_open {
+                if let Some(center)=pointer_pos {
+                    let kind=match self.active_tool_ui {
+                        ActiveToolUI::ShapeLine=>Some(canvas_quick_menu::QuickMenuKind::Shapes),
+                        ActiveToolUI::Brush | ActiveToolUI::VectorPen=>
+                            Some(canvas_quick_menu::QuickMenuKind::Colors),
+                        _=>None,
+                    };
+                    if let Some(kind)=kind {
+                        self.canvas_quick_menu=Some(canvas_quick_menu::QuickMenuState{kind,center});
+                    }
+                }
+            }
+
+            if let Some(menu)=self.canvas_quick_menu {
+                let mut colors:Vec<[u8;4]>=BASIC_COLORS.iter()
+                    .map(|(rgb,_)|[rgb[0],rgb[1],rgb[2],255]).collect();
+                if !colors.contains(&self.brush_color){colors.push(self.brush_color);}
+                let selected_shape=match self.selected_shape_kind {
+                    GeometricShapeKind::StraightLine=>0,
+                    GeometricShapeKind::Circle=>1,
+                    GeometricShapeKind::Square=>2,
+                    GeometricShapeKind::Rectangle=>3,
+                    GeometricShapeKind::Triangle=>4,
+                    GeometricShapeKind::Pentagon=>5,
+                };
+                if let Some(action)=canvas_quick_menu::show(
+                    ctx,menu,&["／","○","□","▭","△","⬠"],&colors,
+                    selected_shape,self.brush_color
+                ) {
+                    match action {
+                        canvas_quick_menu::QuickMenuAction::Shape(index)=>{
+                            self.selected_shape_kind=match index {
+                                0=>GeometricShapeKind::StraightLine,
+                                1=>GeometricShapeKind::Circle,
+                                2=>GeometricShapeKind::Square,
+                                3=>GeometricShapeKind::Rectangle,
+                                4=>GeometricShapeKind::Triangle,
+                                _=>GeometricShapeKind::Pentagon,
+                            };
+                            self.play_sfx(SfxType::UiClick);
+                            self.canvas_quick_menu=None;
+                        }
+                        canvas_quick_menu::QuickMenuAction::Color(color)=>{
+                            self.brush_color=color;
+                            self.play_sfx(SfxType::UiClick);
+                            self.canvas_quick_menu=None;
+                        }
+                        canvas_quick_menu::QuickMenuAction::Close=>{
+                            self.canvas_quick_menu=None;
+                        }
+                    }
+                }
+            }
+
             let can_alt_adjust_size = self.active_sizable_tool_size().is_some();
-            if alt_down && can_alt_adjust_size && is_over_canvas && !any_modal_open {
+            if alt_down && can_alt_adjust_size && is_over_canvas && !any_modal_open
+                && self.canvas_quick_menu.is_none() {
                 if let Some(pos) = pointer_pos {
                     if let Some((origin, start_size)) = self.alt_size_drag_origin {
-                        // Right/up grows; left/down shrinks. No mouse button is
-                        // required: holding Alt temporarily turns movement into
-                        // a brush-size gesture for the currently selected tool.
                         let delta = (pos.x - origin.x) - (pos.y - origin.y);
                         self.set_active_sizable_tool_size(start_size + delta * 0.22);
                     } else if let Some(start_size) = self.active_sizable_tool_size() {
                         self.alt_size_drag_origin = Some((pos, start_size));
+                    }
+                    if let (Some(radius),Some(value))=(
+                        self.active_tool_visual_radius_px(scale),
+                        self.active_sizable_tool_size()
+                    ) {
+                        canvas_quick_menu::draw_size_feedback(
+                            &painter,pos,radius,
+                            egui::Color32::from_rgb(
+                                self.brush_color[0],self.brush_color[1],self.brush_color[2]),
+                            value
+                        );
                     }
                 }
                 ctx.set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
@@ -7704,7 +7769,29 @@ impl eframe::App for StickApp {
             } else {
                 self.alt_size_drag_origin = None;
             }
-            if scroll_y != 0.0 && is_over_canvas && !any_modal_open && !alt_down {
+
+            let can_ctrl_adjust_opacity=self.active_tool_opacity().is_some();
+            if ctrl_down && !alt_down && can_ctrl_adjust_opacity && is_over_canvas
+                && !any_modal_open && self.canvas_quick_menu.is_none() {
+                if let Some(pos)=pointer_pos {
+                    if let Some((origin,start_opacity))=self.ctrl_opacity_drag_origin {
+                        let delta=(pos.x-origin.x)-(pos.y-origin.y);
+                        self.set_active_tool_opacity(start_opacity+delta*0.0045);
+                    } else if let Some(start)=self.active_tool_opacity() {
+                        self.ctrl_opacity_drag_origin=Some((pos,start));
+                    }
+                    if let Some(opacity)=self.active_tool_opacity() {
+                        canvas_quick_menu::draw_opacity_feedback(
+                            &painter,pos,self.brush_color,opacity);
+                    }
+                }
+                ctx.set_cursor_icon(egui::CursorIcon::None);
+                ctx.request_repaint();
+            } else {
+                self.ctrl_opacity_drag_origin=None;
+            }
+
+            if scroll_y != 0.0 && is_over_canvas && !any_modal_open && !alt_down && !ctrl_down {
                 let old_zoom = self.zoom_level;
                 let new_zoom = (old_zoom * (1.0 + scroll_y * 0.0018).clamp(0.82, 1.22)).clamp(0.1, 6.0);
                 if let Some(pointer) = pointer_pos {
@@ -7886,7 +7973,11 @@ impl eframe::App for StickApp {
             }
 
             let can_use_tool = self.active_tool_ui == ActiveToolUI::Eyedropper || !self.is_active_layer_locked();
-            if !space_down && !alt_down && self.active_tool_ui != ActiveToolUI::HandCanvas && is_over_canvas && !any_modal_open && can_use_tool {
+            let opacity_gesture=ctrl_down && self.active_tool_opacity().is_some();
+            if !space_down && !alt_down && !opacity_gesture
+                && self.canvas_quick_menu.is_none()
+                && self.active_tool_ui != ActiveToolUI::HandCanvas
+                && is_over_canvas && !any_modal_open && can_use_tool {
                 if let Some(pos) = pointer_pos {
                     let stage_pos = to_stage(pos);
                     let delta = self.last_pointer_pos.map_or(egui::Vec2::ZERO, |l| to_stage(pos) - to_stage(l));
@@ -8428,8 +8519,10 @@ impl eframe::App for StickApp {
                         }
                     }
                     if stroke.is_vector {
-                        // Keep control points editable. Eightfold Catmull-Rom
-                        // expansion was causing thousands of artificial nodes.
+                        // Vector Pen input keeps editable nodes, but remove
+                        // high-frequency mouse/tablet zig-zag before reducing
+                        // node count. Geometric shapes use a separate path.
+                        vector_path::smooth_freehand_nodes(&mut stroke.points,0.58);
                         stroke.simplify_vector_nodes(self.vector_tolerance);
                     } else {
                         // Freehand already has samples + smoothing stabilizer.
