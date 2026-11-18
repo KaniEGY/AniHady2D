@@ -717,7 +717,8 @@ mod layer_opacity_tests {
     fn textured_brushes_keep_fast_strokes_and_survive_project_roundtrip() {
         use crate::persistence::{atomic_save, migration, sniff};
         let mut previous_pixels = Vec::new();
-        for preset in [KritaBrushPreset::DryBrush, KritaBrushPreset::Chalk] {
+        for preset in [KritaBrushPreset::DryBrush, KritaBrushPreset::Chalk,
+            KritaBrushPreset::Charcoal, KritaBrushPreset::SoftPastel] {
             let mut project = project_with_solid_dab(1.0);
             project.width = 220;
             let stroke = &mut project.layers[0].keyframes.get_mut(&1).unwrap().strokes[0];
