@@ -420,10 +420,10 @@ pub fn flood_fill_polygon_with_options(
     // Grow the selected component INTO wall cells only, never into another
     // transparent component: a center divider therefore remains a barrier.
     let dilate = if options.dilate_contract.is_finite() { options.dilate_contract.clamp(-12.0, 12.0) } else { 0.0 };
+    let mut covered = visited.clone();
     if !used_canvas_edge_closure {
         let grow_steps = ((gap.clamp(0.0, 14.0) + 1.5 + dilate.max(0.0)) / cell).ceil()
             .clamp(1.0, 32.0) as usize;
-        let mut covered = visited.clone();
         let mut boundary = VecDeque::<(usize, usize)>::new();
         for index in 0..size {
             if !visited[index] { continue; }
@@ -449,8 +449,6 @@ pub fn flood_fill_polygon_with_options(
                 }
             }
         }
-    
-    
     }
     // Negative Dilate/Contract intentionally pulls the fill in from *every*
     // boundary, with a bounded four-connected erosion of the temporary mask.
