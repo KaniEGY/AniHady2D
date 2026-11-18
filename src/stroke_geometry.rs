@@ -1,57 +1,153 @@
-//! Pressure-aware continuous brush shape shared between canvas and exporters.
-//! The previous renderer painted each dab separately; semi-transparent dabs
-//! composited on top of each other as dark overlapping circles.
+//! Continuous, pressure-aware stroke geometry for the canvas and exporters.
+//! A single filled outline prevents translucent dab overlap from making
+//! unwanted dark joints. The saved raw input points remain untouched.
 use crate::project::StrokePoint;
 
-/// A single filled outline, with round caps and averaged corner tangents.
-/// Reject out-of-range input and cap the work to keep drawing interactive.
-pub fn pressure_outline(points:&[StrokePoint], width:f32)->Vec<(f32,f32)> {
-    if !width.is_finite() || width <= 0.0 || points.is_empty() || points.len()>12_000 {
+const MAX_INPUT_POINTS: usize = 12_000;
+const MAX_RENDER_SAMPLES: usize = 24_000;
+const ROUND_CAP_STEPS: usize = 12;
+
+fn length(a: &StrokePoint, b: &StrokePoint) -> f32 {
+    (b.x - a.x).hypot(b.y - a.y)
+}
+
+/// De-jitter gentle segments, preserve genuine turns, then resample by
+/// travelled distance. The sample budget bounds memory and rendering cost.
+///
+/// This is render-time geometry only. It does not simplify project strokes,
+/// move editable vector nodes or fabricate stylus pressure.
+fn prepared_points(points: &[StrokePoint], width: f32) -> Vec<StrokePoint> {
+    if points.len() > MAX_INPUT_POINTS || !width.is_finite() || width <= 0.0 {
         return Vec::new();
     }
-    let clean:Vec<_>=points.iter().filter(|p|p.x.is_finite()&&p.y.is_finite()&&p.pressure.is_finite())
-        .filter(|p|p.pressure > 0.0).collect();
-    if clean.len()<2 {return Vec::new();}
-    let mut samples:Vec<&StrokePoint>=Vec::with_capacity(clean.len());
-    for p in clean {
-        if samples.last().is_none_or(|q|
-            (q.x-p.x).hypot(q.y-p.y)>0.3) {samples.push(p);}
+    let mut clean: Vec<StrokePoint> = Vec::with_capacity(points.len());
+    for p in points {
+        if !p.x.is_finite() || !p.y.is_finite()
+            || !p.pressure.is_finite() || p.pressure <= 0.0 {
+            continue;
+        }
+        if clean.last().is_none_or(|last| length(last, p) > 0.3) {
+            clean.push(p.clone());
+        }
     }
-    if samples.len()<2 {return Vec::new();}
-    let n=samples.len();
-    let mut left=Vec::with_capacity(n);
-    let mut right=Vec::with_capacity(n);
-    let mut tangents=Vec::with_capacity(n);
-    let mut radii=Vec::with_capacity(n);
+    if clean.len() < 2 { return Vec::new(); }
+
+    // Only smooth small cross-track deviations where the stroke direction
+    // stays broadly the same. Do not round intentional 60–180 degree corners.
+    let original = clean.clone();
+    let tolerance = (width * 0.17).clamp(0.35, 2.25);
+    for i in 1..clean.len() - 1 {
+        let (a, b, c) = (&original[i - 1], &original[i], &original[i + 1]);
+        let l1 = length(a, b);
+        let l2 = length(b, c);
+        let chord = length(a, c);
+        if l1 < 0.001 || l2 < 0.001 || chord < 0.001 { continue; }
+        let cos = ((b.x - a.x) * (c.x - b.x) +
+            (b.y - a.y) * (c.y - b.y)) / (l1 * l2);
+        let cross_track = ((b.x - a.x) * (c.y - a.y)
+            - (b.y - a.y) * (c.x - a.x)).abs() / chord;
+        if cos > 0.62 && cross_track <= tolerance {
+            clean[i].x = 0.20 * a.x + 0.60 * b.x + 0.20 * c.x;
+            clean[i].y = 0.20 * a.y + 0.60 * b.y + 0.20 * c.y;
+        }
+    }
+
+    let total: f32 = clean.windows(2).map(|pair| length(&pair[0], &pair[1])).sum();
+    let budget = MAX_RENDER_SAMPLES.saturating_sub(clean.len()).max(1);
+    let spacing = (width * 0.15).clamp(1.0, 3.5)
+        .max(total / budget as f32);
+    let mut samples = Vec::with_capacity(clean.len().min(MAX_RENDER_SAMPLES));
+    samples.push(clean[0].clone());
+    for pair in clean.windows(2) {
+        let (a, b) = (&pair[0], &pair[1]);
+        let segment = length(a, b);
+        if segment <= 0.001 { continue; }
+        // ceil(segment/spacing)-1 < segment/spacing, so the total extra
+        // samples cannot exceed the global memory budget.
+        let steps = ((segment / spacing).ceil() as usize).clamp(1, 64);
+        for j in 1..=steps {
+            let t = j as f32 / steps as f32;
+            if j == steps {
+                samples.push(b.clone());
+            } else {
+                samples.push(StrokePoint {
+                    x: a.x + (b.x - a.x) * t,
+                    y: a.y + (b.y - a.y) * t,
+                    pressure: a.pressure + (b.pressure - a.pressure) * t,
+                });
+            }
+        }
+    }
+    samples
+}
+
+fn normalized(dx: f32, dy: f32) -> (f32, f32) {
+    let magnitude = dx.hypot(dy);
+    if magnitude > 0.0001 { (dx / magnitude, dy / magnitude) }
+    else { (1.0, 0.0) }
+}
+
+/// A single outline with round ends and pressure-varying width. A bounded
+/// miter join prevents long spikes at acute angles. Both the canvas and
+/// tiny-skia exporter fill exactly this polygon.
+pub fn pressure_outline(points: &[StrokePoint], width: f32) -> Vec<(f32, f32)> {
+    let samples = prepared_points(points, width);
+    if samples.len() < 2 { return Vec::new(); }
+    let n = samples.len();
+    let mut left = Vec::with_capacity(n);
+    let mut right = Vec::with_capacity(n);
+    let mut radii = Vec::with_capacity(n);
+
     for i in 0..n {
-        let prev=samples[i.saturating_sub(1)];
-        let next=samples[(i+1).min(n-1)];
-        let dx=next.x-prev.x;
-        let dy=next.y-prev.y;
-        let len=dx.hypot(dy).max(0.0001);
-        let nx=-dy/len;let ny=dx/len;
-        let r=(width*0.5*samples[i].pressure.clamp(0.05,2.0)).clamp(0.25,512.0);
-        radii.push(r);
-        tangents.push((dx/len,dy/len));
-        left.push((samples[i].x+nx*r,samples[i].y+ny*r));
-        right.push((samples[i].x-nx*r,samples[i].y-ny*r));
+        let center = &samples[i];
+        let before = &samples[i.saturating_sub(1)];
+        let after = &samples[(i + 1).min(n - 1)];
+        let prev_dir = normalized(center.x - before.x, center.y - before.y);
+        let next_dir = normalized(after.x - center.x, after.y - center.y);
+        let (nx, ny, miter) = if i == 0 {
+            (-next_dir.1, next_dir.0, 1.0)
+        } else if i == n - 1 {
+            (-prev_dir.1, prev_dir.0, 1.0)
+        } else {
+            let (n0x, n0y) = (-prev_dir.1, prev_dir.0);
+            let (n1x, n1y) = (-next_dir.1, next_dir.0);
+            let sum = normalized(n0x + n1x, n0y + n1y);
+            let denom = (sum.0 * n1x + sum.1 * n1y).abs();
+            (sum.0, sum.1, (1.0 / denom.max(0.01)).min(1.5))
+        };
+        let radius = (width * 0.5 * center.pressure.clamp(0.05, 2.0))
+            .clamp(0.25, 512.0);
+        radii.push(radius);
+        let offset = radius * miter;
+        left.push((center.x + nx * offset, center.y + ny * offset));
+        right.push((center.x - nx * offset, center.y - ny * offset));
     }
-    let mut outline=Vec::with_capacity(2*n+28);
+
+    let mut outline = Vec::with_capacity(n * 2 + ROUND_CAP_STEPS * 2);
     outline.extend(left);
-    // Semicircle at the end, from the left side to the right side.
-    let e=samples[n-1];let (tx,ty)=tangents[n-1];
-    let base=ty.atan2(tx)+std::f32::consts::FRAC_PI_2;
-    for i in 1..=12 {
-        let angle=base-std::f32::consts::PI*i as f32/12.0;
-        outline.push((e.x+angle.cos()*radii[n-1],e.y+angle.sin()*radii[n-1]));
+
+    // End cap continues the left boundary towards the right boundary.
+    let end = &samples[n - 1];
+    let before = &samples[n - 2];
+    let (tx, ty) = normalized(end.x - before.x, end.y - before.y);
+    let angle = ty.atan2(tx) + std::f32::consts::FRAC_PI_2;
+    for j in 1..=ROUND_CAP_STEPS {
+        let a = angle - std::f32::consts::PI * j as f32 / ROUND_CAP_STEPS as f32;
+        outline.push((end.x + a.cos() * radii[n - 1],
+                      end.y + a.sin() * radii[n - 1]));
     }
+
     outline.extend(right.into_iter().rev().skip(1));
-    // Round start cap, continuing from right to left.
-    let s=samples[0];let (tx,ty)=tangents[0];
-    let base=ty.atan2(tx)-std::f32::consts::FRAC_PI_2;
-    for i in 1..=11 {
-        let angle=base-std::f32::consts::PI*i as f32/12.0;
-        outline.push((s.x+angle.cos()*radii[0],s.y+angle.sin()*radii[0]));
+
+    // Start cap returns the right boundary to the first left vertex.
+    let start = &samples[0];
+    let next = &samples[1];
+    let (tx, ty) = normalized(next.x - start.x, next.y - start.y);
+    let angle = ty.atan2(tx) - std::f32::consts::FRAC_PI_2;
+    for j in 1..ROUND_CAP_STEPS {
+        let a = angle - std::f32::consts::PI * j as f32 / ROUND_CAP_STEPS as f32;
+        outline.push((start.x + a.cos() * radii[0],
+                      start.y + a.sin() * radii[0]));
     }
     outline
 }
@@ -59,17 +155,63 @@ pub fn pressure_outline(points:&[StrokePoint], width:f32)->Vec<(f32,f32)> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    fn p(x:f32,y:f32,pressure:f32)->StrokePoint{StrokePoint{x,y,pressure}}
+    fn p(x:f32,y:f32,pressure:f32)->StrokePoint { StrokePoint{x,y,pressure} }
+
     #[test]
-    fn continuous_stroke_has_one_outline_with_pressure_width(){
-        let v=pressure_outline(&[p(0.,0.,1.),p(50.,0.,0.5),p(100.,0.,1.)],20.);
-        assert!(v.len()>20);
-        assert!(v.iter().all(|(x,y)|x.is_finite()&&y.is_finite()));
-        assert!((v[0].1-v[1].1).abs()>3.0);
+    fn pressure_changes_width_without_dark_overlapping_dabs() {
+        let nodes = [p(0.,0.,1.),p(50.,0.,0.5),p(100.,0.,1.)];
+        let result=pressure_outline(&nodes,20.);
+        let start_y=result.first().unwrap().1;
+        let middle_y=result.iter().filter(|&&(x,_)|(x-50.).abs()<0.1)
+            .map(|&(_,y)|y).next().unwrap();
+        assert!((start_y-middle_y).abs()>3.0);
+        assert!(result.iter().all(|&(x,y)| x.is_finite() && y.is_finite()));
     }
+
     #[test]
-    fn repeated_or_invalid_points_do_not_panic(){
+    fn straight_and_fast_strokes_get_reasonable_spacing() {
+        let nodes=[p(0.,0.,1.),p(500.,0.,1.)];
+        let samples=prepared_points(&nodes,8.);
+        assert!(samples.len()>50);
+        assert!(samples.windows(2).all(|w|w[0].x<=w[1].x && w[1].x-w[0].x<=4.));
+        assert!(samples.iter().all(|p|p.y==0.));
+    }
+
+    #[test]
+    fn jitter_is_reduced_without_moving_hard_corners() {
+        let jitter = [p(0.,0.,1.),p(10.,1.,1.),p(20.,0.,1.)];
+        let points=prepared_points(&jitter,12.);
+        let center=points.iter().find(|p|(p.x-10.).abs()<0.01).unwrap();
+        assert!(center.y<1.);
+        let corners=[p(0.,0.,1.),p(20.,0.,1.),p(20.,20.,1.)];
+        let points=prepared_points(&corners,12.);
+        assert!(points.iter().any(|p|p.x==20.&&p.y==0.));
+    }
+
+    #[test]
+    fn curve_and_circle_are_finite_and_bounded() {
+        let nodes=[p(0.,-30.,1.),p(30.,0.,1.),p(0.,30.,1.),
+            p(-30.,0.,1.),p(0.,-30.,1.)];
+        let outline=pressure_outline(&nodes,6.);
+        assert!(!outline.is_empty());
+        assert!(outline.iter().all(|&(x,y)|x.is_finite()&&y.is_finite()));
+        assert!(outline.len()<=MAX_RENDER_SAMPLES*2+ROUND_CAP_STEPS*2);
+    }
+
+    #[test]
+    fn duplicate_or_invalid_points_are_safe() {
         assert!(pressure_outline(&[p(1.,1.,1.),p(1.,1.,1.)],10.).is_empty());
         assert!(pressure_outline(&[p(1.,1.,1.),p(f32::NAN,2.,1.)],10.).is_empty());
+        assert!(pressure_outline(&[],5.).is_empty());
+        assert!(pressure_outline(&[p(1.,1.,1.),p(2.,2.,1.)],f32::NAN).is_empty());
+    }
+
+    #[test]
+    fn render_sample_budget_is_never_exceeded() {
+        let nodes:Vec<_>=(0..10_000).map(|i|p(i as f32*10.,i as f32%7.,1.)).collect();
+        let sampled=prepared_points(&nodes,2.);
+        assert!(sampled.len()<=MAX_RENDER_SAMPLES);
+        assert_eq!(sampled.first().unwrap().x,0.);
+        assert_eq!(sampled.last().unwrap().x,99_990.);
     }
 }
