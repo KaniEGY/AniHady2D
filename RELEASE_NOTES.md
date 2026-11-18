@@ -5,6 +5,13 @@
 ## English (US)
 
 ### Interface style presets
+- Added a saved Interface submenu to the hamburger menu.
+- Presets: Current Stick, Cartoon, Serious, Cute Pink, Animate Style, Krita Style and Blender Style.
+- Presets change Stick-owned colors, UI density, tool icon scale, timeline styling and dock proportions while preserving the same project format and commands.
+- Named familiar styles are workflow-inspired only; Stick does not bundle third-party logos or assets or claim affiliation.
+
+
+### Interface style presets
 - Added a saved **Interface / الواجهة** submenu to the hamburger menu.
 - Presets: Current Stick, Cartoon, Serious, Cute Pink, Animate Style, Krita Style and Blender Style.
 - Presets change Stick-owned colors, UI density, tool icon scale, timeline styling and dock proportions while preserving the same project format and commands.
