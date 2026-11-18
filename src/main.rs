@@ -1184,6 +1184,9 @@ struct StickApp {
     stage_bg_color: [u8; 4],
     brush_size: f32,
     bucket_gap_close: f32,
+    bucket_precision: f32,
+    bucket_dilate_contract: f32,
+    bucket_thickness: f32,
     bucket_reference_all_layers: bool,
     brush_tip_shape: BrushTipShape,
     zoom_level: f32,
@@ -1340,6 +1343,9 @@ impl StickApp {
             stage_bg_color: [255, 255, 255, 255],
             brush_size: 7.0,
             bucket_gap_close: 3.0,
+            bucket_precision: 1.0,
+            bucket_dilate_contract: 0.0,
+            bucket_thickness: 0.0,
             bucket_reference_all_layers: false,
             brush_tip_shape: BrushTipShape::Round,
             zoom_level: 0.75,
@@ -3111,6 +3117,89 @@ impl StickApp {
     }
 
     fn render_tool_properties_ui(&mut self, ui: &mut egui::Ui, lang: AppLang) {
+        if let Some(index) = self.selected_media_idx {
+            let source = self.project.layers.get(self.active_layer_idx).and_then(|layer|
+                self.project.evaluate_layer_at_frame(layer, self.current_frame)
+                    .media_items.get(index).cloned());
+            if let Some(previous) = source {
+                let mut item = previous.clone();
+                ui.strong(tr(lang,"Selected Image / Video Transform","تحويل الصورة / الفيديو المحدد"));
+                ui.small(if item.media_type == MediaType::VideoFrame {
+                    tr(lang,"Edits apply to every decoded frame in this video layer.",
+                        "التعديلات دي بتتطبق على كل فريمات الفيديو في اللير.")
+                } else {
+                    tr(lang,"Select and drag the image on canvas. Use the blue handles to resize or rotate.",
+                        "اسحب الصورة على اللوحة، واستخدم مقابض التحديد للتكبير والدوران.")
+                });
+                ui.horizontal(|ui| {
+                    ui.label("X"); ui.add(egui::DragValue::new(&mut item.x).speed(1.0));
+                    ui.label("Y"); ui.add(egui::DragValue::new(&mut item.y).speed(1.0));
+                });
+                ui.horizontal(|ui| {
+                    ui.label(tr(lang,"Width","العرض"));
+                    ui.add(egui::DragValue::new(&mut item.width).range(4.0..=8192.0).speed(1.0));
+                    ui.label(tr(lang,"Height","الارتفاع"));
+                    ui.add(egui::DragValue::new(&mut item.height).range(4.0..=8192.0).speed(1.0));
+                });
+                ui.add(egui::Slider::new(&mut item.rotation_deg,-180.0..=180.0)
+                    .text(tr(lang,"Rotation (degrees)","الدوران (درجة)")));
+                ui.horizontal(|ui| {
+                    if ui.button(tr(lang,"Flip H","عكس أفقي")).clicked() { item.flip_h=!item.flip_h; }
+                    if ui.button(tr(lang,"Flip V","عكس رأسي")).clicked() { item.flip_v=!item.flip_v; }
+                    if ui.button(tr(lang,"Reset","إعادة الضبط")).clicked() {
+                        item.rotation_deg=0.0; item.flip_h=false; item.flip_v=false;
+                    }
+                });
+                if item != previous && !self.is_active_layer_locked() {
+                    self.save_undo_state();
+                    self.ensure_editable_keyframe();
+                    if let Some(layer) = self.project.layers.get_mut(self.active_layer_idx) {
+                        if let Some(data) = layer.keyframes.get_mut(&self.current_frame) {
+                            if let Some(slot) = data.media_items.get_mut(index) { *slot = item; }
+                        }
+                    }
+                    self.propagate_video_media();
+                    self.has_unsaved_changes=true;
+                }
+                ui.separator();
+            }
+        }
+        if let Some(index) = self.selected_audio_idx {
+            if let Some(previous) = self.project.audio_tracks.get(index).cloned() {
+                let mut item=previous.clone();
+                ui.strong(tr(lang,"Audio track properties","خصائص لير الصوت"));
+                ui.add(egui::TextEdit::singleline(&mut item.name));
+                ui.horizontal(|ui| {
+                    ui.label(tr(lang,"Start frame","بداية الصوت"));
+                    let mut start=item.start_frame;
+                    if ui.add(egui::DragValue::new(&mut start).range(1..=timeline_ops::MAX_TIMELINE_FRAMES)).changed() {
+                        audio_timeline::move_clip(&mut item,start,timeline_ops::MAX_TIMELINE_FRAMES);
+                    }
+                });
+                ui.horizontal(|ui| {
+                    ui.label(tr(lang,"End frame","نهاية الصوت"));
+                    ui.add(egui::DragValue::new(&mut item.end_frame)
+                        .range(item.start_frame..=timeline_ops::MAX_TIMELINE_FRAMES));
+                });
+                ui.add(egui::Slider::new(&mut item.gain,0.0..=2.0)
+                    .text(tr(lang,"Volume","مستوى الصوت")));
+                ui.checkbox(&mut item.muted,tr(lang,"Mute","كتم"));
+                ui.horizontal(|ui| {
+                    ui.selectable_value(&mut item.sync_mode, AudioSyncMode::Stream,
+                        tr(lang,"Scrub preview","معاينة عند التحريك"));
+                    ui.selectable_value(&mut item.sync_mode, AudioSyncMode::Normal,
+                        tr(lang,"Playback only","تشغيل فقط"));
+                });
+                ui.small(tr(lang,"Drag the colored audio lane beneath the frame tracks to change its start time.",
+                    "اسحب المسار الصوتي الملون تحت الفريمات لتحريك توقيته."));
+                if item != previous {
+                    self.save_undo_state();
+                    self.project.audio_tracks[index]=item;
+                    self.has_unsaved_changes=true;
+                }
+                ui.separator();
+            }
+        }
         match self.active_tool_ui {
             ActiveToolUI::SelectNormal | ActiveToolUI::SelectLasso | ActiveToolUI::FreeTransform | ActiveToolUI::VectorDirectSelect => {
                 ui.strong(tr(lang, "Transform & Selection", "خصائص التحديد والتحويل الحر"));
@@ -3254,6 +3343,17 @@ impl StickApp {
                 ui.color_edit_button_srgba_unmultiplied(&mut self.brush_color);
                 ui.add(egui::Slider::new(&mut self.bucket_gap_close, 0.0..=12.0)
                     .text(tr(lang, "Close small gaps", "قفل الفجوات الصغيرة")));
+                ui.separator();
+                ui.strong(tr(lang, "Blender-inspired fill controls", "خصائص تعبئة مستوحاة من بلندر"));
+                ui.add(egui::Slider::new(&mut self.bucket_precision, 0.5..=2.5)
+                    .text(tr(lang, "Precision", "الدقة")));
+                ui.add(egui::Slider::new(&mut self.bucket_dilate_contract, -12.0..=12.0)
+                    .text(tr(lang, "Dilate / Contract (px)", "تمدد / انكماش (بكسل)")));
+                ui.add(egui::Slider::new(&mut self.bucket_thickness, 0.0..=20.0)
+                    .text(tr(lang, "Boundary Thickness (px)", "سُمك حدود التعبئة (بكسل)")));
+                ui.small(tr(lang,
+                    "Precision balances detail and memory. Positive dilate reaches under ink; negative shrinks the fill. Thickness changes the temporary boundary mask, not your strokes.",
+                    "الدقة بتوازن بين التفاصيل والذاكرة. التمدد الموجب بيدخل اللون تحت الخط، والسالب بيقلصه. السُمك بيغير قناع التعبئة المؤقت مش الرسمة."));
                 ui.checkbox(&mut self.bucket_reference_all_layers,
                     tr(lang, "Reference all visible layers", "استخدم حدود كل الليرات الظاهرة"));
                 ui.small(tr(lang,
@@ -5951,10 +6051,15 @@ impl eframe::App for StickApp {
                                         self.project.evaluate_layer_at_frame(layer, self.current_frame).strokes)
                                     .unwrap_or_default()
                             };
-                            let fallback = fill_tools::flood_fill_polygon(
+                            let fallback = fill_tools::flood_fill_polygon_with_options(
                                 &reference_strokes, (stage_pos.x, stage_pos.y),
                                 (self.project.width as f32, self.project.height as f32),
-                                self.bucket_gap_close);
+                                self.bucket_gap_close,
+                                fill_tools::FillOptions {
+                                    precision: self.bucket_precision,
+                                    dilate_contract: self.bucket_dilate_contract,
+                                    boundary_thickness: self.bucket_thickness,
+                                });
                             let can_fill = !self.bucket_reference_all_layers
                                 && fallback.is_none()
                                 && fill_tools::can_fill_contour(
