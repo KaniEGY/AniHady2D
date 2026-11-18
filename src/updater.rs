@@ -115,8 +115,8 @@ pub fn parse_rollback_history(json: &Value, installed: &str) -> Result<Vec<Archi
     }
     candidates.sort_by(|a, b| b.published_at.cmp(&a.published_at));
     candidates.dedup_by(|a, b| a.info.version == b.info.version);
-    // First entry is the immediate previous release; five *more* appear below it.
-    candidates.truncate(6);
+    // First entry is the immediate previous release; ten *more* appear below it.
+    candidates.truncate(11);
     Ok(candidates)
 }
 
@@ -335,6 +335,19 @@ mod tests {
         assert_eq!(result[0].info.version, "4.1.0.129");
         assert_eq!(result[1].info.version, "4.1.0.128");
         assert_eq!(result[2].info.version, "4.1.0.90");
+    }
+    #[test] fn rollback_history_keeps_previous_plus_ten_older() {
+        let items: Vec<Value> = (0..20).map(|i| {
+            let build = 220 - i;
+            let mut release = fixture(&format!("v4.1.0.{build}"), &"f".repeat(64));
+            release["published_at"] =
+                Value::String(format!("2026-11-17T12:{:02}:00Z", 59 - i));
+            release
+        }).collect();
+        let result = parse_rollback_history(&Value::Array(items), "4.1.0.250").unwrap();
+        assert_eq!(result.len(), 11);
+        assert_eq!(result[0].info.version, "4.1.0.220");
+        assert_eq!(result[10].info.version, "4.1.0.210");
     }
     #[test] fn rollback_history_skips_unsigned_and_prerelease_assets() {
         let mut unsigned = fixture("v4.1.0.127", &"a".repeat(64));
