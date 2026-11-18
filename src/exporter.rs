@@ -336,13 +336,24 @@ fn draw_skia_stroke(pixmap: &mut Pixmap, s: &crate::project::Stroke, ts: Transfo
             RoundMark::Line { width } => {
                 let path = centerline.get_or_insert_with(|| {
                     let mut pb = PathBuilder::new();
-                    pb.move_to(first.x,first.y);
-                    for p in &s.points[1..] { pb.line_to(p.x,p.y); }
+                    if s.is_vector {
+                        let path = crate::vector_path::smoothed_path(&s.points);
+                        if let Some(&(x,y)) = path.first() {
+                            pb.move_to(x,y);
+                            for &(x,y) in path.iter().skip(1) { pb.line_to(x,y); }
+                        }
+                    } else {
+                        pb.move_to(first.x,first.y);
+                        for p in &s.points[1..] { pb.line_to(p.x,p.y); }
+                    }
                     pb.finish()
                 });
                 if let Some(path) = path {
                     let brush = Stroke {
-                        width, line_cap: tiny_skia::LineCap::Round,
+                        width,
+                        line_cap: if s.is_vector && s.tip_shape == BrushTipShape::Square {
+                            tiny_skia::LineCap::Square
+                        } else { tiny_skia::LineCap::Round },
                         line_join: tiny_skia::LineJoin::Round, ..Stroke::default()
                     };
                     pixmap.stroke_path(path,&paint,&brush,ts,None);
