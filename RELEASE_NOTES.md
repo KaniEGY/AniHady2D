@@ -4,6 +4,21 @@
 
 ## English (US)
 
+### Media, timeline and drawing interaction overhaul
+- Round brush tips now get explicit circular start/end caps for ordinary G-Pen/freehand lines, not only vector/Fineliner strokes.
+- Audio clips can be deleted with Delete or from a right-click menu and can be duplicated from the same menu/Media inspector.
+- Multiple audio tracks are prepared paused and started together; scrub preview no longer stops after the first active Stream track.
+- Imported video layers get a dedicated draggable timeline clip aligned to the frame ruler, with Duplicate/Delete context actions.
+- Imported images/videos/audio automatically open a dedicated **Media** inspector. Canvas sizes moved into a separate **Sizes / المقاسات** tab beside Properties.
+- Image layers can set a visible-through frame without flattening or deleting the source image.
+- Media on the canvas supports right-click Duplicate/Delete.
+- F4 is a visible Delete Frame/Time action beside F5, and F4 works directly in Animation mode.
+- Keyframes can be dragged horizontally in OLD and NEW timelines too; Advanced retains multi-select and cross-layer moves.
+- Bucket fills now honor horizontal/vertical symmetry seeds, not only drawn stroke symmetry.
+- Vector node tool adds an optional right-click mode: remove an existing node or insert one on the nearest vector segment.
+- Holding/dragging over side/top/bottom UI no longer pans the canvas; hand/space pan requires the pointer to actually be over the central canvas.
+
+
 ### Top bar navigation polish
 - Added a visible **New project** command at the top of the hamburger menu.
 - Starting a new project clears the active document/path/history safely and preserves the current Drawing/Animation workspace.
