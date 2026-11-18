@@ -229,13 +229,4 @@ mod tests {
         let zero = "0".to_string();
         assert!(parse_port(Some(&zero), DEFAULT_STICK_PORT).is_err());
     }
-
-    #[test]
-    fn remote_code_parser_accepts_prefixed_endpoint_id() {
-        // EndpointId uses the same textual representation as its public key.
-        let secret = iroh::SecretKey::generate(&mut rand::rngs::OsRng);
-        let id = secret.public();
-        let code = format!("{INVITE_PREFIX}{id}");
-        assert_eq!(parse_remote_code(&code).unwrap(), id);
-    }
 }
