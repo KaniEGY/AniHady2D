@@ -1920,12 +1920,51 @@ impl StickApp {
                         }
                         ui.add_space(12.0);
                         ui.separator();
+                        ui.group(|ui| {
+                            ui.strong(tr(lang,"Join via invitation","الدخول برابط دعوة"));
+                            ui.small(tr(lang,
+                                "Paste your friend's Stick invite. No room password is stored in the link.",
+                                "الصق رابط دعوة صاحبك. الرابط لا يحتوي على كلمة سر الغرفة."));
+                            ui.add(egui::TextEdit::singleline(&mut self.online_invite_input)
+                                .desired_width(390.0)
+                                .hint_text("stick://join?address=...&code=...&mode=drawing"));
+                            if ui.add_enabled(self.online_session.is_none(),
+                                egui::Button::new(tr(lang,"Join invitation","الدخول بالدعوة"))).clicked() {
+                                match online_invite::parse_invite(&self.online_invite_input) {
+                                    Ok(invite) => {
+                                        self.online_address=invite.address;
+                                        self.online_code_input=invite.code;
+                                        self.online_mode=if invite.animation {
+                                            OnlineMode::Animation
+                                        } else {OnlineMode::Drawing};
+                                        let nickname=self.user_profile.username.trim().to_owned();
+                                        let level=self.user_profile.get_level_progress().0;
+                                        match OnlineSession::join_room(self.online_address.clone(),
+                                            self.online_password.clone(),
+                                            if nickname.is_empty() {"Artist".into()} else {nickname},
+                                            level,self.online_mode) {
+                                            Ok(session) => {
+                                                self.online_session=Some(session);
+                                                self.online_message=tr(lang,
+                                                    "Connecting using invite...","جاري الاتصال برابط الدعوة...").into();
+                                            }
+                                            Err(error)=>self.online_message=error,
+                                        }
+                                    }
+                                    Err(reason)=>self.online_message=reason.into(),
+                                }
+                            }
+                            ui.small(tr(lang,
+                                "An invitation requires a reachable host. LAN, authorized private networks or public IPv4 with port forwarding are supported; this is not a global relay.",
+                                "لازم عنوان الهوست يكون قابل للوصول. LAN أو شبكة خاصة مسموحة أو IP عام مع فتح البورت؛ الدعوة مش سيرفر وسيط عالمي."));
+                        });
+                        ui.add_space(10.0);
                         ui.strong(tr(lang,"Join directly","الدخول المباشر"));
                         ui.small(tr(lang,
                             "Enter the host's 100.x.x.x:47554 (Tailscale) or LAN IP. A room code alone isn't a global invite.",
                             "حط عنوان الهوست 100.x.x.x:47554 من Tailscale، أو عنوانه على نفس الشبكة."));
                         ui.add(egui::TextEdit::singleline(&mut self.online_address)
-                            .desired_width(325.0).hint_text("100.74.20.10:47554"));
+                            .desired_width(325.0).hint_text("192.168.1.5:47554 / host.example.com:47554"));
                         ui.add(egui::TextEdit::singleline(&mut self.online_password).password(true)
                             .desired_width(325.0).hint_text(tr(lang,
                                 "Password (only if required)","كلمة السر (لو موجودة)")));
@@ -1972,6 +2011,14 @@ impl StickApp {
                                 }
                             });
                             ui.hyperlink_to("Tailscale", "https://tailscale.com/download");
+                            ui.separator();
+                            ui.strong(tr(lang,
+                                "Alternative private network: ZeroTier",
+                                "شبكة خاصة بديلة: ZeroTier"));
+                            ui.small(tr(lang,
+                                "If both PCs join the same authorized ZeroTier network, enter the host's assigned IPv4 in Direct Join or in an invite. This is optional and LAN/Tailscale still work.",
+                                "لو الجهازين على نفس شبكة ZeroTier المصرح بيها، استخدم IPv4 الخاص بالهوست في الدخول المباشر أو رابط الدعوة. LAN وTailscale مستمرين."));
+                            ui.hyperlink_to("ZeroTier","https://www.zerotier.com/download/");
                             ui.small(tr(lang,
                                 "The host must keep Stick open; both devices must be permitted to reach each other. TCP 47554 must be allowed in the host firewall. Do not disable the firewall.",
                                 "لازم صاحب الغرفة يسيب Stick شغال، والأجهزة تكون مسموح لها تتواصل. اسمح لـStick ببورت TCP 47554 في جدار حماية الهوست، من غير تعطيل الحماية."));
