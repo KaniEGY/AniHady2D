@@ -4085,6 +4085,64 @@ impl eframe::App for StickApp {
                             tr(lang, "Show Grid", "إظهار شبكة الرسم")).changed() {
                             self.config.save();
                         }
+                        let mut appearance_changed = false;
+                        egui::CollapsingHeader::new(tr(lang, "Canvas Appearance", "مظهر الكانفا"))
+                            .default_open(true).show(ui, |ui| {
+                            let a = &mut self.config.canvas_appearance;
+                            ui.small(tr(lang,
+                                "Editor appearance only; excluded from exported artwork.",
+                                "شكل العرض داخل البرنامج فقط، مش بيتضاف للرسومات المصدّرة."));
+                            if ui.checkbox(&mut a.border_visible,
+                                tr(lang,"Show canvas border","إظهار حدود الكانفا")).changed() {
+                                appearance_changed = true;
+                            }
+                            ui.horizontal(|ui| {
+                                ui.label(tr(lang,"Border color","لون الحدود"));
+                                if ui.color_edit_button_srgba_unmultiplied(&mut a.border_color).changed() {
+                                    appearance_changed = true;
+                                }
+                            });
+                            if ui.add(egui::Slider::new(&mut a.border_width,0.5..=12.0)
+                                .text(tr(lang,"Border thickness","سُمك الحدود"))).changed() {
+                                appearance_changed = true;
+                            }
+                            if ui.add(egui::Slider::new(&mut a.corner_radius,0.0..=64.0)
+                                .text(tr(lang,"Display corner radius","استدارة زوايا العرض"))).changed() {
+                                appearance_changed = true;
+                            }
+                            if ui.checkbox(&mut a.shadow_enabled,
+                                tr(lang,"Canvas drop shadow","ظل خارجي")).changed() {
+                                appearance_changed = true;
+                            }
+                            ui.horizontal(|ui| {
+                                ui.label(tr(lang,"Workspace color","لون مساحة العمل"));
+                                if ui.color_edit_button_srgba_unmultiplied(&mut a.workspace_color).changed() {
+                                    appearance_changed = true;
+                                }
+                            });
+                            let (preview,_) = ui.allocate_exact_size(egui::vec2(236.0,116.0),
+                                egui::Sense::hover());
+                            ui.painter().rect_filled(preview,4.0,a.workspace_paint());
+                            let paper = preview.shrink2(egui::vec2(23.0,16.0));
+                            let rounding = (a.corner_radius * 0.5).clamp(0.0,25.0);
+                            if a.shadow_enabled {
+                                ui.painter().rect_filled(paper.translate(egui::vec2(4.0,5.0)),
+                                    rounding,egui::Color32::from_black_alpha(100));
+                            }
+                            ui.painter().rect_filled(paper,rounding,egui::Color32::from_rgb(244,245,249));
+                            if a.border_visible {
+                                let c=a.border_color;
+                                ui.painter().rect_stroke(paper,rounding,
+                                    egui::Stroke::new(a.width(),
+                                        egui::Color32::from_rgba_unmultiplied(c[0],c[1],c[2],c[3])));
+                            }
+                            if ui.button(tr(lang,"Restore canvas appearance defaults",
+                                "استعادة مظهر الكانفا الافتراضي")).clicked() {
+                                *a=canvas_appearance::CanvasAppearance::default();
+                                appearance_changed=true;
+                            }
+                        });
+                        if appearance_changed { self.config.save(); }
                         ui.horizontal(|ui| {
                             ui.label(tr(lang, "Auto-Save Every (minutes)", "الحفظ التلقائي كل كام دقيقة"));
                             if ui.add(egui::DragValue::new(&mut self.config.autosave_interval_minutes)
@@ -5076,11 +5134,31 @@ impl eframe::App for StickApp {
                     });
                 ui.separator();
                 ui.strong(tr(lang,"Custom canvas size","مقاس مخصص"));
+                if ui.checkbox(&mut self.config.canvas_aspect_lock,
+                    tr(lang,"Lock aspect ratio","قفل نسبة الأبعاد")).changed() {
+                    if self.config.canvas_aspect_lock {
+                        self.config.canvas_locked_aspect_ratio =
+                            self.canvas_width_edit as f32 / self.canvas_height_edit.max(1) as f32;
+                    }
+                    self.config.save();
+                }
                 ui.horizontal(|ui| {
                     ui.label(tr(lang,"Width","العرض"));
-                    ui.add(egui::DragValue::new(&mut self.canvas_width_edit).range(16..=8192).speed(1.0));
+                    let width_changed = ui.add(egui::DragValue::new(
+                        &mut self.canvas_width_edit).range(16..=8192).speed(1.0)).changed();
                     ui.label(tr(lang,"Height","الارتفاع"));
-                    ui.add(egui::DragValue::new(&mut self.canvas_height_edit).range(16..=8192).speed(1.0));
+                    let height_changed = ui.add(egui::DragValue::new(
+                        &mut self.canvas_height_edit).range(16..=8192).speed(1.0)).changed();
+                    if self.config.canvas_aspect_lock {
+                        let ratio = self.config.canvas_locked_aspect_ratio;
+                        if width_changed {
+                            self.canvas_height_edit = canvas_sizes::paired_dimension(
+                                self.canvas_width_edit,true,ratio);
+                        } else if height_changed {
+                            self.canvas_width_edit = canvas_sizes::paired_dimension(
+                                self.canvas_height_edit,false,ratio);
+                        }
+                    }
                 });
                 let valid = canvas_sizes::validate_canvas_size(
                     self.canvas_width_edit,self.canvas_height_edit).is_ok();
@@ -5342,7 +5420,37 @@ impl eframe::App for StickApp {
         });
         }
         if let Some((width,height)) = canvas_resize_request {
-            self.apply_canvas_size(width,height);
+            if canvas_sizes::may_hide_artwork(
+                self.project.width,self.project.height,width,height) {
+                self.pending_canvas_resize=Some((width,height));
+            } else {
+                self.apply_canvas_size(width,height);
+            }
+        }
+        if let Some((width,height))=self.pending_canvas_resize {
+            let mut decision=None;
+            egui::Window::new(tr(lang,"Confirm canvas resize","تأكيد تغيير مقاس الكانفا"))
+                .collapsible(false).resizable(false)
+                .anchor(egui::Align2::CENTER_CENTER,[0.0,0.0])
+                .show(ctx,|ui| {
+                    ui.label(tr(lang,
+                        "A smaller canvas may hide artwork outside its bounds. No strokes are deleted.",
+                        "المقاس الأصغر ممكن يخفي أجزاء خارج حدود اللوحة، لكن الرسم مش هيتمسح."));
+                    ui.label(format!("{} × {}  →  {} × {}",
+                        self.project.width,self.project.height,width,height));
+                    ui.horizontal(|ui| {
+                        if ui.button(tr(lang,"Cancel","إلغاء")).clicked() {
+                            decision=Some(false);
+                        }
+                        if ui.button(tr(lang,"Apply with Undo","تطبيق مع إمكانية التراجع")).clicked() {
+                            decision=Some(true);
+                        }
+                    });
+                });
+            if let Some(confirm)=decision {
+                self.pending_canvas_resize=None;
+                if confirm {self.apply_canvas_size(width,height);}
+            }
         }
         if let Some(idx) = dock_visibility_toggle {
             self.save_undo_state();
