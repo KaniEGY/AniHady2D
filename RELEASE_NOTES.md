@@ -21,6 +21,7 @@
 - **Known boundaries:** bucket fill operates on recognized closed stroke contours (now with improved near-closure tolerance), not arbitrary raster flood fill. Imported artwork/text still needs further parity tests for every transform. No Krita GPL code is copied into Stick.
 
 ### What's new
+- **Official website groundwork:** added a responsive static Stick Studio homepage, Google API privacy policy, and terms of use under `docs/`. GitHub Pages activation and verified-domain production OAuth branding remain separate owner-controlled steps; no public site URL is claimed live yet.
 - **Arabic support window fix:** donation copy now uses properly ordered, manually wrapped right-aligned Arabic lines, with corrected colloquial spelling and separated emojis to prevent Unicode bidi wrapping errors.
 - **Download progress:** verified GitHub releases now show a real download progress bar, completed percent, and transferred/total megabytes before SHA-256 verification and restart.
 - **Top-bar feedback:** the blue Feedback label now opens the same in-app Instagram / GitHub report dialog as the launcher.
@@ -107,6 +108,7 @@
 - Added an unsaved-work guard to avoid restarting with an unfinished project.
 
 ## العربية (المصري)
+- **تجهيز موقع Stick Studio:** ضفنا صفحات رسمية للبرنامج وسياسة الخصوصية وشروط الاستخدام داخل `docs/`. تفعيل GitHub Pages وتوثيق الدومين للنشر العام على Google خطوات منفصلة، والموقع مش بنعتبره منشور قبل التأكد.
 - **تجهيز تسجيل Google:** أضفنا معرّف OAuth العام الخاص بـStick Studio في إصدارات ويندوز، مع إصلاح الإعدادات القديمة الفارغة أو غير الصحيحة. ما زال Google في وضع Testing، ولا نعتبر تسجيل الدخول والنسخ السحابي مختبرين عمليًا قبل تجارب أجهزة ويندوز.
 
 ### المشاكل اللي اتصلحت
