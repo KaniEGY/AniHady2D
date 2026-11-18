@@ -465,10 +465,7 @@ impl OnlineSession {
         let address = if address.starts_with('[') {
             if address.ends_with(']') { format!("{}:{}", address, TCP_PORT) } else { address }
         } else if address.contains(':') { address } else { format!("{}:{}", address, TCP_PORT) };
-        let addrs: Vec<SocketAddr> = address.to_socket_addrs()
-            .map_err(|_| format!("Cannot resolve host address: {address}"))?
-            .take(8).collect();
-        if addrs.is_empty() { return Err("No IP addresses found for this host".into()); }
+        // Resolve DNS inside the connection worker, never block egui's event loop.
         let guest_password = password.clone();
         let (event_tx, event_rx) = mpsc::channel();
         let (out_tx, out_rx) = mpsc::channel();
@@ -478,6 +475,10 @@ impl OnlineSession {
         let worker_wake = cursor_wake.clone();
         thread::spawn(move || {
             let result = (|| -> Result<(), String> {
+                let addrs: Vec<SocketAddr> = address.to_socket_addrs()
+                    .map_err(|_| format!("Cannot resolve host address: {address}"))?
+                    .take(8).collect();
+                if addrs.is_empty() { return Err("No IP addresses found for this host".into()); }
                 let mut retry_count = 0;
                 let mut stream = loop {
                     let mut connected = None;
