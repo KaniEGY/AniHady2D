@@ -238,17 +238,31 @@ enum AppLang {
     Arabic,
 }
 
+fn mirror_rtl_punctuation(text: &str) -> String {
+    text.chars().map(|c| match c {
+        '(' => ')', ')' => '(',
+        '[' => ']', ']' => '[',
+        '{' => '}', '}' => '{',
+        '<' => '>', '>' => '<',
+        '«' => '»', '»' => '«',
+        _ => c,
+    }).collect()
+}
+
 fn fix_ar(text: &str) -> String {
     if !text.chars().any(|c| ('\u{0600}'..='\u{06FF}').contains(&c)) {
         return text.to_string();
     }
     // Shape each line independently: a multiline TextItem must not lose
-    // right-to-left ordering after the first paragraph.
+    // right-to-left ordering after the first paragraph. unicode-bidi's
+    // reorder_line intentionally leaves UAX#9 rule L4 (paired punctuation
+    // mirroring) to the renderer, so apply the common mirrored pairs here.
     text.split('\n').map(|line| {
         let reshaped = arabic_reshape(line);
         let bidi_info = BidiInfo::new(&reshaped, None);
         if let Some(para) = bidi_info.paragraphs.first() {
-            bidi_info.reorder_line(para, para.range.clone()).into_owned()
+            let visual = bidi_info.reorder_line(para, para.range.clone()).into_owned();
+            if para.level.is_rtl() { mirror_rtl_punctuation(&visual) } else { visual }
         } else {
             reshaped
         }
@@ -781,9 +795,21 @@ fn generate_stick_window_icon() -> egui::IconData {
 
 fn setup_custom_fonts(ctx: &egui::Context) {
     let mut fonts = egui::FontDefinitions::default();
-    if let Ok(font_data) = std::fs::read("C:\\Windows\\Fonts\\tahoma.ttf") {
-        fonts.font_data.insert("arabic_font".to_owned(), egui::FontData::from_owned(font_data));
-        fonts.families.entry(egui::FontFamily::Proportional).or_default().insert(0, "arabic_font".to_owned());
+    let mut preferred = Vec::new();
+    for (name, path) in [
+        ("arabic_font", "C:\\Windows\\Fonts\\tahoma.ttf"),
+        ("emoji_font", "C:\\Windows\\Fonts\\seguiemj.ttf"),
+        ("symbol_font", "C:\\Windows\\Fonts\\seguisym.ttf"),
+        ("ui_fallback", "C:\\Windows\\Fonts\\segoeui.ttf"),
+    ] {
+        if let Ok(font_data) = std::fs::read(path) {
+            fonts.font_data.insert(name.to_owned(), egui::FontData::from_owned(font_data));
+            preferred.push(name.to_owned());
+        }
+    }
+    let family = fonts.families.entry(egui::FontFamily::Proportional).or_default();
+    for (index, name) in preferred.into_iter().enumerate() {
+        family.insert(index.min(family.len()), name);
     }
     ctx.set_fonts(fonts);
 }
@@ -878,15 +904,6 @@ fn draw_home_icon(painter: &egui::Painter, rect: egui::Rect, hovered: bool) {
     painter.rect_filled(
         egui::Rect::from_min_max(c + egui::vec2(-1.7,3.0), c + egui::vec2(1.7,8.0)),
         0.5, col);
-}
-
-fn draw_hamburger_icon(painter: &egui::Painter, rect: egui::Rect, hovered: bool) {
-    let c = rect.center();
-    let col = if hovered { egui::Color32::WHITE } else { egui::Color32::from_gray(210) };
-    let stroke = egui::Stroke::new(2.2, col);
-    for y in [-6.0, 0.0, 6.0] {
-        painter.line_segment([c + egui::vec2(-8.0,y), c + egui::vec2(8.0,y)], stroke);
-    }
 }
 
 fn draw_support_heart_icon(painter: &egui::Painter, rect: egui::Rect, hovered: bool) {
@@ -1236,6 +1253,7 @@ struct StickApp {
     online_share_address: String,
     online_code_input: String,
     online_participants: Vec<Participant>,
+    pending_online_rename: Option<(u64, String)>,
     online_rooms: Vec<RoomListing>,
     online_discovery: Option<std::sync::mpsc::Receiver<collab::RoomSearchResult>>,
     online_remote_info: Option<remote_access::TailnetInfo>,
@@ -1403,6 +1421,7 @@ impl StickApp {
             online_share_address: String::new(),
             online_code_input: String::new(),
             online_participants: Vec::new(),
+            pending_online_rename: None,
             online_rooms: Vec::new(),
             online_discovery: None,
             online_remote_info: None,
@@ -5061,20 +5080,48 @@ impl eframe::App for StickApp {
                                 [240,186,54], [229,98,184], [76,200,210], [248,102,135],
                             ];
                             for participant in self.online_participants.clone() {
-                                ui.horizontal(|ui| {
+                                let member_row = ui.horizontal(|ui| {
                                     let color = egui::Color32::from_rgb(
                                         participant.color[0], participant.color[1], participant.color[2]);
                                     ui.colored_label(color, format!("● {}  Lv.{}",
                                         participant.name, participant.level));
                                     if participant.id == 0 {
                                         ui.small(tr(lang, "HOST", "الهوست"));
-                                    } else if ui.small_button(tr(lang, "Kick", "طرد")).clicked() {
-                                        if let Err(err) = session.kick_member(participant.id) {
-                                            self.online_message = err;
-                                        }
-                                        ui.close_menu();
+                                    } else {
+                                        ui.small(tr(lang, "Right-click for permissions", "كلك يمين للصلاحيات"));
                                     }
-                                });
+                                }).response;
+                                if participant.id != 0 {
+                                    member_row.context_menu(|ui| {
+                                        ui.strong(&participant.name);
+                                        if ui.button(tr(lang, "Rename nickname...", "تغيير الاسم المستعار...")).clicked() {
+                                            self.pending_online_rename =
+                                                Some((participant.id, participant.name.clone()));
+                                            ui.close_menu();
+                                        }
+                                        ui.menu_button(tr(lang, "Change tool color", "تغيير لون الأدوات"), |ui| {
+                                            for rgb in palette {
+                                                let swatch = egui::Color32::from_rgb(rgb[0],rgb[1],rgb[2]);
+                                                let (rect, click) = ui.allocate_exact_size(
+                                                    egui::vec2(24.0,20.0),egui::Sense::click());
+                                                ui.painter().rect_filled(rect,3.0,swatch);
+                                                if click.clicked() {
+                                                    if let Err(err)=session.change_member_color(participant.id,rgb) {
+                                                        self.online_message=err;
+                                                    }
+                                                    ui.close_menu();
+                                                }
+                                            }
+                                        });
+                                        ui.separator();
+                                        if ui.button(tr(lang, "Kick from room", "طرد من الغرفة")).clicked() {
+                                            if let Err(err)=session.kick_member(participant.id) {
+                                                self.online_message=err;
+                                            }
+                                            ui.close_menu();
+                                        }
+                                    });
+                                }
                                 ui.horizontal_wrapped(|ui| {
                                     ui.small(tr(lang, "Tool color:", "لون الأدوات:"));
                                     for rgb in palette {
@@ -5123,6 +5170,41 @@ impl eframe::App for StickApp {
                 self.workspace_mode = WorkspaceMode::Launcher;
             }
         }
+        if let Some((member_id, mut draft)) = self.pending_online_rename.clone() {
+            let mut open = true;
+            let mut apply = false;
+            let mut cancel = false;
+            egui::Window::new(tr(lang, "Rename room participant", "تغيير اسم عضو الغرفة"))
+                .collapsible(false).resizable(false).movable(true)
+                .default_width(330.0).open(&mut open).show(ctx, |ui| {
+                    ui.add(egui::TextEdit::singleline(&mut draft)
+                        .desired_width(f32::INFINITY).char_limit(40));
+                    ui.horizontal(|ui| {
+                        if ui.button(tr(lang, "Apply", "تطبيق")).clicked() { apply = true; }
+                        if ui.button(tr(lang, "Cancel", "إلغاء")).clicked() { cancel = true; }
+                    });
+                });
+            if apply {
+                let result = self.online_session.as_ref()
+                    .ok_or_else(|| "Room is no longer active".to_string())
+                    .and_then(|session| session.change_member_name(member_id, draft.clone()));
+                match result {
+                    Ok(()) => {
+                        self.online_message = tr(lang, "Nickname updated.", "تم تغيير الاسم المستعار.");
+                        self.pending_online_rename = None;
+                    }
+                    Err(err) => {
+                        self.online_message = err;
+                        self.pending_online_rename = Some((member_id, draft));
+                    }
+                }
+            } else if cancel || !open {
+                self.pending_online_rename = None;
+            } else {
+                self.pending_online_rename = Some((member_id, draft));
+            }
+        }
+
         // Compact command bar: navigation stays visible while secondary
         // commands live in one hamburger instead of consuming canvas width.
         if self.config.show_top_bar {
@@ -7657,6 +7739,13 @@ mod tool_discovery_tests {
         assert_eq!(resolve_saved_google_client_id("not-a-client"), client);
         let custom = "1234-abc.apps.googleusercontent.com";
         assert_eq!(resolve_saved_google_client_id(custom), custom);
+    }
+
+    #[test]
+    fn rtl_punctuation_mirroring_covers_common_brackets() {
+        assert_eq!(mirror_rtl_punctuation("()[]{}<>«»"), ")(][}{><»«");
+        let rendered = fix_ar("اختبار (نص)");
+        assert!(rendered.contains('(') && rendered.contains(')'));
     }
 
     #[test]
