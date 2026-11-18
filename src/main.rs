@@ -832,6 +832,37 @@ fn get_tool_ui_color(tool: ActiveToolUI) -> egui::Color32 {
     }
 }
 
+// Distinct painted visibility/lock icons avoid ambiguous empty-square glyphs
+// in the timeline and on the right layer dock (including RTL layouts).
+fn draw_layer_status_icon(painter: &egui::Painter, rect: egui::Rect, visible: bool, visibility_icon: bool) {
+    let p = rect.center();
+    let col = if visible { egui::Color32::from_rgb(136, 217, 247) }
+        else { egui::Color32::from_gray(133) };
+    let stroke = egui::Stroke::new(1.8, col);
+    if visibility_icon {
+        painter.add(egui::Shape::line(vec![
+            p + egui::vec2(-9.0,0.0), p + egui::vec2(-5.0,-4.2),
+            p + egui::vec2(0.0,-5.7), p + egui::vec2(5.0,-4.2),
+            p + egui::vec2(9.0,0.0), p + egui::vec2(5.0,4.2),
+            p + egui::vec2(0.0,5.7), p + egui::vec2(-5.0,4.2),
+            p + egui::vec2(-9.0,0.0)], stroke));
+        painter.circle_stroke(p, 2.7, stroke);
+        if !visible {
+            painter.line_segment([p+egui::vec2(-10.0,8.0),p+egui::vec2(10.0,-8.0)],
+                egui::Stroke::new(2.2,egui::Color32::from_rgb(237,130,132)));
+        }
+    } else {
+        let body = egui::Rect::from_center_size(p+egui::vec2(0.0,4.0),egui::vec2(15.0,11.0));
+        painter.rect_filled(body,2.0,col);
+        painter.circle_filled(p+egui::vec2(0.0,4.0),1.5,egui::Color32::from_rgb(30,36,46));
+        let x = if visible {0.0} else {5.0};
+        painter.add(egui::Shape::line(vec![
+            p+egui::vec2(x-5.0,-1.0),p+egui::vec2(x-5.0,-6.0),
+            p+egui::vec2(x,-8.5),p+egui::vec2(x+5.0,-6.0),
+            p+egui::vec2(x+5.0,-1.0)],egui::Stroke::new(2.0,col)));
+    }
+}
+
 // Cohesive two-tone vector icons adapted to the colorful toolbar reference.
 // They stay crisp at high-DPI scaling and at the smaller mouse-cursor size.
 fn draw_tool_ui_icon(painter: &egui::Painter, rect: egui::Rect, tool: ActiveToolUI, active: bool) {
@@ -4650,6 +4681,9 @@ impl eframe::App for StickApp {
         // Split dock: tools keep their own scrolling upper section; layers
         // remain in a dedicated lower section, like a painting editor.
         let mut layer_menu_action: Option<(usize, layer_ops::LayerAction)> = None;
+        let mut dock_visibility_toggle: Option<usize> = None;
+        let mut dock_lock_toggle: Option<usize> = None;
+        let mut canvas_resize_request: Option<(u32,u32)> = None;
         let mut copy_layer_index: Option<usize> = None;
         let mut paste_layer_index: Option<usize> = None;
         let mut rename_layer_index: Option<usize> = None;
@@ -4675,6 +4709,51 @@ impl eframe::App for StickApp {
                     egui::ScrollArea::vertical().id_salt("tool_properties_scroll")
                         .auto_shrink([false, false]).show(ui, |ui| {
                             self.render_tool_properties_ui(ui, lang);
+            ui.add_space(10.0);
+            ui.separator();
+            egui::CollapsingHeader::new(tr(lang, "Canvas Size Mode / Presets", "مقاسات مود • الكانفا"))
+                .default_open(false).show(ui, |ui| {
+                ui.label(egui::RichText::new(format!("{} × {} px", self.project.width, self.project.height))
+                    .strong().color(egui::Color32::from_rgb(130,209,250)));
+                ui.small(tr(lang,
+                    "Preset sizes change the canvas bounds without stretching existing artwork.",
+                    "المقاسات بتغيّر حدود الكانفا بدون شدّ أو تشويه الرسومات القديمة."));
+                egui::ScrollArea::vertical().id_salt("canvas_sizes_presets").max_height(178.0)
+                    .show(ui, |ui| {
+                        for preset in canvas_sizes::PRESETS {
+                            let text = format!("{}  ·  {} × {}", tr(lang,preset.name_en,preset.name_ar),
+                                preset.width,preset.height);
+                            if ui.add_sized([ui.available_width().min(340.0),27.0],
+                                egui::Button::new(text)).clicked() {
+                                canvas_resize_request = Some((preset.width,preset.height));
+                            }
+                        }
+                    });
+                ui.separator();
+                ui.strong(tr(lang,"Custom canvas size","مقاس مخصص"));
+                ui.horizontal(|ui| {
+                    ui.label(tr(lang,"Width","العرض"));
+                    ui.add(egui::DragValue::new(&mut self.canvas_width_edit).range(16..=8192).speed(1.0));
+                    ui.label(tr(lang,"Height","الارتفاع"));
+                    ui.add(egui::DragValue::new(&mut self.canvas_height_edit).range(16..=8192).speed(1.0));
+                });
+                let valid = canvas_sizes::validate_canvas_size(
+                    self.canvas_width_edit,self.canvas_height_edit).is_ok();
+                if !valid {
+                    ui.colored_label(egui::Color32::from_rgb(255,168,110),
+                        tr(lang,"Maximum 16 megapixels","الحد الأقصى 16 ميجابكسل"));
+                }
+                ui.horizontal(|ui| {
+                    if ui.add_enabled(valid,egui::Button::new(
+                        tr(lang,"Apply size","تطبيق المقاس"))).clicked() {
+                        canvas_resize_request = Some((self.canvas_width_edit,self.canvas_height_edit));
+                    }
+                    if ui.small_button(tr(lang,"Use current","نسخ المقاس الحالي")).clicked() {
+                        self.canvas_width_edit=self.project.width;
+                        self.canvas_height_edit=self.project.height;
+                    }
+                });
+            });
             ui.add_space(8.0);
             ui.separator();
             egui::CollapsingHeader::new(tr(lang, "Colors", "الألوان"))
@@ -4826,14 +4905,17 @@ impl eframe::App for StickApp {
                         ui.painter().circle_stroke(inner.center(), 5.0,
                             egui::Stroke::new(1.0, egui::Color32::from_gray(150)));
                     }
-                    if ui.checkbox(&mut layer.visible, "")
-                        .on_hover_text(tr(lang, "Show or hide layer", "أظهر أو اخفي اللير")).changed() {
-                        self.has_unsaved_changes = true;
+                    let (eye_rect, eye_resp) = ui.allocate_exact_size(
+                        egui::vec2(27.0,27.0),egui::Sense::click());
+                    draw_layer_status_icon(ui.painter(),eye_rect,layer.visible,true);
+                    if eye_resp.on_hover_text(tr(lang, "Show or hide layer", "أظهر أو اخفي اللير")).clicked() {
+                        dock_visibility_toggle = Some(idx);
                     }
-                    if ui.small_button(if layer.locked { "🔒" } else { "🔓" })
-                        .on_hover_text(tr(lang, "Lock or unlock layer", "اقفل أو افتح قفل اللير")).clicked() {
-                        layer.locked = !layer.locked;
-                        self.has_unsaved_changes = true;
+                    let (lock_rect, lock_resp) = ui.allocate_exact_size(
+                        egui::vec2(27.0,27.0),egui::Sense::click());
+                    draw_layer_status_icon(ui.painter(),lock_rect,layer.locked,false);
+                    if lock_resp.on_hover_text(tr(lang, "Lock or unlock layer", "اقفل أو افتح قفل اللير")).clicked() {
+                        dock_lock_toggle = Some(idx);
                     }
                     let layer_response = ui.vertical(|ui| {
                         let response = ui.selectable_label(selected_row,
@@ -4912,6 +4994,23 @@ impl eframe::App for StickApp {
                 }
                 }); // scrollable layer dock
         });
+        }
+        if let Some((width,height)) = canvas_resize_request {
+            self.apply_canvas_size(width,height);
+        }
+        if let Some(idx) = dock_visibility_toggle {
+            self.save_undo_state();
+            if let Some(layer) = self.project.layers.get_mut(idx) {
+                layer.visible=!layer.visible;
+                self.has_unsaved_changes=true;
+            }
+        }
+        if let Some(idx) = dock_lock_toggle {
+            self.save_undo_state();
+            if let Some(layer) = self.project.layers.get_mut(idx) {
+                layer.locked=!layer.locked;
+                self.has_unsaved_changes=true;
+            }
         }
         if let Some(idx) = copy_layer_index {
             self.layer_clipboard = self.project.layers.get(idx).cloned();
@@ -4998,6 +5097,8 @@ impl eframe::App for StickApp {
         let mut timeline_seek = None;
         let mut timeline_visibility_toggle: Option<usize> = None;
         let mut timeline_lock_toggle: Option<usize> = None;
+        let mut timeline_layer_rename: Option<usize> = None;
+        let mut timeline_layer_action: Option<(usize,layer_ops::LayerAction)> = None;
         // شريط التايم لاين السفلي في وضع الأنيميشن
         if self.workspace_mode == WorkspaceMode::AnimationStudio && self.config.show_timeline_dock {
             // Explicit height and an interior drag grip prevent the timeline from
@@ -5151,20 +5252,42 @@ impl eframe::App for StickApp {
                         ui.horizontal(|ui| {
                             ui.allocate_ui(egui::vec2(label_w, row_h), |ui| {
                                 ui.horizontal(|ui| {
-                                    if ui.small_button(if layer.visible { "◉" } else { "○" })
-                                        .on_hover_text(tr(lang, "Toggle visibility", "إظهار أو إخفاء اللير"))
-                                        .clicked() { timeline_visibility_toggle = Some(l_idx); }
-                                    if ui.small_button(if layer.locked { "▣" } else { "▢" })
-                                        .on_hover_text(tr(lang, "Toggle layer lock", "قفل أو فتح اللير"))
-                                        .clicked() { timeline_lock_toggle = Some(l_idx); }
-                                    if ui.selectable_label(self.active_layer_idx == l_idx,
+                                    let (eye, eye_click) = ui.allocate_exact_size(
+                                        egui::vec2(25.0,26.0),egui::Sense::click());
+                                    draw_layer_status_icon(ui.painter(),eye,layer.visible,true);
+                                    if eye_click.on_hover_text(tr(lang,"Toggle visibility","إظهار أو إخفاء اللير"))
+                                        .clicked() { timeline_visibility_toggle=Some(l_idx); }
+                                    let (lock, lock_click) = ui.allocate_exact_size(
+                                        egui::vec2(25.0,26.0),egui::Sense::click());
+                                    draw_layer_status_icon(ui.painter(),lock,layer.locked,false);
+                                    if lock_click.on_hover_text(tr(lang,"Toggle layer lock","قفل أو فتح اللير"))
+                                        .clicked() { timeline_lock_toggle=Some(l_idx); }
+                                    let title = ui.selectable_label(self.active_layer_idx == l_idx,
                                         egui::RichText::new(&layer.name).strong().size(12.5)
                                             .color(if self.active_layer_idx == l_idx {
                                                 egui::Color32::from_rgb(113, 209, 255)
                                             } else { egui::Color32::WHITE }))
-                                        .on_hover_text(&layer.name).clicked() {
+                                        .on_hover_text(&layer.name);
+                                    if title.clicked() {
                                         timeline_seek = Some((l_idx, self.current_frame));
                                     }
+                                    title.context_menu(|ui| {
+                                        ui.strong(&layer.name);
+                                        ui.separator();
+                                        if ui.button(tr(lang,"Rename layer","تغيير اسم اللير")).clicked() {
+                                            timeline_layer_rename=Some(l_idx);
+                                            ui.close_menu();
+                                        }
+                                        if ui.button(tr(lang,"Duplicate layer","دبلكيت اللير")).clicked() {
+                                            timeline_layer_action=Some((l_idx,layer_ops::LayerAction::Duplicate));
+                                            ui.close_menu();
+                                        }
+                                        if ui.add_enabled(self.project.layers.len()>1 && !layer.locked,
+                                            egui::Button::new(tr(lang,"Delete layer","حذف اللير"))).clicked() {
+                                            timeline_layer_action=Some((l_idx,layer_ops::LayerAction::Delete));
+                                            ui.close_menu();
+                                        }
+                                    });
                                 });
                             });
                             let mut exposure = None;
@@ -5300,6 +5423,32 @@ impl eframe::App for StickApp {
             if let Some(layer) = self.project.layers.get_mut(idx) {
                 layer.locked = !layer.locked;
                 self.has_unsaved_changes = true;
+            }
+        }
+
+        if let Some(idx) = timeline_layer_rename {
+            if let Some(layer)=self.project.layers.get(idx) {
+                self.layer_rename_buffer=layer.name.clone();
+                self.layer_rename_index=Some(idx);
+                ctx.request_repaint();
+            }
+        }
+        if let Some((idx, action)) = timeline_layer_action {
+            if action == layer_ops::LayerAction::Delete {
+                self.pending_delete_layer=Some(idx);
+            } else {
+                self.save_undo_state();
+                match layer_ops::apply_layer_action(&mut self.project,idx,action) {
+                    Ok(selected) => {
+                        self.active_layer_idx=selected;
+                        self.clear_cel_selection();
+                        self.has_unsaved_changes=true;
+                    }
+                    Err(reason) => {
+                        self.undo_stack.pop();
+                        self.status_message=reason.to_string();
+                    }
+                }
             }
         }
 
