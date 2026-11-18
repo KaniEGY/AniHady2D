@@ -5025,6 +5025,19 @@ impl eframe::App for StickApp {
                             });
                         }
                         ui.separator();
+                        for (en,ar,key) in [
+                            ("Quick color wheel","عجلة الألوان السريعة",self.config.quick_color_key.as_str()),
+                            ("Adjust tool size (hold + move mouse)","تغيير حجم الأداة (ضغط مطول + حركة الماوس)",self.config.size_gesture_key.as_str()),
+                            ("Adjust opacity (hold + move mouse)","تغيير الشفافية (ضغط مطول + حركة الماوس)",self.config.opacity_gesture_key.as_str()),
+                        ] {
+                            ui.horizontal(|ui| {
+                                ui.label(tr(lang,en,ar));
+                                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center),|ui|{
+                                    ui.monospace(key);
+                                });
+                            });
+                        }
+                        ui.separator();
                         ui.label(tr(lang, "Brush colors: right panel, under Colors. Onion Skin: Animation workspace, above the Timeline.", "الألوان: في اللوحة اليمنى تحت عنوان الألوان. عرض الفريمات المجاورة: في وضع الأنيميشن فوق التايم لاين."));
                     });
                     ui.separator();
@@ -5245,6 +5258,29 @@ impl eframe::App for StickApp {
                                     });
                                 });
                             }
+                            ui.separator();
+                            ui.strong(tr(lang,"Canvas quick controls","اختصارات التحكم السريع"));
+                            for (slot,en,ar,key) in [
+                                (100usize,"Quick color wheel","عجلة الألوان السريعة",self.config.quick_color_key.clone()),
+                                (101usize,"Adjust tool size (hold)","تغيير حجم الأداة بالضغط المطول",self.config.size_gesture_key.clone()),
+                                (102usize,"Adjust opacity (hold)","تغيير الشفافية بالضغط المطول",self.config.opacity_gesture_key.clone()),
+                            ] {
+                                ui.horizontal(|ui| {
+                                    ui.label(tr(lang,en,ar));
+                                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                        let is_listening=self.listening_shortcut_idx==Some(slot);
+                                        let caption=if is_listening {
+                                            tr(lang,"Press a key...","دوس أي زرار...").to_owned()
+                                        } else {format!("{}  ✎",key)};
+                                        if ui.button(caption).clicked() {
+                                            self.listening_shortcut_idx=Some(slot);
+                                        }
+                                    });
+                                });
+                            }
+                            ui.small(tr(lang,
+                                "Size and opacity shortcuts are hold gestures: keep the chosen key pressed and move the mouse.",
+                                "اختصار الحجم والشفافية ضغط مطول: خليك ضاغط الزرار المختار وحرّك الماوس."));
                         });
                         if ui.button(tr(lang, "Reset Keyboard Shortcuts", "رجّع اختصارات الكيبورد الأصلية")).clicked() {
                             let d = AppConfig::default();
@@ -5261,6 +5297,9 @@ impl eframe::App for StickApp {
                             self.config.tool_text = d.tool_text;
                             self.config.tool_shape = d.tool_shape;
                             self.config.tool_hand = d.tool_hand;
+                            self.config.quick_color_key = d.quick_color_key;
+                            self.config.size_gesture_key = d.size_gesture_key;
+                            self.config.opacity_gesture_key = d.opacity_gesture_key;
                             self.listening_shortcut_idx = None;
                             self.config.save();
                         }
