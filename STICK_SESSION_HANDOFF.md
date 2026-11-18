@@ -1,5 +1,13 @@
 # Stick Studio — Session Handoff / سجل استكمال المشروع
 
+## 18 November 2026 — pressure stroke stabilizer/resampler (PR pending)
+
+- Branch `feature/pressure-stroke-quality-20261118` from main build 213.
+- Reworked `src/stroke_geometry.rs` G-Pen pressure outline with bounded cross-track jitter reduction on gentle lines, path-distance resampling (24k sample limit), pressure interpolation, short miter limits at sharp corners and consistent round end caps.
+- Existing `brush_engine::visit_round_marks` shares this outline in egui preview and tiny-skia raster/video export. No .stick schema change, no alteration to stored points or reported tablet pressure.
+- Unit tests cover long fast lines, intentional corners, pressure width, duplicate/invalid points, circular paths and memory budgets.
+- **Not accepted yet:** Windows tests/Clippy/release build, real pen hardware, zoom/rotation, translucent anti-alias visual parity and long stroke performance should be checked before merging.
+
 ## 18 November 2026 — Canvas Appearance and Canvas Size Mode (PR pending)
 
 - Branch: `feature/canvas-appearance-sizes-20261118` from main build 213 (`fa5136795b6e6f14802ae2afeb661a2aba753dc9`).
