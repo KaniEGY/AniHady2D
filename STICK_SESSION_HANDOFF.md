@@ -1,5 +1,13 @@
 # Stick Studio — Session Handoff / سجل استكمال المشروع
 
+## 18 November 2026 — adaptive vector interpolation (PR pending)
+
+- Feature branch: `feature/vector-geometry-quality-20261118`, based on main SHA `fa5136795b6e6f14802ae2afeb661a2aba753dc9` (Windows build 213).
+- Changed `src/vector_path.rs`: adaptive subdivision (3–24 samples/segment), chord-weighted Hermite tangents, hard-corner preservation, duplicate point filtering, cyclic closed-path interpolation and safer square-cap extension.
+- Non-destructive geometry only: the .stick format and stored editable nodes are untouched. The existing preview and raster/video export call this shared path function.
+- Added unit tests for straight strokes, corners, closed loops, duplicates, invalid input, adaptive sampling and cap behavior.
+- The PR must pass GitHub Windows tests/Clippy/release build before merge. Physical pen, 4K/long-session performance, preview/export image diffs and Windows visual inspection are **not yet validated**. Do not claim a published build based on this branch.
+
 ## 18 November 2026 — imported media, audio timeline and bounded fill controls
 
 - Branch: `feature/media-audio-fill-studio-20261118`. This entry records work in progress until the Windows CI run passes and a merge/release is confirmed.
