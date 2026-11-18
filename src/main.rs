@@ -6258,11 +6258,18 @@ impl eframe::App for StickApp {
         let mut advanced_relocate_request: Option<(Vec<advanced_timeline::CelAddress>,i32,i32,advanced_timeline::RelocateMode)> = None;
         let mut audio_move_request: Option<(usize, usize)> = None;
         let mut audio_drag_started = false;
+        let mut audio_clip_action: Option<(usize,bool)> = None; // true=duplicate, false=delete
+        let mut video_move_request: Option<(usize, usize)> = None;
+        let mut video_drag_started = false;
+        let mut video_clip_action: Option<(usize,bool)> = None;
         let mut timeline_seek = None;
         if !pointer_down {
             self.audio_drag_origin=None;
             self.audio_drag_pointer_x=None;
             self.audio_drag_undo_captured=false;
+            self.video_drag_origin=None;
+            self.video_drag_pointer_x=None;
+            self.video_drag_undo_captured=false;
             self.timeline_scrub_active=false;
         }
         let mut timeline_visibility_toggle: Option<usize> = None;
@@ -6509,8 +6516,8 @@ impl eframe::App for StickApp {
                                     || !fd.media_items.is_empty() || !fd.text_items.is_empty()
                                     || !fd.symbol_instances.is_empty());
                                 let tw = eff.map(|fd| fd.tween_mode).unwrap_or(TweenMode::None);
-                                let (cr, cresp) = ui.allocate_exact_size(egui::vec2(cell_w, row_h),
-                                    if advanced {egui::Sense::click_and_drag()} else {egui::Sense::click()});
+                                let (cr, cresp) = ui.allocate_exact_size(
+                                    egui::vec2(cell_w,row_h),egui::Sense::click_and_drag());
                                 let cell = self.config.timeline_cell_color;
                                 let accent = self.config.ui_accent_color;
                                 let bg = if self.active_layer_idx == l_idx && self.current_frame == f {
@@ -6563,16 +6570,17 @@ impl eframe::App for StickApp {
                                         self.advanced_selected_cels.clear();
                                     }
                                 }
-                                if advanced && is_kf && !layer.locked && cresp.drag_stopped() {
+                                if is_kf && !layer.locked && cresp.drag_stopped() {
                                     let drag=cresp.drag_delta();
                                     let dx=(drag.x/cell_w).round() as i32;
-                                    let dy=(drag.y/row_h).round() as i32;
+                                    let dy=if advanced {(drag.y/row_h).round() as i32} else {0};
                                     if dx!=0 || dy!=0 {
                                         let cell=advanced_timeline::CelAddress{layer:l_idx,frame:f};
-                                        let selection=if self.advanced_selected_cels.contains(&cell) {
+                                        let selection=if advanced
+                                            && self.advanced_selected_cels.contains(&cell) {
                                             self.advanced_selected_cels.clone()
                                         } else {vec![cell]};
-                                        let mode=if ui.input(|input|input.modifiers.alt) {
+                                        let mode=if advanced && ui.input(|input|input.modifiers.alt) {
                                             advanced_timeline::RelocateMode::Copy
                                         } else {advanced_timeline::RelocateMode::Move};
                                         advanced_relocate_request=Some((selection,dy,dx,mode));
@@ -6636,6 +6644,94 @@ impl eframe::App for StickApp {
                             }
                         });
                     }
+                    // Imported videos get a dedicated clip lane while their decoded
+                    // frames remain stored in the existing video layer for compatibility.
+                    for (video_layer, layer) in self.project.layers.iter().enumerate() {
+                        let Some((video_start,video_end))=Self::video_layer_range(layer) else {continue};
+                        ui.horizontal(|ui| {
+                            ui.allocate_ui(egui::vec2(label_w,row_h),|ui| {
+                                let active=self.active_layer_idx==video_layer
+                                    && self.selected_media_idx.is_some();
+                                let response=ui.selectable_label(active,
+                                    egui::RichText::new(format!("🎬 {}",layer.name))
+                                        .color(if active {egui::Color32::from_rgb(255,184,102)}
+                                            else {egui::Color32::from_rgb(229,192,145)}));
+                                if response.clicked() {
+                                    self.active_layer_idx=video_layer;
+                                    self.selected_media_idx=Some(0);
+                                    self.selected_audio_idx=None;
+                                    self.right_panel_tab=2;
+                                    self.config.show_right_dock=true;
+                                }
+                                response.context_menu(|ui| {
+                                    if ui.button(tr(lang,"Duplicate video","دبلكيت الفيديو")).clicked() {
+                                        video_clip_action=Some((video_layer,true));ui.close_menu();
+                                    }
+                                    if ui.button(tr(lang,"Delete video","حذف الفيديو")).clicked() {
+                                        video_clip_action=Some((video_layer,false));ui.close_menu();
+                                    }
+                                });
+                            });
+                            let lane_width=cell_w*cols as f32;
+                            let (rect,resp)=ui.allocate_exact_size(
+                                egui::vec2(lane_width,row_h),egui::Sense::click_and_drag());
+                            ui.painter().rect_filled(rect,3.0,egui::Color32::from_rgb(39,34,31));
+                            let left=rect.left()+(video_start.saturating_sub(1) as f32)*cell_w;
+                            let right=rect.left()+(video_end.min(cols) as f32)*cell_w;
+                            if right>left && left<rect.right() {
+                                let clip=egui::Rect::from_min_max(
+                                    egui::pos2(left.max(rect.left()),rect.top()+2.0),
+                                    egui::pos2(right.min(rect.right()),rect.bottom()-2.0));
+                                let selected=self.active_layer_idx==video_layer
+                                    && self.selected_media_idx.is_some();
+                                ui.painter().rect_filled(clip,4.0,
+                                    if selected {egui::Color32::from_rgb(143,84,28)}
+                                    else {egui::Color32::from_rgb(91,60,32)});
+                                ui.painter().rect_stroke(clip,4.0,
+                                    egui::Stroke::new(1.0,egui::Color32::from_rgb(242,165,83)));
+                                ui.painter().text(clip.left_center()+egui::vec2(7.0,0.0),
+                                    egui::Align2::LEFT_CENTER,
+                                    format!("{}–{}",video_start,video_end),
+                                    egui::FontId::monospace(10.0),egui::Color32::WHITE);
+                                if pointer_pressed && pointer_pos.is_some_and(|p|clip.contains(p)) {
+                                    self.video_drag_origin=Some((video_layer,video_start));
+                                    self.video_drag_pointer_x=pointer_pos.map(|p|p.x);
+                                    self.video_drag_undo_captured=false;
+                                    self.active_layer_idx=video_layer;
+                                    self.selected_media_idx=Some(0);
+                                    self.selected_audio_idx=None;
+                                    self.right_panel_tab=2;
+                                    self.config.show_right_dock=true;
+                                }
+                                if pointer_down {
+                                    if let Some((drag_layer,origin))=self.video_drag_origin {
+                                        if drag_layer==video_layer {
+                                            if let (Some(pos),Some(press_x))=(pointer_pos,self.video_drag_pointer_x) {
+                                                let start=audio_timeline::drag_target_frame(
+                                                    origin,pos.x-press_x,cell_w,
+                                                    timeline_ops::MAX_TIMELINE_FRAMES).unwrap_or(origin);
+                                                if start!=video_start {
+                                                    video_move_request=Some((video_layer,start));
+                                                    if !self.video_drag_undo_captured {
+                                                        video_drag_started=true;
+                                                        self.video_drag_undo_captured=true;
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                resp.context_menu(|ui| {
+                                    if ui.button(tr(lang,"Duplicate video","دبلكيت الفيديو")).clicked() {
+                                        video_clip_action=Some((video_layer,true));ui.close_menu();
+                                    }
+                                    if ui.button(tr(lang,"Delete video","حذف الفيديو")).clicked() {
+                                        video_clip_action=Some((video_layer,false));ui.close_menu();
+                                    }
+                                });
+                            }
+                        });
+                    }
                     // Audio lanes share the exact frame ruler and horizontal scroll
                     // with visual layers; each clip can be dragged without moving art.
                     for (audio_index, track) in self.project.audio_tracks.iter().enumerate() {
@@ -6643,14 +6739,25 @@ impl eframe::App for StickApp {
                             ui.allocate_ui(egui::vec2(label_w, row_h), |ui| {
                                 let is_active=self.selected_audio_idx==Some(audio_index);
                                 let label=format!("♫ {}",track.name);
-                                if ui.selectable_label(is_active,egui::RichText::new(&label)
+                                let label_response=ui.selectable_label(is_active,egui::RichText::new(&label)
                                     .color(if is_active {egui::Color32::from_rgb(118,234,176)}
                                         else {egui::Color32::from_rgb(173,221,192)}))
                                     .on_hover_text(tr(lang,"Audio track properties (right panel)",
-                                        "خصائص الصوت في الشريط اليمين")).clicked() {
+                                        "خصائص الصوت في الشريط اليمين"));
+                                if label_response.clicked() {
                                     self.selected_audio_idx=Some(audio_index);
+                                    self.selected_media_idx=None;
+                                    self.right_panel_tab=2;
                                     self.config.show_right_dock=true;
                                 }
+                                label_response.context_menu(|ui| {
+                                    if ui.button(tr(lang,"Duplicate audio","دبلكيت الصوت")).clicked() {
+                                        audio_clip_action=Some((audio_index,true));ui.close_menu();
+                                    }
+                                    if ui.button(tr(lang,"Delete audio","حذف الصوت")).clicked() {
+                                        audio_clip_action=Some((audio_index,false));ui.close_menu();
+                                    }
+                                });
                                 ui.small(if track.muted {tr(lang,"Muted","مكتوم")}
                                     else {tr(lang,"Waveform / Drag ↔","موجات / اسحب ↔")});
                             });
@@ -6695,6 +6802,8 @@ impl eframe::App for StickApp {
                                     self.audio_drag_pointer_x=pointer_pos.map(|pos|pos.x);
                                     self.audio_drag_undo_captured=false;
                                     self.selected_audio_idx=Some(audio_index);
+                                    self.selected_media_idx=None;
+                                    self.right_panel_tab=2;
                                     self.config.show_right_dock=true;
                                 }
                                 if pointer_down {
@@ -6718,13 +6827,48 @@ impl eframe::App for StickApp {
                                 if resp.clicked() && resp.interact_pointer_pos()
                                     .is_some_and(|pos|clip.contains(pos)) {
                                     self.selected_audio_idx=Some(audio_index);
+                                    self.selected_media_idx=None;
+                                    self.right_panel_tab=2;
+                                    self.config.show_right_dock=true;
                                 }
+                                resp.context_menu(|ui| {
+                                    if ui.button(tr(lang,"Duplicate audio","دبلكيت الصوت")).clicked() {
+                                        audio_clip_action=Some((audio_index,true));ui.close_menu();
+                                    }
+                                    if ui.button(tr(lang,"Delete audio","حذف الصوت")).clicked() {
+                                        audio_clip_action=Some((audio_index,false));ui.close_menu();
+                                    }
+                                });
                             }
                         });
                     }
                 });
             });
             // The grip and the height slider both modify the same persisted value.
+        }
+        if video_drag_started {self.save_undo_state();}
+        if let Some((layer_index,start))=video_move_request {
+            if let Some(layer)=self.project.layers.get_mut(layer_index) {
+                if Self::move_video_layer(layer,start,timeline_ops::MAX_TIMELINE_FRAMES) {
+                    if let Some((_,end))=Self::video_layer_range(layer) {
+                        self.timeline_length=self.timeline_length.max(end);
+                        self.project.total_frames=self.timeline_length;
+                    }
+                    self.current_frame=start;
+                    self.has_unsaved_changes=true;
+                }
+            }
+        }
+        if let Some((layer_index,duplicate))=video_clip_action {
+            if duplicate {
+                let _=self.duplicate_media_item_or_layer(layer_index,0);
+            } else {
+                let _=self.delete_media_item_or_layer(layer_index,0);
+            }
+        }
+        if let Some((index,duplicate))=audio_clip_action {
+            if duplicate {let _=self.duplicate_audio_track(index);}
+            else {let _=self.delete_audio_track(index);}
         }
         if audio_drag_started { self.save_undo_state(); }
         if let Some((index,start)) = audio_move_request {
