@@ -558,7 +558,6 @@ struct AppConfig {
     tool_hand: String,
     #[serde(default = "default_del_frame_key")]
     delete_frame_key: String,
-    insert_frame: String,
     insert_keyframe: String,
     insert_blank_kf: String,
     convert_symbol: String,
@@ -693,7 +692,6 @@ impl Default for AppConfig {
             tool_shape: "U".to_string(),
             tool_hand: "H".to_string(),
             delete_frame_key: "F4".to_string(),
-            insert_frame: "F5".to_string(),
             insert_keyframe: "F6".to_string(),
             insert_blank_kf: "F7".to_string(),
             convert_symbol: "F8".to_string(),
@@ -2740,19 +2738,6 @@ impl StickApp {
         }
     }
 
-    fn action_insert_frame_f5(&mut self) {
-        if self.timeline_length >= timeline_ops::MAX_TIMELINE_FRAMES {
-            return;
-        }
-        self.save_undo_state();
-        self.timeline_length += 1;
-        self.project.total_frames = self.timeline_length;
-        self.current_frame = self.timeline_length;
-        self.clear_cel_selection();
-        self.has_unsaved_changes = true;
-        self.play_sfx(SfxType::NewFrame);
-    }
-
     fn insert_next_keyframe(&mut self, blank: bool, now_time: f64) {
         let layer_index = self.active_layer_idx;
         let Some(layer) = self.project.layers.get(layer_index) else { return };
@@ -4180,11 +4165,11 @@ impl eframe::App for StickApp {
 
         let mut typing_in_textbox = ctx.wants_keyboard_input();
         let (
-            now, ctrl_z, ctrl_y, ctrl_s, ctrl_shift_s, ctrl_c, ctrl_v, ctrl_k, _shift_f5, del_pressed, f10_pressed,
+            now, ctrl_z, ctrl_y, ctrl_s, ctrl_shift_s, ctrl_c, ctrl_v, ctrl_k, del_pressed, f10_pressed,
             space_down, ctrl_down, alt_down, zoom_in_nav, zoom_out_nav, pan_right_nav, pan_left_nav,
             scroll_y, close_req, pointer_down, pointer_pressed, pointer_released, pointer_pos,
             sc_select, sc_lasso, sc_free_tr, sc_vec_sel, sc_sculpt, sc_pen, sc_brush, sc_eraser, sc_eraser_partial,
-            sc_bucket, sc_eyedropper, sc_text, sc_shape, sc_hand, sc_del_frame, _sc_f5, sc_f6, sc_f7, sc_f8,
+            sc_bucket, sc_eyedropper, sc_text, sc_shape, sc_hand, sc_del_frame, sc_f6, sc_f7, sc_f8,
             sc_play, sc_prev, sc_next, sc_smaller, sc_larger, sc_reset_canvas, pressed_key_name,
         ) = ctx.input(|i| {
             let mut captured_key = None;
@@ -4207,7 +4192,6 @@ impl eframe::App for StickApp {
                 i.modifiers.ctrl && i.key_pressed(egui::Key::C),
                 i.modifiers.ctrl && i.key_pressed(egui::Key::V),
                 i.modifiers.ctrl && i.key_pressed(egui::Key::K),
-                i.modifiers.shift && i.key_pressed(egui::Key::F5),
                 i.key_pressed(egui::Key::Delete),
                 i.key_pressed(egui::Key::F10),
                 i.key_down(egui::Key::Space),
@@ -4235,7 +4219,6 @@ impl eframe::App for StickApp {
                 is_shortcut_pressed(i, &self.config.tool_shape),
                 is_shortcut_pressed(i, &self.config.tool_hand),
                 is_shortcut_pressed(i, &self.config.delete_frame_key),
-                is_shortcut_pressed(i, &self.config.insert_frame),
                 is_shortcut_pressed(i, &self.config.insert_keyframe),
                 is_shortcut_pressed(i, &self.config.insert_blank_kf),
                 is_shortcut_pressed(i, &self.config.convert_symbol),
@@ -6595,7 +6578,7 @@ impl eframe::App for StickApp {
                 let cols = self.timeline_length.max(30);
                 if advanced {
                     ui.horizontal_wrapped(|ui| {
-                        ui.label(tr(lang,"ADVANCED • KEYFRAMES","المتقدم • كي فريمات"));
+                        ui.label(tr(lang,"NEW MINE • KEYFRAMES","New mine • كي فريمات"));
                         ui.label(format!("{} selected",self.advanced_selected_cels.len()));
                         if ui.add_enabled(!self.advanced_selected_cels.is_empty(),
                             egui::Button::new(tr(lang,"Duplicate +1","نسخ في الفريم اللي بعده"))).clicked() {
@@ -7155,8 +7138,8 @@ impl eframe::App for StickApp {
                             "OLD: نفس شبكة الفريمات الحالية بدون أي تغيير.")
                     } else if self.config.timeline_style == 2 {
                         tr(lang,
-                            "ADVANCED: multi-select and drag-edit keyframes on independent layer tracks; audio waveform lanes are retained.",
-                            "المتقدم: تحديد ونقل ونسخ مجموعة كي فريمات بين مسارات الليرز، مع الاحتفاظ بموجات الصوت.")
+                            "NEW MINE: multi-select and drag-edit keyframes on independent layer tracks; audio waveform lanes are retained.",
+                            "New mine: تحديد ونقل ونسخ مجموعة كي فريمات بين مسارات الليرز، مع الاحتفاظ بموجات الصوت.")
                     } else {
                         tr(lang,
                             "NEW: exposure-sheet tracks, keyframe diamonds and a time ruler. Both layouts edit the same project.",
@@ -7255,12 +7238,12 @@ impl eframe::App for StickApp {
             let (stage_w, stage_h) = (self.project.width as f32, self.project.height as f32);
             let stage_rect = egui::Rect::from_center_size(center, egui::vec2(stage_w, stage_h) * scale);
 
-            let is_inside_stage = pointer_pos.map_or(false, |p| stage_rect.contains(p) && canvas_rect.contains(p));
+            let is_inside_workspace = pointer_pos.map_or(false, |p| canvas_rect.contains(p));
             let custom_brush_cursor = matches!(self.active_tool_ui,
                 ActiveToolUI::Brush | ActiveToolUI::VectorPen | ActiveToolUI::Sculpt
                     | ActiveToolUI::EraserRed | ActiveToolUI::EraserGreen);
-            let show_dot = is_inside_stage && !any_modal_open && !space_down && !alt_down && custom_brush_cursor;
-            let show_tool_icon = is_inside_stage && !any_modal_open && !space_down
+            let show_dot = is_inside_workspace && !any_modal_open && !space_down && !alt_down && custom_brush_cursor;
+            let show_tool_icon = is_inside_workspace && !any_modal_open && !space_down
                 && !alt_down && !custom_brush_cursor && self.active_tool_ui != ActiveToolUI::HandCanvas;
             let tool_cursor = if show_dot || show_tool_icon {
                 egui::CursorIcon::None
