@@ -4,6 +4,20 @@
 
 ## English (US)
 
+### Round 2 video QA — brush, fill, workspace and online moderation
+- Normal mouse G-Pen strokes no longer build a filled pressure polygon when pressure is effectively constant. This avoids self-intersecting black wedges on tight reversals and removes repeated full-outline triangulation from the common mouse drawing path; meaningful stylus pressure still uses the pressure-aware outline.
+- Paint Bucket now references all visible non-guide layers by default while always creating the new fill on the active layer. The UI explains this cross-layer boundary behavior explicitly.
+- Stick preferences are movable. Perspective mode now persists across launches and adds ray-density, horizon visibility and parallel-line angle controls.
+- Added portable Settings Profiles with export/import and Reset Defaults. Profiles intentionally exclude recent project paths and Google account identity.
+- The top toolbar is compact: Home, Undo, Redo, command menu and the yellow Support heart. Secondary import/export/update/settings/view actions live in the command menu.
+- Symmetry H/V text labels were replaced with distinct drawn mirror icons.
+- UI font fallback now includes Windows Arabic, emoji and symbol fonts when available, and RTL paired punctuation gets explicit mirroring after bidi reordering.
+- Online hosts can right-click guest rows to rename nicknames, recolor tools or kick the guest; moderation roster updates remain host-authoritative.
+- The right-side Canvas Size & Presets section is visible by default and keeps common YouTube, Instagram, TikTok/Reels and custom dimensions.
+- Stick already uses the WGPU renderer; startup now requests the high-performance WGPU adapter unless the user explicitly overrides WGPU_POWER_PREF.
+- **Validation gate:** Windows unit tests, Clippy and release build must pass before merge. Hardware stylus, two-PC online and long-session performance QA remain manual checks.
+
+
 ### Video QA improvements (experimental)
 - Audio dragging now captures the pointer on press and computes movement from the original press position, so 1-frame slow drags do not depend on egui's drag threshold; it keeps one Undo snapshot per real clip move and avoids timeline drag-scrolling conflicts.
 - The frame-number ruler supports holding the mouse button and moving across frames to scrub continuously.
