@@ -6905,46 +6905,6 @@ impl eframe::App for StickApp {
                     }
                     if ui.button("▶").on_hover_text(tr(lang, "Next frame", "الفريم الجاي")).clicked() && self.current_frame < self.timeline_length { self.current_frame += 1; }
                     ui.separator();
-                    let has_multi=!self.advanced_selected_cels.is_empty();
-                    let active_unlocked=self.project.layers.get(self.active_layer_idx)
-                        .is_some_and(|layer|!layer.locked);
-                    let duplicate_enabled=active_unlocked
-                        && self.current_frame<timeline_ops::MAX_TIMELINE_FRAMES;
-                    let duplicate=timeline_quick_action(ui,TimelineQuickAction::DuplicateNext,
-                        duplicate_enabled,tr(lang,"Copy to next frame","نسخ في الفريم اللي بعده"));
-                    if duplicate.clicked() {
-                        if has_multi {
-                            advanced_relocate_request=Some((
-                                self.advanced_selected_cels.clone(),0,1,
-                                advanced_timeline::RelocateMode::Copy));
-                        } else {
-                            self.insert_next_keyframe(false,now_time);
-                        }
-                    }
-                    let current_is_key=self.project.layers.get(self.active_layer_idx)
-                        .is_some_and(|layer|layer.keyframes.contains_key(&self.current_frame));
-                    let move_enabled=active_unlocked && self.current_frame<self.timeline_length
-                        && (has_multi || current_is_key);
-                    let move_next=timeline_quick_action(ui,TimelineQuickAction::MoveNext,
-                        move_enabled,tr(lang,"Move keyframe forward","حرّك فريم لقدّام"));
-                    if move_next.clicked() {
-                        let selection=if has_multi {
-                            self.advanced_selected_cels.clone()
-                        } else {
-                            vec![advanced_timeline::CelAddress{
-                                layer:self.active_layer_idx,frame:self.current_frame
-                            }]
-                        };
-                        advanced_relocate_request=Some((
-                            selection,0,1,advanced_timeline::RelocateMode::Move));
-                    }
-                    let clear=timeline_quick_action(ui,TimelineQuickAction::ClearSelection,true,
-                        tr(lang,"Clear selection","إلغاء التحديد"));
-                    if clear.clicked() {
-                        self.advanced_selected_cels.clear();
-                        self.clear_cel_selection();
-                    }
-                    ui.separator();
                     ui.toggle_value(&mut self.loop_enabled, tr(lang, "🔁 Loop Range", "🔁 تكرار جزء"));
                     ui.label(egui::RichText::new(format!("Frame {} / {}", self.current_frame, self.timeline_length))
                         .color(egui::Color32::from_rgb(255, 214, 110)).strong());
@@ -7017,12 +6977,12 @@ impl eframe::App for StickApp {
                         ui.label(tr(lang,"NEW MINE • KEYFRAMES","New mine • كي فريمات"));
                         ui.label(format!("{} selected",self.advanced_selected_cels.len()));
                         ui.small(tr(lang,
-                            "The icon actions above work on the current multi-selection.",
-                            "أيقونات الأوامر اللي فوق بتشتغل على التحديد المتعدد الحالي."));
+                            "Click a keyframe to select it, then hold left mouse and drag it to a new frame.",
+                            "حدد الكي فريم بكلك شمال، وبعدها اضغط مطول واسحبه للمكان الجديد."));
                     });
                     ui.small(tr(lang,
-                        "Ctrl/Shift+click keyframes to multi-select. Drag to move; Alt+drag to duplicate. Audio tracks stay aligned.",
-                        "Ctrl أو Shift مع الضغط لتحديد أكتر من كي فريم. اسحب للنقل، وAlt مع السحب للنسخ. الصوت مش بيتحرك."));
+                        "Ctrl/Shift keeps multi-selection here. Alt+drag duplicates the selected keys. Audio tracks stay aligned.",
+                        "Ctrl أو Shift للتحديد المتعدد هنا. Alt مع السحب يعمل نسخة. الصوت مش بيتحرك."));
                 }
                 let can_delete_global = self.timeline_length > 1 && self.project.layers.iter().all(|layer| !layer.locked);
                 egui::ScrollArea::both().id_salt("timeline_frame_scroller")
@@ -7125,6 +7085,8 @@ impl eframe::App for StickApp {
                                 let tw = eff.map(|fd| fd.tween_mode).unwrap_or(TweenMode::None);
                                 let (cr, cresp) = ui.allocate_exact_size(
                                     egui::vec2(cell_w,row_h),egui::Sense::click_and_drag());
+                                let address=advanced_timeline::CelAddress{layer:l_idx,frame:f};
+                                let selected_key=self.advanced_selected_cels.contains(&address);
                                 let cell = self.config.timeline_cell_color;
                                 let accent = self.config.ui_accent_color;
                                 let bg = if self.active_layer_idx == l_idx && self.current_frame == f {
@@ -7140,8 +7102,7 @@ impl eframe::App for StickApp {
                                 if advanced {
                                     advanced_timeline::render_exposure_cell(ui.painter(),cr,is_kf,
                                         has_d && !is_b,marker,tw,self.current_frame==f,
-                                        self.advanced_selected_cels.contains(
-                                            &advanced_timeline::CelAddress{layer:l_idx,frame:f}),
+                                        selected_key,
                                         layer.locked || is_b);
                                 } else if modern {
                                     // Continuous exposure strips and diamonds replace the
@@ -7162,34 +7123,57 @@ impl eframe::App for StickApp {
                                 }
                                 if !is_b { draw_stick_timeline_cell(ui.painter(), cr, is_kf, has_d, tw, marker); }
                                 }
+                                if selected_key && !advanced {
+                                    ui.painter().rect_stroke(
+                                        cr.shrink(1.5),4.0,
+                                        egui::Stroke::new(2.0,egui::Color32::from_rgb(75,210,255)));
+                                }
                                 if cresp.clicked() {
                                     timeline_seek = Some((l_idx, f));
-                                    if advanced && is_kf {
-                                        let cell=advanced_timeline::CelAddress{layer:l_idx,frame:f};
-                                        let extend=ui.input(|input|input.modifiers.shift||input.modifiers.ctrl);
+                                    let extend=advanced
+                                        && ui.input(|input|input.modifiers.shift||input.modifiers.ctrl);
+                                    if is_kf {
                                         if extend {
                                             if let Some(index)=self.advanced_selected_cels
-                                                .iter().position(|&k|k==cell) {
+                                                .iter().position(|&k|k==address) {
                                                 self.advanced_selected_cels.remove(index);
-                                            } else {self.advanced_selected_cels.push(cell);}
-                                        } else {self.advanced_selected_cels=vec![cell];}
-                                    } else if advanced && !ui.input(|input|input.modifiers.shift||input.modifiers.ctrl) {
+                                            } else {
+                                                self.advanced_selected_cels.push(address);
+                                            }
+                                        } else {
+                                            self.advanced_selected_cels=vec![address];
+                                        }
+                                    } else if !extend {
                                         self.advanced_selected_cels.clear();
                                     }
                                 }
-                                if is_kf && !layer.locked && cresp.drag_stopped() {
+                                if is_kf && selected_key && !layer.locked && cresp.dragged() {
+                                    let drag=cresp.drag_delta();
+                                    let dx=(drag.x/cell_w).round() as i32;
+                                    let dy=if advanced {(drag.y/row_h).round() as i32}else{0};
+                                    if dx!=0 || dy!=0 {
+                                        let ghost=cr.translate(egui::vec2(
+                                            dx as f32*cell_w,dy as f32*row_h));
+                                        ui.painter().rect_stroke(
+                                            ghost.shrink(2.0),4.0,
+                                            egui::Stroke::new(2.0,egui::Color32::from_rgb(255,205,63)));
+                                    }
+                                }
+                                if is_kf && selected_key && !layer.locked && cresp.drag_stopped() {
                                     let drag=cresp.drag_delta();
                                     let dx=(drag.x/cell_w).round() as i32;
                                     let dy=if advanced {(drag.y/row_h).round() as i32} else {0};
                                     if dx!=0 || dy!=0 {
-                                        let cell=advanced_timeline::CelAddress{layer:l_idx,frame:f};
-                                        let selection=if advanced
-                                            && self.advanced_selected_cels.contains(&cell) {
+                                        let selection=if advanced {
                                             self.advanced_selected_cels.clone()
-                                        } else {vec![cell]};
+                                        } else {
+                                            vec![address]
+                                        };
                                         let mode=if advanced && ui.input(|input|input.modifiers.alt) {
                                             advanced_timeline::RelocateMode::Copy
-                                        } else {advanced_timeline::RelocateMode::Move};
+                                        } else {
+                                            advanced_timeline::RelocateMode::Move
+                                        };
                                         advanced_relocate_request=Some((selection,dy,dx,mode));
                                     }
                                 }
@@ -7637,8 +7621,8 @@ impl eframe::App for StickApp {
                     self.advanced_selected_cels=destination;
                     self.has_unsaved_changes=true;
                     self.status_message=tr(lang,
-                        "New mine: keyframes updated.",
-                        "New mine: تم تعديل الكي فريمات.").to_string();
+                        "Keyframes moved to the new timeline position.",
+                        "تم نقل الكي فريمات للمكان الجديد في التايم لاين.").to_string();
                 }
                 Err(reason) => {self.status_message=reason.to_string();}
             }
