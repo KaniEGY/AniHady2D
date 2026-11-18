@@ -16,6 +16,8 @@ mod fill_render;
 mod eraser_tools;
 mod selection_tools;
 mod layer_ops;
+mod canvas_sizes;
+mod vector_path;
 mod timeline_ops;
 mod timeline_styles;
 mod profile;
@@ -1129,6 +1131,9 @@ struct StickApp {
     vector_marquee_current: Option<egui::Pos2>,
     vector_axis_drag: Option<char>,
     vector_tolerance: f32,
+    vector_pen_cap: BrushTipShape,
+    canvas_width_edit: u32,
+    canvas_height_edit: u32,
     sculpt_radius: f32,
     sculpt_strength: f32,
     transform_drag_anchor: Option<egui::Pos2>,
@@ -1182,6 +1187,8 @@ struct StickApp {
     show_shortcuts_dialog: bool,
     show_credits_dialog: bool,
     show_support_dialog: bool,
+    show_features_guide: bool,
+    show_online_guide: bool,
     settings_tab: usize,
     listening_shortcut_idx: Option<usize>,
     config: AppConfig,
@@ -1277,7 +1284,10 @@ impl StickApp {
             vector_marquee_start: None,
             vector_marquee_current: None,
             vector_axis_drag: None,
-            vector_tolerance: 2.7,
+            vector_tolerance: 1.5,
+            vector_pen_cap: BrushTipShape::Round,
+            canvas_width_edit: 1920,
+            canvas_height_edit: 1080,
             sculpt_radius: 64.0,
             sculpt_strength: 0.65,
             transform_drag_anchor: None,
@@ -1331,6 +1341,8 @@ impl StickApp {
             show_shortcuts_dialog: false,
             show_credits_dialog: false,
             show_support_dialog: false,
+            show_features_guide: false,
+            show_online_guide: false,
             settings_tab: 0,
             listening_shortcut_idx: None,
             config: AppConfig::load(),
@@ -2036,6 +2048,8 @@ impl StickApp {
 
     fn restore_snapshot(&mut self, snap: HistorySnapshot) {
         self.project = snap.project;
+        self.canvas_width_edit = self.project.width;
+        self.canvas_height_edit = self.project.height;
         self.timeline_length = snap.timeline_length.max(1);
         self.current_frame = snap.current_frame.clamp(1, self.timeline_length);
         self.active_layer_idx = snap.active_layer_idx.min(self.project.layers.len().saturating_sub(1));
@@ -2512,6 +2526,8 @@ impl StickApp {
         self.texture_cache.clear();
         self.current_project_path = None;
         self.project = project;
+        self.canvas_width_edit = self.project.width;
+        self.canvas_height_edit = self.project.height;
     }
 
     fn open_project_at_path(&mut self, p: PathBuf) {
@@ -2861,6 +2877,21 @@ impl StickApp {
         self.show_feedback_dialog = open && !close_clicked;
     }
 
+    fn apply_canvas_size(&mut self, width: u32, height: u32) {
+        if let Err(message) = canvas_sizes::validate_canvas_size(width, height) {
+            self.status_message = message.to_string();
+            return;
+        }
+        if self.project.width == width && self.project.height == height { return; }
+        self.save_undo_state();
+        self.project.width = width;
+        self.project.height = height;
+        self.canvas_width_edit = width;
+        self.canvas_height_edit = height;
+        self.has_unsaved_changes = true;
+        self.status_message = format!("Canvas / مقاسات اللوحة: {width} × {height}");
+    }
+
     fn render_tool_properties_ui(&mut self, ui: &mut egui::Ui, lang: AppLang) {
         match self.active_tool_ui {
             ActiveToolUI::SelectNormal | ActiveToolUI::SelectLasso | ActiveToolUI::FreeTransform | ActiveToolUI::VectorDirectSelect => {
@@ -2896,6 +2927,18 @@ impl StickApp {
                     .text(tr(lang, "Opacity", "الشفافية")));
                 ui.add(egui::Slider::new(&mut self.vector_tolerance,0.4..=8.0)
                     .text(tr(lang,"Node reduction","تقليل النقاط")));
+                ui.horizontal(|ui| {
+                    ui.label(tr(lang,"Line ends","أطراف القلم"));
+                    ui.selectable_value(&mut self.vector_pen_cap, BrushTipShape::Round,
+                        tr(lang, "● Round", "● دائري"));
+                    ui.selectable_value(&mut self.vector_pen_cap, BrushTipShape::Square,
+                        tr(lang, "■ Square", "■ مربع"));
+                });
+                ui.add(egui::Slider::new(&mut self.stabilizer_strength, 0.0..=0.70)
+                    .text(tr(lang,"Hand stabilizer","مثبّت اليد")));
+                ui.small(tr(lang,
+                    "Smooth preview and export keep the original editable vector nodes.",
+                    "الرسم الناعم والتصدير بيحافظوا على نقاط الفيكتور الأصلية للتعديل."));
                 ui.small(tr(lang,"Right-click the Vector Pen for advanced options.",
                     "كلك يمين على قلم الفيكتور هتلاقي إعدادات متقدمة."));
             }
@@ -5655,15 +5698,22 @@ impl eframe::App for StickApp {
                             }
                         }
                         ActiveToolUI::VectorPen if pointer_down => {
+                            let stab = self.stabilizer_strength.clamp(0.0, 0.70);
+                            let smooth = if let Some(previous) = self.stabilized_cursor {
+                                egui::pos2(previous.x * stab + stage_pos.x * (1.0 - stab),
+                                    previous.y * stab + stage_pos.y * (1.0 - stab))
+                            } else { stage_pos };
+                            self.stabilized_cursor = Some(smooth);
                             if let Some(stroke) = &mut self.current_stroke {
                                 if let Some(last) = stroke.points.last() {
-                                    if ((last.x - stage_pos.x).powi(2) + (last.y - stage_pos.y).powi(2)).sqrt() >= 4.0 {
-                                        stroke.points.push(StrokePoint { x: stage_pos.x, y: stage_pos.y, pressure: 1.0 });
+                                    if stroke.points.len() < 20_000 &&
+                                        (last.x - smooth.x).hypot(last.y - smooth.y) >= 1.5 {
+                                        stroke.points.push(StrokePoint { x: smooth.x, y: smooth.y, pressure: 1.0 });
                                     }
                                 }
                             } else {
                                 self.save_undo_state();
-                                self.current_stroke = Some(Stroke { points: vec![StrokePoint { x: stage_pos.x, y: stage_pos.y, pressure: 1.0 }], color: self.brush_color, fill_color: None, base_width: self.brush_size, is_vector: true, brush_preset: KritaBrushPreset::GPenInk, opacity: 1.0, brush_texture_id: None, tip_shape: BrushTipShape::Round });
+                                self.current_stroke = Some(Stroke { points: vec![StrokePoint { x: smooth.x, y: smooth.y, pressure: 1.0 }], color: self.brush_color, fill_color: None, base_width: self.brush_size, is_vector: true, brush_preset: KritaBrushPreset::GPenInk, opacity: self.brush_opacity, brush_texture_id: None, tip_shape: self.vector_pen_cap });
                             }
                         }
                         ActiveToolUI::Brush if pointer_down => {
@@ -5889,6 +5939,7 @@ impl eframe::App for StickApp {
 
             if pointer_released {
                 self.vector_axis_drag=None;
+                self.stabilized_cursor = None;
                 if let (Some(start),Some(end))=(
                     self.vector_marquee_start.take(),self.vector_marquee_current.take()){
                     let rect=egui::Rect::from_two_pos(start,end);
