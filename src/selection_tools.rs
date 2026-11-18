@@ -68,7 +68,8 @@ pub fn stroke_inside_lasso(stroke: &Stroke, polygon: &[egui::Pos2]) -> bool {
             if segments_intersect(a, b, polygon[i], polygon[(i+1)%polygon.len()]) { return true; }
         }
     }
-    false
+    stroke.fill_color.is_some() &&
+        crate::fill_tools::contour_contains(stroke, polygon[0].x, polygon[0].y)
 }
 
 pub fn rotate_points_around(stroke: &mut Stroke, pivot: egui::Pos2, angle_rad: f32) {
@@ -86,6 +87,11 @@ pub fn rotate_points_around(stroke: &mut Stroke, pivot: egui::Pos2, angle_rad: f
 /// bounding rectangle. Especially important for diagonal lines and curves
 /// whose large bounding boxes contain lots of blank canvas.
 pub fn stroke_hit_test(stroke: &Stroke, cursor: egui::Pos2, slop: f32) -> bool {
+    outline_hit_test(stroke, cursor, slop) || (stroke.fill_color.is_some()
+        && crate::fill_tools::contour_contains(stroke, cursor.x, cursor.y))
+}
+
+fn outline_hit_test(stroke: &Stroke, cursor: egui::Pos2, slop: f32) -> bool {
     if !cursor.x.is_finite() || !cursor.y.is_finite()
         || stroke.points.is_empty()
         || stroke.points.iter().any(|p| !p.x.is_finite() || !p.y.is_finite()) {
@@ -110,8 +116,7 @@ pub fn stroke_hit_test(stroke: &Stroke, cursor: egui::Pos2, slop: f32) -> bool {
             return true;
         }
     }
-    stroke.fill_color.is_some() &&
-        crate::fill_tools::contour_contains(stroke, cursor.x, cursor.y)
+    false
 }
 
 /// Pick the visually relevant outline or fill color from the nearest topmost
@@ -119,16 +124,23 @@ pub fn stroke_hit_test(stroke: &Stroke, cursor: egui::Pos2, slop: f32) -> bool {
 /// return their fill color instead of transparent black.
 pub fn pick_color(strokes: &[Stroke], cursor: egui::Pos2, slop: f32) -> Option<[u8;4]> {
     for stroke in strokes.iter().rev() {
-        if stroke.color[3] > 0 && stroke_hit_test(stroke, cursor, slop) {
+        if stroke.opacity <= 0.0 { continue; }
+        if stroke.color[3] > 0 && outline_hit_test(stroke, cursor, slop) {
             return Some(stroke.color);
         }
         if let Some(fill) = stroke.fill_color {
-            if crate::fill_tools::contour_contains(stroke, cursor.x, cursor.y) {
+            if fill[3] > 0 && crate::fill_tools::contour_contains(stroke, cursor.x, cursor.y) {
                 return Some(fill);
             }
         }
     }
     None
+}
+
+pub fn pick_layer_color(project: &crate::project::AniProject, frame: usize, cursor: egui::Pos2, slop: f32) -> Option<[u8; 4]> {
+    // The painter traverses layers in reverse, so index zero is frontmost.
+    project.layers.iter().filter(|layer| layer.visible && layer.opacity > 0.0 && !layer.is_guide)
+        .find_map(|layer| pick_color(&project.evaluate_layer_at_frame(layer, frame).strokes, cursor, slop))
 }
 
 /// Return the nearest editable vertex on any vector stroke within a
@@ -210,9 +222,26 @@ mod tests {
             crate::project::StrokePoint{x:10.,y:100.,pressure:1.},
             crate::project::StrokePoint{x:10.,y:10.,pressure:1.}
         ];
-        filled.color=[0,0,0,0];
+        filled.color=[0,0,0,255];
         filled.fill_color=Some([240,70,10,255]);
+        assert!(stroke_inside_lasso(&filled, &[egui::pos2(30.,30.), egui::pos2(40.,30.), egui::pos2(35.,40.)]));
+        assert_eq!(pick_color(std::slice::from_ref(&filled),egui::pos2(10.,45.),3.),Some(filled.color));
         assert_eq!(pick_color(&[filled],egui::pos2(40.,45.),3.),Some([240,70,10,255]));
+    }
+
+    #[test]
+    fn eyedropper_checks_overlapping_layers_from_the_front() {
+        let mut project = crate::project::AniProject::default();
+        let mut back = project.layers[0].clone();
+        let mut mark = stroke(0., 0., 100., 0.);
+        back.keyframes.entry(1).or_default().strokes.push(mark.clone());
+        mark.color = [255, 0, 0, 255];
+        project.layers[0].keyframes.entry(1).or_default().strokes.push(mark);
+        project.layers.push(back);
+        let position = egui::pos2(10., 0.);
+        assert_eq!(pick_layer_color(&project, 1, position, 1.), Some([255, 0, 0, 255]));
+        project.layers[0].visible = false;
+        assert_eq!(pick_layer_color(&project, 1, position, 1.), Some([0, 0, 0, 255]));
     }
 
     #[test]

@@ -3,6 +3,7 @@
 //! Internet peers can use host-IP:port with appropriate router/firewall rules.
 //! This is not an encrypted Internet service or a global room directory.
 use crate::project::{AniProject, Stroke};
+use crate::cursor_sync::{CursorPosition, CursorSender, RemoteCursors};
 use crate::project_sync::{self, ProjectEdit};
 use crate::remote_access::{self, TailnetInfo};
 use serde::{Deserialize, Serialize};
@@ -12,15 +13,15 @@ use std::hash::{BuildHasher, Hasher};
 use std::io::{self, Read, Write};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpListener, TcpStream, UdpSocket};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{mpsc, Arc, Mutex};
+use std::sync::{mpsc, Arc, Mutex, OnceLock};
 use std::thread;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 pub const TCP_PORT: u16 = 47554;
 const DISCOVERY_PORT: u16 = 47553;
 const DISCOVER_REQUEST: &[u8] = b"STICK_STUDIO_LAN_DISCOVER_V1";
-// Protocol v2 includes peer roster and LAN room codes; old v1 peers are rejected.
-const PROTOCOL: u16 = 4;
+// v5 adds transient cursor packets and the new brush presets.
+const PROTOCOL: u16 = 5;
 const MAX_PACKET: usize = 8 * 1024 * 1024;
 const MAX_MEMBERS: usize = 12;
 const MAX_FRAME: usize = 20_000;
@@ -69,7 +70,7 @@ pub fn find_room_by_code<'a>(rooms:&'a [RoomListing], code:&str) -> Option<&'a R
     rooms.iter().find(|r| r.room_code == key)
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Clone, Serialize, Deserialize, Debug)]
 enum Packet {
     Hello { name: String, level: u32, protocol: u16, mode: OnlineMode },
     Challenge { nonce: String },
@@ -81,6 +82,8 @@ enum Packet {
     Snapshot { project: Box<AniProject> },
     Members { count: usize },
     Roster { participants: Vec<Participant> },
+    Pointer { position: Option<CursorPosition> },
+    ParticipantPointer { id: u64, position: Option<CursorPosition> },
     Kicked { reason: String },
     HostHandoff { address: String, promote: bool, title: String, room_code: String,
         limit: usize, project: Option<Box<AniProject>> },
@@ -96,6 +99,7 @@ pub enum OnlineEvent {
     Snapshot(AniProject),
     Members(usize),
     Roster(Vec<Participant>),
+    Cursor { id: u64, position: Option<CursorPosition>, received: Instant },
     HostHandoff { address: String, promote: bool, title: String, room_code: String,
         limit: usize, project: Option<AniProject> },
     Notice(String),
@@ -195,6 +199,7 @@ struct HostShared {
     mode: OnlineMode,
     limit: usize,
     events: mpsc::Sender<OnlineEvent>,
+    cursor_wake: CursorWake,
     peer_ids: AtomicU64,
 }
 
@@ -203,39 +208,26 @@ impl HostShared {
     fn broadcast(&self, msg: &Packet, exclude: Option<u64>) {
         if let Ok(peers) = self.peers.lock() {
             for (id, (tx, _, _)) in peers.iter() {
-                if Some(*id) != exclude { let _ = tx.send(clone_packet(msg)); }
+                if Some(*id) != exclude { let _ = tx.send(msg.clone()); }
             }
         }
     }
     fn announce_members(&self) {
-        let count = self.member_count();
-        self.broadcast(&Packet::Members { count }, None);
+        // Publish under the membership lock so concurrent joins/leaves cannot
+        // deliver an older roster after the new one and resurrect a departed cursor.
+        let Ok(peers) = self.peers.lock() else { return; };
+        let mut local = self.local.clone();
+        if let Ok(color) = self.local_color.lock() { local.color = *color; }
+        let mut roster = vec![local];
+        roster.extend(peers.values().map(|(_, member, _)| member.clone()));
+        roster.sort_by_key(|member| member.id);
+        let count = roster.len();
+        for (tx, _, _) in peers.values() {
+            let _ = tx.send(Packet::Members { count });
+            let _ = tx.send(Packet::Roster { participants: roster.clone() });
+        }
         let _ = self.events.send(OnlineEvent::Members(count));
-        let roster = self.peers.lock().ok().map(|peers| {
-            let mut local = self.local.clone();
-            if let Ok(color) = self.local_color.lock() { local.color = *color; }
-            let mut list: Vec<Participant> = vec![local];
-            list.extend(peers.values().map(|(_, p, _)| p.clone()));
-            list.sort_by_key(|p| p.id);
-            list
-        }).unwrap_or_else(|| vec![self.local.clone()]);
-        self.broadcast(&Packet::Roster { participants: roster.clone() }, None);
         let _ = self.events.send(OnlineEvent::Roster(roster));
-    }
-}
-
-fn clone_packet(packet: &Packet) -> Packet {
-    match packet {
-        Packet::Strokes { layer, frame, strokes } => Packet::Strokes { layer: *layer, frame: *frame, strokes: strokes.clone() },
-        Packet::Edits { edits } => Packet::Edits { edits: edits.clone() },
-        Packet::Snapshot { project } => Packet::Snapshot { project: project.clone() },
-        Packet::Members { count } => Packet::Members { count: *count },
-        Packet::Roster { participants } => Packet::Roster { participants: participants.clone() },
-        Packet::Kicked { reason } => Packet::Kicked { reason: reason.clone() },
-        Packet::HostHandoff { address, promote, title, room_code, limit, project } =>
-            Packet::HostHandoff { address: address.clone(), promote: *promote, title: title.clone(),
-                room_code: room_code.clone(), limit: *limit, project: project.clone() },
-        _ => Packet::Goodbye,
     }
 }
 
@@ -257,6 +249,7 @@ fn writer_loop(mut stream: TcpStream, rx: mpsc::Receiver<Packet>, running: Arc<A
 }
 
 fn host_peer(mut stream: TcpStream, host: Arc<HostShared>) -> io::Result<()> {
+    stream.set_nodelay(true)?;
     stream.set_read_timeout(Some(Duration::from_millis(300)))?;
     stream.set_write_timeout(Some(Duration::from_secs(3)))?;
     let (name, level, protocol, mode) = match packet_read(&mut stream, &host.running)? {
@@ -294,7 +287,11 @@ fn host_peer(mut stream: TcpStream, host: Arc<HostShared>) -> io::Result<()> {
         // Snapshot and registration are ordered with subsequent host operations.
         let project = host.project.lock().map_err(|_| io::Error::other("Room project lock poisoned"))?.clone();
         packet_write(&mut stream, &Packet::Welcome { project: Box::new(public_project(project)) })?;
-        peers.insert(id, (out_tx, Participant { id, name, level: level.min(1000), color: member_color(id) }, guest_ip));
+        let local_color = host.local_color.lock().map(|color| *color).unwrap_or(host.local.color);
+        let color = (0..MEMBER_COLORS.len()).map(|offset| member_color(id.wrapping_add(offset as u64)))
+            .find(|color| *color != local_color && peers.values().all(|(_, member, _)| member.color != *color))
+            .unwrap_or_else(|| member_color(id));
+        peers.insert(id, (out_tx, Participant { id, name, level: level.min(1000), color }, guest_ip));
     }
     host.announce_members();
     let writer = stream.try_clone()?;
@@ -303,6 +300,12 @@ fn host_peer(mut stream: TcpStream, host: Arc<HostShared>) -> io::Result<()> {
     loop {
         if !host.peers.lock().map(|peers| peers.contains_key(&id)).unwrap_or(false) { break; }
         match packet_read(&mut stream, &host.running) {
+            Ok(Packet::Pointer { position }) if position.is_none_or(CursorPosition::valid) => {
+                // The authenticated socket determines identity. Never echo a pointer to its owner.
+                let _ = host.events.send(OnlineEvent::Cursor { id, position, received: Instant::now() });
+                if let Some(wake) = host.cursor_wake.get() { wake(); }
+                host.broadcast(&Packet::ParticipantPointer { id, position }, Some(id));
+            }
             Ok(Packet::Strokes { layer, frame, strokes }) => {
                 // Strokes and structural edits must use the same host gate;
                 // otherwise a stroke and a layer delete may be broadcast in
@@ -350,6 +353,8 @@ fn host_peer(mut stream: TcpStream, host: Arc<HostShared>) -> io::Result<()> {
     Ok(())
 }
 
+type CursorWake = Arc<OnceLock<Box<dyn Fn() + Send + Sync>>>;
+
 pub struct OnlineSession {
     pub title: String,
     pub mode: OnlineMode,
@@ -364,6 +369,9 @@ pub struct OnlineSession {
     host: Option<Arc<HostShared>>,
     /// Local optimistic baseline; new edits are relative to this document.
     baseline: Mutex<Option<AniProject>>,
+    cursor_sender: CursorSender,
+    cursor_wake: CursorWake,
+    pub cursors: RemoteCursors,
     running: Arc<AtomicBool>,
 }
 
@@ -386,13 +394,14 @@ impl OnlineSession {
         let room_code = retained_code.filter(|code|
             code.len() == 8 && code.bytes().all(|c| c.is_ascii_digit()))
             .unwrap_or_else(new_room_code);
+        let cursor_wake = CursorWake::default();
         let host = Arc::new(HostShared {
             running: running.clone(), peers: Mutex::new(HashMap::new()),
             local: Participant { id: 0, name: nickname, level, color: member_color(0) },
             local_color: Mutex::new(member_color(0)),
             room_code: room_code.clone(),
             project: Mutex::new(project.clone()), edit_order: Mutex::new(()), password: password.clone(),
-            title: title.clone(), mode, limit, events: event_tx,
+            title: title.clone(), mode, limit, events: event_tx, cursor_wake: cursor_wake.clone(),
             peer_ids: AtomicU64::new(1),
         });
         let host_accept = host.clone();
@@ -436,7 +445,7 @@ impl OnlineSession {
         });
         Ok(Self { title, mode, address: local_address(), is_host: true, members: 1,
             room_code, password, event_rx, outgoing: None, host: Some(host),
-            baseline: Mutex::new(Some(project)), running })
+            baseline: Mutex::new(Some(project)), cursor_sender: Default::default(), cursor_wake, cursors: Default::default(), running })
     }
 
     pub fn join_room(address: String, password: String, nickname: String, level: u32, mode: OnlineMode) -> Result<Self, String> {
@@ -458,6 +467,8 @@ impl OnlineSession {
         let (out_tx, out_rx) = mpsc::channel();
         let running = Arc::new(AtomicBool::new(true));
         let running_worker = running.clone();
+        let cursor_wake = CursorWake::default();
+        let worker_wake = cursor_wake.clone();
         thread::spawn(move || {
             let result = (|| -> Result<(), String> {
                 let mut retry_count = 0;
@@ -474,6 +485,7 @@ impl OnlineSession {
                 };
                 // All connection attempts use the intended address, never
                 // a public proxy or an untrusted third-party room directory.
+                stream.set_nodelay(true).map_err(|e| e.to_string())?;
                 stream.set_read_timeout(Some(Duration::from_millis(300))).map_err(|e| e.to_string())?;
                 stream.set_write_timeout(Some(Duration::from_secs(3))).map_err(|e| e.to_string())?;
                 packet_write(&mut stream, &Packet::Hello { name: nickname, level: level.min(1000), protocol: PROTOCOL, mode }).map_err(|e| e.to_string())?;
@@ -493,6 +505,10 @@ impl OnlineSession {
                 thread::spawn(move || writer_loop(writer, out_rx, writer_running));
                 while running_worker.load(Ordering::Relaxed) {
                     match packet_read(&mut stream, &running_worker) {
+                        Ok(Packet::ParticipantPointer { id, position }) if position.is_none_or(CursorPosition::valid) => {
+                            let _ = event_tx.send(OnlineEvent::Cursor { id, position, received: Instant::now() });
+                            if let Some(wake) = worker_wake.get() { wake(); }
+                        }
                         Ok(Packet::Strokes { layer, frame, strokes }) => {
                             let _ = event_tx.send(OnlineEvent::Strokes { layer, frame, strokes });
                         }
@@ -521,10 +537,23 @@ impl OnlineSession {
         });
         Ok(Self { title: String::new(), mode, address, is_host: false, members: 1,
             room_code: String::new(), password: guest_password, event_rx, outgoing: Some(out_tx),
-            host: None, baseline: Mutex::new(None), running })
+            host: None, baseline: Mutex::new(None), cursor_sender: Default::default(), cursor_wake, cursors: Default::default(), running })
     }
 
     pub fn events(&self) -> Vec<OnlineEvent> { self.event_rx.try_iter().collect() }
+
+    pub fn wake_on_cursor(&self, setup: impl FnOnce() -> Box<dyn Fn() + Send + Sync>) {
+        self.cursor_wake.get_or_init(setup);
+    }
+
+    pub fn update_cursor(&mut self, position: Option<CursorPosition>, now: Instant) {
+        if !self.cursor_sender.should_send(position, now) { return; }
+        if let Some(host) = &self.host {
+            host.broadcast(&Packet::ParticipantPointer { id: host.local.id, position }, None);
+        } else if let Some(tx) = &self.outgoing {
+            let _ = tx.send(Packet::Pointer { position });
+        }
+    }
 
     pub fn set_baseline(&self, project: &AniProject) {
         if let Ok(mut baseline) = self.baseline.lock() { *baseline = Some(project.clone()); }
@@ -550,10 +579,16 @@ impl OnlineSession {
     pub fn sync_local_changes(&self, project: &AniProject) -> Result<(), String> {
         let mut baseline = self.baseline.lock().map_err(|_| "Project sync lock poisoned")?;
         let Some(known) = baseline.as_ref() else { return Ok(()); };
+        // Pointer-only repaints must not clone and serialize the entire document.
+        if known == project { return Ok(()); }
         // Never transmit host/guest filesystem paths through incremental edits.
         let edits = project_sync::diff_projects(
             &public_project(known.clone()), &public_project(project.clone()))?;
-        if edits.is_empty() { return Ok(()); }
+        if edits.is_empty() {
+            // A local media path can change without changing the public document.
+            *baseline = Some(project.clone());
+            return Ok(());
+        }
         let packet = Packet::Edits { edits: edits.clone() };
         let encoded = serde_json::to_vec(&packet).map_err(|e| e.to_string())?;
         if encoded.len() > MAX_PACKET { return Err("Project edit is too large for online sync".into()); }
@@ -746,11 +781,11 @@ mod tests {
     }
     #[test]
     fn loopback_room_handshake_and_stroke_delivery() {
-        let host = OnlineSession::host_room(
+        let mut host = OnlineSession::host_room(
             "Loopback Test".into(), "unique-test-password".into(), 3,
             OnlineMode::Drawing, AniProject::default(), "Host".into(), 9,
         ).expect("open local TCP room");
-        let guest = OnlineSession::join_room(
+        let mut guest = OnlineSession::join_room(
             format!("127.0.0.1:{}", TCP_PORT),
             "unique-test-password".into(), "Guest".into(), 5, OnlineMode::Drawing,
         ).expect("start local TCP join");
@@ -804,6 +839,30 @@ mod tests {
             thread::sleep(Duration::from_millis(25));
         }
         assert!(peer_connected, "second guest must join the same host room");
+        fn next_cursor(session: &OnlineSession) -> (u64, Option<CursorPosition>) {
+            let deadline = Instant::now() + Duration::from_secs(4);
+            while Instant::now() < deadline {
+                if let Some(cursor) = session.events().into_iter().find_map(|event| match event {
+                    OnlineEvent::Cursor { id, position, .. } => Some((id, position)),
+                    _ => None,
+                }) { return cursor; }
+                thread::sleep(Duration::from_millis(10));
+            }
+            panic!("Timed out waiting for a room cursor");
+        }
+        let guest_point = Some(CursorPosition { x: 42.0, y: 17.5, frame: 1 });
+        let host_point = Some(CursorPosition { x: 80.0, y: 1.0, frame: 1 });
+        let sent = Instant::now();
+        guest.update_cursor(guest_point, sent);
+        assert_eq!(next_cursor(&host), (1, guest_point));
+        assert_eq!(next_cursor(&guest_two), (1, guest_point));
+        host.update_cursor(host_point, sent);
+        assert_eq!(next_cursor(&guest), (0, host_point)); // no self-echo
+        assert_eq!(next_cursor(&guest_two), (0, host_point));
+        guest.update_cursor(None, sent + Duration::from_secs(1));
+        assert_eq!(next_cursor(&host), (1, None));
+        assert_eq!(next_cursor(&guest_two), (1, None));
+        assert_eq!(*host.host.as_ref().unwrap().project.lock().unwrap(), AniProject::default());
         let stroke = Stroke {
             points: vec![], color: [1, 2, 3, 255], fill_color: None,
             base_width: 3.0, is_vector: false,
@@ -812,6 +871,7 @@ mod tests {
         };
         guest.send_strokes(0, 1, vec![stroke]);
         let mut delivered = false;
+        let deadline = Instant::now() + Duration::from_secs(4);
         while std::time::Instant::now() < deadline {
             for event in host.events() {
                 if let OnlineEvent::Strokes { layer, frame, strokes } = event {

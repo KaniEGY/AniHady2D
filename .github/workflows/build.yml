@@ -36,6 +36,9 @@ jobs:
           STICK_GOOGLE_CLIENT_ID: ${{ vars.STICK_GOOGLE_CLIENT_ID }}
         run: cargo test -- --test-threads=1
 
+      - name: Check Rust lints
+        run: cargo clippy
+
       - name: Build Release EXE
         env:
           STICK_BUILD_VERSION: ${{ steps.meta.outputs.version }}.${{ github.run_number }}
@@ -49,6 +52,8 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force -Path dist
           Copy-Item target/release/Stick.exe dist/Stick.exe
+          $hash = (Get-FileHash dist/Stick.exe -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  Stick.exe" | Set-Content dist/SHA256SUMS.txt -Encoding ascii
           "${{ steps.meta.outputs.version }}.${{ github.run_number }}" | Out-File -FilePath dist/version.txt -Encoding ascii -NoNewline
 
       - name: Upload Artifact
@@ -69,3 +74,4 @@ jobs:
           files: |
             dist/Stick.exe
             dist/version.txt
+            dist/SHA256SUMS.txt

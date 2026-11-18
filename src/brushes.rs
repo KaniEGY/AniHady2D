@@ -13,6 +13,8 @@ pub fn draw_brush_preset_icon(painter: &egui::Painter, rect: egui::Rect, preset:
             KritaBrushPreset::ChiselMarker => egui::Color32::from_rgb(249, 115, 22),
             KritaBrushPreset::SoftAirbrush => egui::Color32::from_rgb(192, 132, 252),
             KritaBrushPreset::SketchPencil => egui::Color32::from_rgb(250, 204, 21),
+            KritaBrushPreset::DryBrush => egui::Color32::from_rgb(225, 156, 102),
+            KritaBrushPreset::Chalk => egui::Color32::from_rgb(196, 222, 226),
         }
     };
 
@@ -71,6 +73,20 @@ pub fn draw_brush_preset_icon(painter: &egui::Painter, rect: egui::Rect, preset:
             ];
             painter.add(egui::Shape::convex_polygon(tip, col, egui::Stroke::NONE));
         }
+        KritaBrushPreset::DryBrush => {
+            for i in 0..5 {
+                let x = i as f32 * 2.5 - 5.0;
+                painter.line_segment([c + egui::vec2(x-2.0, 7.0 - (i%2) as f32 * 3.0),
+                    c + egui::vec2(x+2.0,-7.0)], egui::Stroke::new(1.6,col));
+            }
+        }
+        KritaBrushPreset::Chalk => {
+            painter.line_segment([c + egui::vec2(-4.0,5.0), c + egui::vec2(5.0,-6.0)],
+                egui::Stroke::new(5.5,col));
+            for (x,y) in [(-7.0,7.0),(-3.0,8.0),(-8.0,3.0)] {
+                painter.circle_filled(c + egui::vec2(x,y),1.1,col);
+            }
+        }
     }
 }
 
@@ -106,11 +122,6 @@ fn may_touch_clip<F: Fn(egui::Pos2) -> egui::Pos2>(
         max + egui::vec2(margin, margin),
     );
     clip.intersects(bounds)
-}
-
-// Transparent strokes must not manufacture extra opacity in halos.
-fn soft_brush_alpha_layers(alpha: u8) -> (u8, u8) {
-    (alpha / 4, alpha / 2)
 }
 
 /// مصيّر الفرش الاحترافي:
@@ -167,96 +178,53 @@ pub fn draw_stroke_pro<F: Fn(egui::Pos2) -> egui::Pos2>(
     // an artificial halo when its own combined opacity is zero.
     if eff_alpha == 0 { return; }
 
+    if let Some(texture) = crate::texture_brush::TextureBrush::for_stroke(stroke) {
+        texture.preview(painter, stroke, [c[0],c[1],c[2],eff_alpha], |x,y|
+            to_screen(egui::pos2(x+ox,y+oy)));
+        return;
+    }
+
     // Polygonal tips share their sampled geometry with PNG/video exports.
     if !stroke.is_vector && stroke.tip_shape != BrushTipShape::Round {
-        for dab in crate::brush_engine::sample_pressure_dabs(&stroke.points, stroke.base_width) {
+        crate::brush_engine::visit_pressure_dabs(&stroke.points, stroke.base_width, |dab,_| {
             let verts: Vec<egui::Pos2> = crate::brush_engine::dab_polygon(stroke.tip_shape, dab)
                 .into_iter()
                 .map(|(x,y)| to_screen(egui::pos2(x + ox, y + oy))).collect();
             if verts.len() >= 3 {
                 painter.add(egui::Shape::convex_polygon(verts, color, egui::Stroke::NONE));
             }
-        }
+        });
         return;
     }
 
-    // Draw a pressure-aware brush as a SINGLE alpha layer, rather than
-    // stamping hundreds of translucent circles over each other. The latter
-    // made blobs and visible seams at 50% opacity.
-    if !stroke.is_vector && stroke.brush_preset == KritaBrushPreset::GPenInk
-        && stroke.tip_shape == BrushTipShape::Round && stroke.points.len() > 1
-    {
-        let outline=crate::stroke_geometry::pressure_outline(&stroke.points,stroke.base_width);
-        if !outline.is_empty() {
-            let path:Vec<egui::Pos2>=outline.iter().map(|&(x,y)|
-                to_screen(egui::pos2(x+ox,y+oy))).collect();
-            if let Some(mesh)=crate::fill_render::solid_polygon_mesh(&path,color) {
-                painter.add(egui::Shape::mesh(mesh));
+    use crate::brush_engine::{visit_round_marks, RoundMark};
+    let screen = |x,y| to_screen(egui::pos2(x+ox,y+oy));
+    let mut screen_pts: Option<Vec<egui::Pos2>> = None;
+    visit_round_marks(stroke, |mark, flow| {
+        let ink = egui::Color32::from_rgba_unmultiplied(c[0],c[1],c[2], (eff_alpha as f32 * flow) as u8);
+        let width = match mark {
+            RoundMark::Dot(dab) => {
+                painter.circle_filled(screen(dab.x,dab.y), dab.radius*scale, ink);
                 return;
             }
-        }
-        // A self-crossing path can be impossible to triangulate, but never
-        // fall back to repeated, darkening circular dabs.
-        let points:Vec<_>=stroke.points.iter().map(|p|
-            to_screen(egui::pos2(p.x+ox,p.y+oy))).collect();
-        painter.add(egui::Shape::line(points,
-            egui::Stroke::new((stroke.base_width*scale).max(0.25),color)));
-        return;
-    }
-
-    if stroke.points.len() == 1 {
-        let p = to_screen(egui::pos2(stroke.points[0].x + ox, stroke.points[0].y + oy));
-        let r = (stroke.base_width * stroke.points[0].pressure * scale) * 0.5;
-        painter.circle_filled(p, r.max(1.0), color);
-        return;
-    }
-
-    let screen_pts: Vec<egui::Pos2> = stroke
-        .points
-        .iter()
-        .map(|p| to_screen(egui::pos2(p.x + ox, p.y + oy)))
-        .collect();
-
-    if !stroke.is_vector {
-        match stroke.brush_preset {
-            KritaBrushPreset::Watercolor => {
-                // خط ألوان مائية متصل بحافة مائية ناعمة بدون نقاط متقطعة
-                let w = (stroke.base_width * scale).max(2.0);
-                let halo_alpha = eff_alpha / 3;
-                let halo_col = egui::Color32::from_rgba_unmultiplied(c[0], c[1], c[2], halo_alpha);
-                painter.add(egui::Shape::line(screen_pts.clone(), egui::Stroke::new(w * 1.25, halo_col)));
-                painter.add(egui::Shape::line(screen_pts, egui::Stroke::new(w * 0.90, color)));
-                return;
+            RoundMark::Outline(outline) => {
+                let path: Vec<_> = outline.into_iter().map(|(x,y)| screen(x,y)).collect();
+                if let Some(mesh) = crate::fill_render::solid_polygon_mesh(&path, ink) {
+                    painter.add(egui::Shape::mesh(mesh));
+                    return;
+                }
+                stroke.base_width
             }
-            KritaBrushPreset::ChiselMarker => {
-                // ماركر شفاف متصل يغمق تلقائياً عند رسم خط جديد فوق خط سابق
-                let w = (stroke.base_width * scale).max(2.0);
-                painter.add(egui::Shape::line(screen_pts, egui::Stroke::new(w, color)));
-                return;
-            }
-            KritaBrushPreset::SoftAirbrush => {
-                let w = (stroke.base_width * scale).max(2.0);
-                let (outer_alpha, mid_alpha) = soft_brush_alpha_layers(eff_alpha);
-                let outer = egui::Color32::from_rgba_unmultiplied(c[0], c[1], c[2], outer_alpha);
-                let mid = egui::Color32::from_rgba_unmultiplied(c[0], c[1], c[2], mid_alpha);
-                painter.add(egui::Shape::line(screen_pts.clone(), egui::Stroke::new(w * 1.55, outer)));
-                painter.add(egui::Shape::line(screen_pts.clone(), egui::Stroke::new(w * 1.05, mid)));
-                painter.add(egui::Shape::line(screen_pts, egui::Stroke::new(w * 0.65, color)));
-                return;
-            }
-            KritaBrushPreset::GPenInk | KritaBrushPreset::SketchPencil => {}
-        }
-    }
-
-    // G-Pen و Vector Ink Pen: خط ثابت السُمك ناعم بدون ذيل في البداية أو النهاية
-    let w = (stroke.base_width * scale).max(1.0);
-    painter.add(egui::Shape::line(screen_pts, egui::Stroke::new(w, color)));
-    if let Some(first) = stroke.points.first() {
-        painter.circle_filled(to_screen(egui::pos2(first.x + ox, first.y + oy)), w * 0.5, color);
-    }
-    if let Some(last) = stroke.points.last() {
-        painter.circle_filled(to_screen(egui::pos2(last.x + ox, last.y + oy)), w * 0.5, color);
-    }
+            RoundMark::Line { width } => width,
+        };
+        let project_points = || stroke.points.iter().map(|p| screen(p.x,p.y)).collect();
+        let points = if flow == 1.0 {
+            screen_pts.take().unwrap_or_else(project_points)
+        } else {
+            screen_pts.get_or_insert_with(project_points).clone()
+        };
+        painter.add(egui::Shape::line(points, egui::Stroke::new(width * scale, ink)));
+    });
 }
 
 #[cfg(test)]
@@ -280,11 +248,11 @@ mod viewport_tests {
 
     #[test]
     fn airbrush_alpha_follows_opacity_without_phantom_glow() {
-        assert_eq!(soft_brush_alpha_layers(0), (0, 0));
-        assert_eq!(soft_brush_alpha_layers(1), (0, 0));
-        let (outer, inner) = soft_brush_alpha_layers(100);
-        assert!(outer < inner && inner <= 100);
-        assert_eq!(outer, 25);
+        let mut airbrush = stroke(&[(0.0,0.0), (20.0,0.0)]);
+        airbrush.brush_preset = KritaBrushPreset::SoftAirbrush;
+        let mut alpha = Vec::new();
+        crate::brush_engine::visit_round_marks(&airbrush, |_, flow| alpha.push((flow * 100.0) as u8));
+        assert_eq!(alpha, [25,50,100]);
     }
 
     #[test]

@@ -1,5 +1,12 @@
 # Stick Studio — Session Handoff / سجل استكمال المشروع
 
+## 18 November 2026 — brushes, cursors, timeline and tool audit
+
+- Base `9e1230e602fa7a6ba35259bb5bfee3a220299f8a`, published tag `v4.1.0.203`, development branch `codex/studio-development-audit`.
+- DryBrush and Chalk use procedural tips shared by live and raster rendering. Project schema remains 5. Rooms now negotiate protocol 5, and cursor state stays in memory.
+- Both timeline layouts share layer-local ripple insertion, cel duplication and undo/redo. Opening, restoring or importing a whole document starts a new undo history.
+- Local Windows baseline Cargo run stopped during dependency compilation because MSVC link.exe was unavailable. Existing files also have rustfmt differences. Check the GitHub Windows build for this branch before release. Physical tablet, GPU preview and two-machine room acceptance still require hands-on testing.
+
 > Continuous history, not proof of acceptance. The Git history and Windows workflow results are authoritative. This entry records work started on 17 November 2026.
 
 ## Source and branch

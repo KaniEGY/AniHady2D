@@ -1,10 +1,55 @@
-//! Shared pressure-aware dab sampling for Stick's existing G-Pen strokes.
-//!
-//! This is a first, dependency-free drawing-engine increment. It does NOT
-//! claim to embed Krita or libmypaint. The same geometry is consumed by the
-//! interactive preview and the PNG/video exporter; project schema stays v5.
+//! Pressure-aware stroke geometry shared by the live canvas and raster exports.
 
-use crate::project::{BrushTipShape, StrokePoint};
+use crate::project::{BrushTipShape, KritaBrushPreset, Stroke, StrokePoint};
+
+/// Each layer is painted once so a translucent wash can build up between
+/// strokes without darkening at input event boundaries.
+pub enum RoundMark {
+    Dot(BrushDab),
+    Outline(Vec<(f32, f32)>),
+    Line { width: f32 },
+}
+
+pub fn visit_round_marks(stroke: &Stroke, mut paint: impl FnMut(RoundMark, f32)) {
+    let Some(first) = stroke.points.first() else {
+        return;
+    };
+    let layers: &[(f32, f32)] = match (stroke.is_vector, stroke.brush_preset) {
+        (false, KritaBrushPreset::Watercolor) => &[(1.25, 1.0 / 3.0), (0.90, 1.0)],
+        (false, KritaBrushPreset::SoftAirbrush) => &[(1.55, 0.25), (1.05, 0.5), (0.65, 1.0)],
+        _ => &[(1.0, 1.0)],
+    };
+    let pressure = if stroke.is_vector {
+        1.0
+    } else {
+        first.pressure.clamp(0.02, 2.0)
+    };
+    let varying = !stroke.is_vector
+        && stroke
+            .points
+            .iter()
+            .any(|p| (p.pressure - pressure).abs() > 0.001);
+    for &(size, flow) in layers {
+        let width = stroke.base_width * size;
+        if stroke.points.len() == 1 {
+            paint(RoundMark::Dot(dab_for(first, width)), flow);
+        } else {
+            if varying || (!stroke.is_vector && stroke.brush_preset == KritaBrushPreset::GPenInk) {
+                let outline = crate::stroke_geometry::pressure_outline(&stroke.points, width);
+                if !outline.is_empty() {
+                    paint(RoundMark::Outline(outline), flow);
+                    continue;
+                }
+            }
+            paint(
+                RoundMark::Line {
+                    width: (width * pressure).max(0.5),
+                },
+                flow,
+            );
+        }
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct BrushDab {
@@ -25,21 +70,26 @@ pub fn dab_polygon(tip: BrushTipShape, dab: BrushDab) -> Vec<(f32, f32)> {
     };
     match tip {
         BrushTipShape::Round => Vec::new(),
-        BrushTipShape::Square | BrushTipShape::TallRectangle | BrushTipShape::WideRectangle => vec![
-            (dab.x-w, dab.y-h), (dab.x+w, dab.y-h),
-            (dab.x+w, dab.y+h), (dab.x-w, dab.y+h),
-        ],
+        BrushTipShape::Square | BrushTipShape::TallRectangle | BrushTipShape::WideRectangle => {
+            vec![
+                (dab.x - w, dab.y - h),
+                (dab.x + w, dab.y - h),
+                (dab.x + w, dab.y + h),
+                (dab.x - w, dab.y + h),
+            ]
+        }
         BrushTipShape::Triangle | BrushTipShape::Pentagon => {
             let count = if tip == BrushTipShape::Triangle { 3 } else { 5 };
-            (0..count).map(|i| {
-                let a = -std::f32::consts::FRAC_PI_2 +
-                    std::f32::consts::TAU * i as f32 / count as f32;
-                (dab.x + r*a.cos(), dab.y + r*a.sin())
-            }).collect()
+            (0..count)
+                .map(|i| {
+                    let a = -std::f32::consts::FRAC_PI_2
+                        + std::f32::consts::TAU * i as f32 / count as f32;
+                    (dab.x + r * a.cos(), dab.y + r * a.sin())
+                })
+                .collect()
         }
     }
 }
-
 
 fn dab_for(p: &StrokePoint, width: f32) -> BrushDab {
     BrushDab {
@@ -49,72 +99,75 @@ fn dab_for(p: &StrokePoint, width: f32) -> BrushDab {
     }
 }
 
-/// Samples a polyline into overlapping circular dabs, interpolating pen
-/// pressure per segment. Every input point is already in project coordinates;
-/// callers apply the view or symbol transform while drawing.
-///
-/// This keeps the saved Stroke format unchanged for compatibility with all
-/// existing Stick v5 projects. A safety cap avoids pathological allocations.
-pub fn sample_pressure_dabs(points: &[StrokePoint], width: f32) -> Vec<BrushDab> {
-    if points.is_empty() || !width.is_finite() || width <= 0.0 {
-        return Vec::new();
+/// Visit dabs at distances measured along the whole path, independent of input
+/// event density. The budget stretches spacing across extreme paths so their
+/// entire trajectory is represented.
+pub fn visit_pressure_dabs(
+    points: &[StrokePoint],
+    width: f32,
+    mut paint: impl FnMut(BrushDab, [f32; 2]),
+) {
+    if !width.is_finite() || width <= 0.0 {
+        return;
     }
-
-    let points: Vec<&StrokePoint> = points
+    let valid = points
         .iter()
-        .filter(|p| p.x.is_finite() && p.y.is_finite() && p.pressure.is_finite())
-        .collect();
-    if points.is_empty() {
-        return Vec::new();
-    }
-
+        .filter(|p| p.x.is_finite() && p.y.is_finite() && p.pressure.is_finite());
+    let mut path = valid.clone();
+    let Some(first) = path.next() else { return };
     let width = width.clamp(0.5, 1024.0);
-    let step = (width * 0.22).clamp(0.75, 6.0);
-    let mut out = Vec::new();
-    out.push(dab_for(points[0], width));
-    let mut until_next = step;
 
-    for pair in points.windows(2) {
-        let a = pair[0];
-        let b = pair[1];
-        let dx = b.x - a.x;
-        let dy = b.y - a.y;
-        let len = dx.hypot(dy);
-        if !len.is_finite() || len <= f32::EPSILON {
-            continue;
-        }
-
-        let mut dist = until_next;
-        while dist <= len {
-            if out.len() >= MAX_DABS_PER_STROKE - 1 {
-                // Guarantee the final endpoint is represented even for
-                // enormous input paths. Keep memory bounded.
-                let last = points[points.len() - 1];
-                out.push(dab_for(last, width));
-                return out;
+    // Use f64 for travel distances: a very large coordinate must still
+    // advance when adding one spacing interval.
+    let length = |a: &StrokePoint, b: &StrokePoint| {
+        (f64::from(b.x) - f64::from(a.x)).hypot(f64::from(b.y) - f64::from(a.y))
+    };
+    let total: f64 = valid.zip(path.clone()).map(|(a, b)| length(a, b)).sum();
+    let minimum_spacing = total / (MAX_DABS_PER_STROKE - 2) as f64;
+    let spacing = |d: BrushDab| (f64::from(d.radius) * 0.48).max(0.2).max(minimum_spacing);
+    let mut previous = first;
+    let mut last_dab = dab_for(first, width);
+    let mut direction = [1.0, 0.0];
+    let mut started = false;
+    let mut remaining = spacing(last_dab);
+    let mut count = 0;
+    for next in path {
+        let len = length(previous, next);
+        if len > 0.0 {
+            let dx = f64::from(next.x) - f64::from(previous.x);
+            let dy = f64::from(next.y) - f64::from(previous.y);
+            direction = [(dx / len) as f32, (dy / len) as f32];
+            if !started {
+                paint(last_dab, direction);
+                started = true;
+                count += 1;
             }
-            let t = (dist / len).clamp(0.0, 1.0);
-            let sample = StrokePoint {
-                x: a.x + dx * t,
-                y: a.y + dy * t,
-                pressure: a.pressure + (b.pressure - a.pressure) * t,
-            };
-            out.push(dab_for(&sample, width));
-            dist += step;
+            while remaining <= len && count < MAX_DABS_PER_STROKE - 1 {
+                let t = remaining / len;
+                let sample = StrokePoint {
+                    x: (f64::from(previous.x) + dx * t) as f32,
+                    y: (f64::from(previous.y) + dy * t) as f32,
+                    pressure: previous.pressure + (next.pressure - previous.pressure) * t as f32,
+                };
+                last_dab = dab_for(&sample, width);
+                paint(last_dab, direction);
+                count += 1;
+                remaining += spacing(last_dab);
+            }
+            remaining -= len;
         }
-        until_next = dist - len;
-        if until_next <= 0.0 || !until_next.is_finite() {
-            until_next = step;
-        }
+        previous = next;
     }
+    if !started || (last_dab.x - previous.x).hypot(last_dab.y - previous.y) > 0.01 {
+        paint(dab_for(previous, width), direction);
+    }
+}
 
-    let last = points[points.len() - 1];
-    if let Some(prev) = out.last() {
-        if (prev.x - last.x).hypot(prev.y - last.y) > 0.01 {
-            out.push(dab_for(last, width));
-        }
-    }
-    out
+#[cfg(test)]
+fn sample_pressure_dabs(points: &[StrokePoint], width: f32) -> Vec<BrushDab> {
+    let mut dabs = Vec::new();
+    visit_pressure_dabs(points, width, |dab, _| dabs.push(dab));
+    dabs
 }
 
 #[cfg(test)]
@@ -127,13 +180,17 @@ mod tests {
 
     #[test]
     fn six_tip_shapes_have_correct_vertex_counts() {
-        let d = BrushDab { x: 10.0, y: 15.0, radius: 5.0 };
-        assert_eq!(dab_polygon(BrushTipShape::Round,d).len(),0);
-        assert_eq!(dab_polygon(BrushTipShape::Square,d).len(),4);
-        assert_eq!(dab_polygon(BrushTipShape::Triangle,d).len(),3);
-        assert_eq!(dab_polygon(BrushTipShape::Pentagon,d).len(),5);
-        assert_eq!(dab_polygon(BrushTipShape::TallRectangle,d).len(),4);
-        assert_eq!(dab_polygon(BrushTipShape::WideRectangle,d).len(),4);
+        let d = BrushDab {
+            x: 10.0,
+            y: 15.0,
+            radius: 5.0,
+        };
+        assert_eq!(dab_polygon(BrushTipShape::Round, d).len(), 0);
+        assert_eq!(dab_polygon(BrushTipShape::Square, d).len(), 4);
+        assert_eq!(dab_polygon(BrushTipShape::Triangle, d).len(), 3);
+        assert_eq!(dab_polygon(BrushTipShape::Pentagon, d).len(), 5);
+        assert_eq!(dab_polygon(BrushTipShape::TallRectangle, d).len(), 4);
+        assert_eq!(dab_polygon(BrushTipShape::WideRectangle, d).len(), 4);
     }
 
     #[test]
@@ -145,10 +202,7 @@ mod tests {
 
     #[test]
     fn interpolation_preserves_start_end_and_varies_width() {
-        let dabs = sample_pressure_dabs(
-            &[point(0.0, 0.0, 0.2), point(40.0, 0.0, 1.0)],
-            10.0,
-        );
+        let dabs = sample_pressure_dabs(&[point(0.0, 0.0, 0.2), point(40.0, 0.0, 1.0)], 10.0);
         assert!(dabs.len() > 5);
         assert!((dabs.first().unwrap().x - 0.0).abs() < 0.01);
         assert!((dabs.last().unwrap().x - 40.0).abs() < 0.01);
@@ -165,11 +219,24 @@ mod tests {
 
     #[test]
     fn dab_count_stays_bounded_on_long_strokes() {
-        let dabs = sample_pressure_dabs(
-            &[point(0.0, 0.0, 1.0), point(200_000.0, 0.0, 1.0)],
-            6.0,
-        );
+        let dabs = sample_pressure_dabs(&[point(0.0, 0.0, 1.0), point(200_000.0, 0.0, 1.0)], 6.0);
         assert!(dabs.len() <= MAX_DABS_PER_STROKE);
         assert!((dabs.last().unwrap().x - 200_000.0).abs() < 0.01);
+        assert!(dabs.windows(2).all(|p| p[1].x - p[0].x <= 11.0));
+    }
+
+    #[test]
+    fn pressure_spacing_is_independent_of_input_event_density() {
+        let sparse = [point(0., 0., 0.25), point(100., 0., 1.0)];
+        let dense: Vec<_> = (0..=100)
+            .map(|i| point(i as f32, 0., 0.25 + 0.75 * i as f32 / 100.))
+            .collect();
+        let samples = sample_pressure_dabs(&sparse, 8.);
+        let other = sample_pressure_dabs(&dense, 8.);
+        assert_eq!(samples.len(), other.len());
+        assert!(samples
+            .iter()
+            .zip(other)
+            .all(|(a, b)| (a.x - b.x).abs() < 0.001 && (a.radius - b.radius).abs() < 0.001));
     }
 }
