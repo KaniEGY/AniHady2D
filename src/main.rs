@@ -1373,7 +1373,7 @@ impl StickApp {
             bucket_precision: 1.0,
             bucket_dilate_contract: 0.0,
             bucket_thickness: 0.0,
-            bucket_reference_all_layers: false,
+            bucket_reference_all_layers: true,
             brush_tip_shape: BrushTipShape::Round,
             zoom_level: 0.75,
             pan_offset: egui::Vec2::ZERO,
@@ -3462,10 +3462,11 @@ impl StickApp {
                     "Precision balances detail and memory. Positive dilate reaches under ink; negative shrinks the fill. Thickness changes the temporary boundary mask, not your strokes.",
                     "الدقة بتوازن بين التفاصيل والذاكرة. التمدد الموجب بيدخل اللون تحت الخط، والسالب بيقلصه. السُمك بيغير قناع التعبئة المؤقت مش الرسمة."));
                 ui.checkbox(&mut self.bucket_reference_all_layers,
-                    tr(lang, "Reference all visible layers", "استخدم حدود كل الليرات الظاهرة"));
+                    tr(lang, "Reference all visible layers (recommended)",
+                        "استخدم حدود كل الليرات الظاهرة (مُوصى به)"));
                 ui.small(tr(lang,
-                    "Fill follows the visible enclosed area and grows slightly under outlines. Lower gap tolerance if adjacent regions merge.",
-                    "الدلو بيلون المنطقة المقفولة ويمد اللون تحت الخط عشان ميعملش حواف بيضا. قلل قفل الفجوات لو منطقتين اتصلوا ببعض."));
+                    "The visible layers are used only as fill boundaries; the new color is always created on the active layer. Lower gap tolerance if adjacent regions merge.",
+                    "الليرات الظاهرة بتتستخدم كحدود للتعبئة بس؛ اللون الجديد بيتحط دايمًا على اللير النشط. قلل قفل الفجوات لو منطقتين اتصلوا ببعض."));
             }
             ActiveToolUI::Eyedropper => {
                 ui.strong(tr(lang, "Eyedropper • Pick Fill / Line", "القطّارة • لون التعبئة أو الخط"));
