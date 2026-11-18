@@ -458,6 +458,12 @@ struct AppConfig {
     vanishing_right_x: f32,
     #[serde(default = "default_two_point_y")]
     vanishing_2point_y: f32,
+    #[serde(default = "default_true_val")]
+    perspective_show_horizon: bool,
+    #[serde(default = "default_perspective_ray_count")]
+    perspective_ray_count: u16,
+    #[serde(default)]
+    perspective_parallel_angle_deg: f32,
     #[serde(default = "default_timeline_height")]
     timeline_dock_height: f32,
     #[serde(default)]
@@ -551,6 +557,7 @@ fn default_vanishing_y() -> f32 { 0.30 }
 fn default_left_vp_x() -> f32 { 0.14 }
 fn default_right_vp_x() -> f32 { 0.86 }
 fn default_two_point_y() -> f32 { 0.36 }
+fn default_perspective_ray_count() -> u16 { 18 }
 fn default_timeline_height() -> f32 { 310.0 }
 fn default_new_timeline_row_height() -> f32 { 50.0 }
 fn default_new_timeline_cell_width() -> f32 { 64.0 }
@@ -614,6 +621,9 @@ impl Default for AppConfig {
             vanishing_left_x: default_left_vp_x(),
             vanishing_right_x: default_right_vp_x(),
             vanishing_2point_y: default_two_point_y(),
+            perspective_show_horizon: true,
+            perspective_ray_count: default_perspective_ray_count(),
+            perspective_parallel_angle_deg: 0.0,
             timeline_dock_height: default_timeline_height(),
             timeline_style: 0,
             timeline_new_cell_width: default_new_timeline_cell_width(),
@@ -684,9 +694,9 @@ impl AppConfig {
         for path in local_setting_paths("stick_config.json") {
             if let Ok(data) = std::fs::read_to_string(path) {
                 if let Ok(mut parsed) = serde_json::from_str::<Self>(&data) {
-                    // Perspective overlays are tools, not saved project content.
-                    // Never silently re-enable guides on the next launch.
-                    parsed.perspective_mode = 0;
+                    // Perspective and workspace choices are user preferences.
+                    // Keep the saved mode so a user-defined workspace/profile
+                    // actually returns exactly as it was on the next launch.
                     // Existing installations may persist an empty OAuth ID,
                     // overriding a newly configured public Desktop client ID
                     // embedded in updated official releases.
@@ -708,6 +718,31 @@ impl AppConfig {
                 if std::fs::write(&path, &json).is_ok() { break; }
             }
         }
+    }
+
+    fn portable_json(&self) -> Result<String, String> {
+        let mut copy = self.clone();
+        // A settings profile is meant to share workspace/tool preferences,
+        // never local account identity or recent private file paths.
+        copy.recent_projects.clear();
+        copy.last_seen_patch_version.clear();
+        copy.cloud_email.clear();
+        copy.cloud_auto_backup = false;
+        copy.cloud_google_client_id = default_google_client_id();
+        serde_json::to_string_pretty(&copy).map_err(|e| e.to_string())
+    }
+
+    fn import_portable_json(data: &str, local: &Self) -> Result<Self, String> {
+        let mut imported: Self = serde_json::from_str(data)
+            .map_err(|e| format!("Invalid Stick settings profile: {e}"))?;
+        // Preserve this computer's account/release-local state. Imported
+        // profiles cannot silently switch Google identity or expose paths.
+        imported.cloud_google_client_id = local.cloud_google_client_id.clone();
+        imported.cloud_email = local.cloud_email.clone();
+        imported.cloud_auto_backup = local.cloud_auto_backup;
+        imported.recent_projects = local.recent_projects.clone();
+        imported.last_seen_patch_version = local.last_seen_patch_version.clone();
+        Ok(imported)
     }
 }
 
@@ -1236,6 +1271,7 @@ struct StickApp {
     show_update_dialog: bool,
     show_patch_notes_dialog: bool,
     show_settings_dialog: bool,
+    settings_profile_message: String,
     cloud_job: Option<std::sync::mpsc::Receiver<cloud_sync::Event>>,
     profile_sync_pending: bool,
     last_profile_cloud_sync_time: f64,
@@ -1402,6 +1438,7 @@ impl StickApp {
             show_update_dialog: false,
             show_patch_notes_dialog: AppConfig::load().last_seen_patch_version != get_installed_version(),
             show_settings_dialog: false,
+            settings_profile_message: String::new(),
             cloud_job: None,
             profile_sync_pending: false,
             last_profile_cloud_sync_time: 0.0,
@@ -4120,8 +4157,8 @@ impl eframe::App for StickApp {
 
         if self.show_settings_dialog {
             egui::Window::new(tr(lang, "Stick Preferences", "إعدادات Stick"))
-                .collapsible(false).resizable(true).default_width(570.0)
-                .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0]).show(ctx, |ui| {
+                .collapsible(false).resizable(true).movable(true).default_width(570.0)
+                .default_pos(egui::pos2(54.0, 54.0)).show(ctx, |ui| {
                 ui.horizontal_wrapped(|ui| {
                     ui.selectable_value(&mut self.settings_tab, 0, tr(lang, "General", "عام"));
                     ui.selectable_value(&mut self.settings_tab, 1, tr(lang, "Art System", "نظام الفنان"));
@@ -4131,6 +4168,7 @@ impl eframe::App for StickApp {
                     ui.selectable_value(&mut self.settings_tab, 5, tr(lang, "Previous Versions", "النسخة الاحتياطية"));
                     ui.selectable_value(&mut self.settings_tab, 6, tr(lang, "Perspective", "المنظور"));
                     ui.selectable_value(&mut self.settings_tab, 7, tr(lang, "Sign in", "تسجيل دخول"));
+                    ui.selectable_value(&mut self.settings_tab, 8, tr(lang, "Settings Profile", "ملف الإعدادات"));
                 });
                 ui.separator();
                 match self.settings_tab {
@@ -4509,6 +4547,16 @@ impl eframe::App for StickApp {
                                 "Adjust both points independently. The guides are never exported.",
                                 "حرّك كل نقطة تلاشي بشكل مستقل. الخطوط إرشادية ومش بتظهر في التصدير."));
                         }
+                        ui.separator();
+                        changed |= ui.checkbox(&mut self.config.perspective_show_horizon,
+                            tr(lang, "Show horizon line", "إظهار خط الأفق")).changed();
+                        changed |= ui.add(egui::Slider::new(&mut self.config.perspective_ray_count, 4..=64)
+                            .text(tr(lang, "Perspective ray density", "كثافة خطوط المنظور"))).changed();
+                        if self.config.perspective_mode == 2 {
+                            changed |= ui.add(egui::Slider::new(
+                                &mut self.config.perspective_parallel_angle_deg, -85.0..=85.0)
+                                .text(tr(lang, "Parallel-line angle", "زاوية الخطوط المتوازية"))).changed();
+                        }
                         if ui.button(tr(lang, "Reset perspective settings", "رجّع إعدادات المنظور الأصلية")).clicked() {
                             self.config.perspective_spacing = default_perspective_spacing();
                             self.config.perspective_line_width = default_perspective_width();
@@ -4519,10 +4567,78 @@ impl eframe::App for StickApp {
                             self.config.vanishing_left_x = default_left_vp_x();
                             self.config.vanishing_right_x = default_right_vp_x();
                             self.config.vanishing_2point_y = default_two_point_y();
+                            self.config.perspective_show_horizon = true;
+                            self.config.perspective_ray_count = default_perspective_ray_count();
+                            self.config.perspective_parallel_angle_deg = 0.0;
                             self.config.perspective_mode = 0;
                             changed = true;
                         }
                         if changed { self.config.save(); }
+                    }
+                    8 => {
+                        ui.heading(tr(lang, "Settings profile", "ملف الإعدادات"));
+                        ui.label(tr(lang,
+                            "Stick already saves your preferences automatically on this PC. Export a portable profile to copy the same workspace, shortcuts, colors and perspective setup to another computer.",
+                            "Stick بيحفظ إعداداتك تلقائيًا على الجهاز. صدّر ملف إعدادات لو عايز تنقل نفس الواجهة والاختصارات والألوان والمنظور لجهاز تاني."));
+                        if let Some(path) = local_setting_paths("stick_config.json").first() {
+                            ui.monospace(path.display().to_string());
+                        }
+                        ui.separator();
+                        ui.horizontal_wrapped(|ui| {
+                            if ui.button(tr(lang, "Export settings...", "تصدير الإعدادات...")).clicked() {
+                                if let Some(mut path) = rfd::FileDialog::new()
+                                    .add_filter("Stick Settings", &["sticksettings", "json"])
+                                    .set_file_name("Stick_Settings.sticksettings").save_file() {
+                                    if path.extension().is_none() { path.set_extension("sticksettings"); }
+                                    self.settings_profile_message = match self.config.portable_json()
+                                        .and_then(|json| std::fs::write(&path, json)
+                                            .map_err(|e| e.to_string())) {
+                                        Ok(()) => format!("{} {}", tr(lang, "Saved:", "تم الحفظ:"), path.display()),
+                                        Err(err) => format!("{} {err}", tr(lang, "Export failed:", "فشل التصدير:")),
+                                    };
+                                }
+                            }
+                            if ui.button(tr(lang, "Import settings...", "استيراد الإعدادات...")).clicked() {
+                                if let Some(path) = rfd::FileDialog::new()
+                                    .add_filter("Stick Settings", &["sticksettings", "json"]).pick_file() {
+                                    self.settings_profile_message = match std::fs::read_to_string(&path)
+                                        .map_err(|e| e.to_string())
+                                        .and_then(|data| AppConfig::import_portable_json(&data, &self.config)) {
+                                        Ok(imported) => {
+                                            self.config = imported;
+                                            self.config.save();
+                                            tr(lang, "Settings imported and applied.", "تم استيراد الإعدادات وتطبيقها.")
+                                        }
+                                        Err(err) => format!("{} {err}", tr(lang, "Import failed:", "فشل الاستيراد:")),
+                                    };
+                                }
+                            }
+                        });
+                        ui.small(tr(lang,
+                            "Portable profiles exclude recent project paths and Google account identity.",
+                            "ملف الإعدادات ما بيحفظش مسارات مشاريعك الأخيرة ولا هوية حساب جوجل."));
+                        ui.separator();
+                        if ui.button(tr(lang, "Restore all program defaults", "رجّع إعدادات البرنامج الافتراضية")).clicked() {
+                            let cloud_id = self.config.cloud_google_client_id.clone();
+                            let cloud_email = self.config.cloud_email.clone();
+                            let cloud_auto = self.config.cloud_auto_backup;
+                            let recent = self.config.recent_projects.clone();
+                            let seen = self.config.last_seen_patch_version.clone();
+                            self.config = AppConfig::default();
+                            self.config.cloud_google_client_id = cloud_id;
+                            self.config.cloud_email = cloud_email;
+                            self.config.cloud_auto_backup = cloud_auto;
+                            self.config.recent_projects = recent;
+                            self.config.last_seen_patch_version = seen;
+                            self.config.save();
+                            self.settings_profile_message =
+                                tr(lang, "Program preferences restored to defaults.",
+                                    "تم إرجاع إعدادات البرنامج للوضع الافتراضي.");
+                        }
+                        if !self.settings_profile_message.is_empty() {
+                            ui.separator();
+                            ui.label(self.settings_profile_message.clone());
+                        }
                     }
                     7 => {
                         ui.heading(tr(lang,"Google account & Drive backup",
@@ -6400,18 +6516,23 @@ impl eframe::App for StickApp {
                         }
                     }
                     2 => {
-                        for n in 1..=((stage_h / step).ceil() as usize).min(500) {
-                            let y = n as f32 * step;
-                            if y < stage_h {
-                                painter.line_segment([to_screen(egui::pos2(0.0, y)),
-                                    to_screen(egui::pos2(stage_w, y))], paint);
-                            }
+                        let angle = self.config.perspective_parallel_angle_deg
+                            .clamp(-85.0, 85.0).to_radians();
+                        let slope = angle.tan();
+                        let extra = stage_w * slope.abs();
+                        let count = (((stage_h + extra) / step).ceil() as usize).min(500);
+                        for n in 0..=count {
+                            let y = n as f32 * step - extra * 0.5;
+                            painter.line_segment([
+                                to_screen(egui::pos2(0.0, y - slope * stage_w * 0.5)),
+                                to_screen(egui::pos2(stage_w, y + slope * stage_w * 0.5))
+                            ], paint);
                         }
                     }
                     3 => {
                         let vp = egui::pos2(stage_w * self.config.vanishing_x.clamp(0.05,0.95),
                             stage_h * self.config.vanishing_y.clamp(0.05,0.85));
-                        let rays = ((stage_w / step).ceil() as usize).clamp(4, 48);
+                        let rays = self.config.perspective_ray_count.clamp(4, 64) as usize;
                         for n in 0..=rays {
                             let x = stage_w * n as f32 / rays as f32;
                             painter.line_segment([to_screen(vp), to_screen(egui::pos2(x, stage_h))], paint);
@@ -6426,6 +6547,12 @@ impl eframe::App for StickApp {
                             painter.line_segment([to_screen(egui::pos2(left, y)),
                                 to_screen(egui::pos2(right, y))], paint);
                         }
+                        if self.config.perspective_show_horizon {
+                            painter.line_segment([
+                                to_screen(egui::pos2(0.0, vp.y)),
+                                to_screen(egui::pos2(stage_w, vp.y))
+                            ], paint);
+                        }
                         painter.circle_stroke(to_screen(vp), 4.0, paint);
                     }
                     4 => {
@@ -6436,7 +6563,7 @@ impl eframe::App for StickApp {
                         let horizon = stage_h * self.config.vanishing_2point_y.clamp(0.07, 0.93);
                         let left = egui::pos2(stage_w * self.config.vanishing_left_x.clamp(0.02,0.47), horizon);
                         let right = egui::pos2(stage_w * self.config.vanishing_right_x.clamp(0.53,0.98), horizon);
-                        let rays = ((stage_w / step).ceil() as usize).clamp(6,48);
+                        let rays = self.config.perspective_ray_count.clamp(6,64) as usize;
                         for n in 0..=rays {
                             let x = stage_w * (n as f32) / (rays as f32);
                             for vp in [left, right] {
@@ -6449,8 +6576,10 @@ impl eframe::App for StickApp {
                                 }
                             }
                         }
-                        painter.line_segment([to_screen(egui::pos2(0.0,horizon)),
-                            to_screen(egui::pos2(stage_w,horizon))], paint);
+                        if self.config.perspective_show_horizon {
+                            painter.line_segment([to_screen(egui::pos2(0.0,horizon)),
+                                to_screen(egui::pos2(stage_w,horizon))], paint);
+                        }
                         for vp in [left,right] {
                             painter.circle_filled(to_screen(vp), 4.0, paint.color);
                             painter.circle_stroke(to_screen(vp), 8.0, paint);
@@ -7327,6 +7456,12 @@ impl eframe::App for StickApp {
 }
 
 fn main() -> eframe::Result<()> {
+    // Stick already renders egui through WGPU. Prefer the high-performance
+    // adapter (normally the discrete GPU) unless the user explicitly set a
+    // WGPU_POWER_PREF override before launching.
+    if std::env::var_os("WGPU_POWER_PREF").is_none() {
+        std::env::set_var("WGPU_POWER_PREF", "high");
+    }
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default().with_title("Stick").with_inner_size([1366.0, 768.0]).with_icon(generate_stick_window_icon()),
         renderer: eframe::Renderer::Wgpu,
@@ -7384,6 +7519,25 @@ mod tool_discovery_tests {
         assert!(app.current_project_path.is_none());
         assert!(app.redo_stack.is_empty());
         assert!(app.selected_stroke_indices.is_empty());
+    }
+
+    #[test]
+    fn portable_settings_exclude_local_identity_and_preserve_it_on_import() {
+        let mut local = AppConfig::default();
+        local.cloud_email = "local@example.invalid".into();
+        local.cloud_auto_backup = true;
+        local.recent_projects = vec!["C:\\private\\project.stick".into()];
+        local.perspective_mode = 4;
+        local.perspective_ray_count = 31;
+        let json = local.portable_json().unwrap();
+        assert!(!json.contains("local@example.invalid"));
+        assert!(!json.contains("private"));
+        let mut other = AppConfig::default();
+        other.cloud_email = "keep@example.invalid".into();
+        let imported = AppConfig::import_portable_json(&json, &other).unwrap();
+        assert_eq!(imported.cloud_email, "keep@example.invalid");
+        assert_eq!(imported.perspective_mode, 4);
+        assert_eq!(imported.perspective_ray_count, 31);
     }
 
     #[test]
