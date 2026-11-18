@@ -230,3 +230,11 @@
 - UI: compact Home/Undo/Redo/hamburger/support bar, custom symmetry icons, open Canvas Size & Presets section, Arabic bracket mirroring and Windows emoji/symbol fallback fonts.
 - Online local moderation: host right-click actions for guest rename, color and kick. Cross-network relay remains isolated in draft PR #47 and is not claimed ready until deployed/tested on two networks.
 - Performance reference: AniCraft was reviewed for architectural ideas (tiled/background stage and zoom-aware fill boundaries); no source code was copied.
+
+
+## 18 November 2026 — top bar follow-up
+- Branch: `feat/new-project-red-links-heart-20261118` from stable main `562581cd7096651bb9b005643d70d6b675e48065` / v4.1.0.240.
+- Added a direct `New project / مشروع جديد` command to the hamburger menu.
+- New-project action writes a recovery snapshot first when the active project has unsaved changes, then creates a clean one-frame default document without changing Drawing vs Animation workspace.
+- Removed the `Credits / عن البرنامج` menu item.
+- Added a red links/credits heart beside the existing yellow Support heart; red opens the existing YouTube/Instagram credits window, yellow remains support-only.

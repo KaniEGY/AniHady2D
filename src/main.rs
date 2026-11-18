@@ -2832,6 +2832,23 @@ impl StickApp {
         false
     }
 
+    fn start_new_project(&mut self) -> Result<(), String> {
+        if self.online_session.is_some() {
+            return Err("Leave the online room before starting a new project.".into());
+        }
+        if self.has_unsaved_changes {
+            persistence::atomic_save::write_recovery_snapshot(
+                &self.project, "before_new_project")
+                .map_err(|e| format!("Could not create recovery snapshot before new project: {e}"))?;
+        }
+        let mut project = AniProject::default();
+        project.total_frames = 1;
+        self.replace_document(project);
+        self.has_unsaved_changes = false;
+        self.status_message = "New project created".to_string();
+        Ok(())
+    }
+
     fn trigger_open_project(&mut self) {
         if let Some(p) = rfd::FileDialog::new()
             .add_filter("Stick", &["stick", "ah2d"]).pick_file() {
@@ -5240,6 +5257,18 @@ impl eframe::App for StickApp {
                         ui.strong(tr(lang,"Stick commands","أوامر Stick"));
                         ui.separator();
 
+                        if ui.add_enabled(self.online_session.is_none(),
+                            egui::Button::new(tr(lang,"New project","مشروع جديد"))).clicked() {
+                            if let Err(err)=self.start_new_project() {
+                                self.project_notice_title =
+                                    tr(lang,"New project","مشروع جديد").to_owned();
+                                self.project_notice_body = err;
+                                self.show_project_notice = true;
+                            }
+                            ui.close_menu();
+                        }
+                        ui.separator();
+
                         let switch_label=if self.workspace_mode==WorkspaceMode::DrawingOnly {
                             tr(lang,"Switch to Animation","التبديل للأنيميشن")
                         } else {tr(lang,"Switch to Drawing","التبديل للرسم")};
@@ -5283,7 +5312,6 @@ impl eframe::App for StickApp {
                                 ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(self.is_fullscreen));
                             }
                         });
-                        if ui.button(tr(lang,"Credits","عن البرنامج")).clicked(){self.show_credits_dialog=true;ui.close_menu();}
                     });
 
                     let (heart_rect,heart_resp)=ui.allocate_exact_size(
@@ -5292,6 +5320,14 @@ impl eframe::App for StickApp {
                     if heart_resp.on_hover_text(tr(lang,
                         "Support Stick (optional)","دعم البرنامج (اختياري)")).clicked(){
                         self.show_support_dialog=true;
+                    }
+
+                    let (links_heart_rect,links_heart_resp)=ui.allocate_exact_size(
+                        egui::vec2(30.0,24.0),egui::Sense::click());
+                    draw_red_heart_icon(ui.painter(),links_heart_rect,links_heart_resp.hovered());
+                    if links_heart_resp.on_hover_text(tr(lang,
+                        "Stick links & credits","روابط Stick والتعريف بالبرنامج")).clicked(){
+                        self.show_credits_dialog=true;
                     }
 
                     ui.separator();
@@ -7694,6 +7730,27 @@ mod tool_discovery_tests {
         assert_eq!((app.loop_start_frame, app.loop_end_frame), (4, 4));
         assert_eq!(app.active_layer_idx, 0);
         assert!(app.selected_stroke_indices.is_empty());
+    }
+
+    #[test]
+    fn new_project_resets_document_path_history_and_timeline() {
+        let mut app = StickApp::new(&egui::Context::default());
+        app.workspace_mode = WorkspaceMode::DrawingOnly;
+        app.current_project_path = Some("old_project.stick".into());
+        app.project.total_frames = 23;
+        app.timeline_length = 23;
+        app.current_frame = 17;
+        app.save_undo_state();
+        app.has_unsaved_changes = false;
+        app.start_new_project().expect("new project should succeed offline");
+        assert!(app.workspace_mode == WorkspaceMode::DrawingOnly);
+        assert_eq!(app.project.total_frames, 1);
+        assert_eq!(app.timeline_length, 1);
+        assert_eq!(app.current_frame, 1);
+        assert!(app.current_project_path.is_none());
+        assert!(app.undo_stack.is_empty());
+        assert!(app.redo_stack.is_empty());
+        assert!(!app.has_unsaved_changes);
     }
 
     #[test]
