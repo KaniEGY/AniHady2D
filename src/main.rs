@@ -2240,6 +2240,26 @@ impl StickApp {
         else { None }
     }
 
+    // Video imports are separate decoded frames. Keep one shared visual transform
+    // across all frames of their layer while preserving each individual source path.
+    fn propagate_video_media(&mut self) {
+        let Some(index) = self.selected_media_idx else { return; };
+        let Some(layer) = self.project.layers.get(self.active_layer_idx) else { return; };
+        let Some(item) = self.project.evaluate_layer_at_frame(layer, self.current_frame)
+            .media_items.get(index).cloned() else { return; };
+        if item.media_type != MediaType::VideoFrame { return; }
+        let Some(layer) = self.project.layers.get_mut(self.active_layer_idx) else { return; };
+        for data in layer.keyframes.values_mut() {
+            if let Some(other) = data.media_items.get_mut(index) {
+                if other.media_type == MediaType::VideoFrame {
+                    other.x=item.x; other.y=item.y; other.width=item.width; other.height=item.height;
+                    other.rotation_deg=item.rotation_deg;
+                    other.flip_h=item.flip_h; other.flip_v=item.flip_v;
+                }
+            }
+        }
+    }
+
     fn resize_selection_from_corner(&mut self, anchor: egui::Pos2, factor: f32) {
         if self.is_active_layer_locked() || !factor.is_finite() { return; }
         let factor = factor.clamp(0.25, 4.0);
@@ -2258,11 +2278,18 @@ impl StickApp {
                         text.font_size = (text.font_size * factor).clamp(4.0, 512.0);
                     }
                 }
+                if let Some(index) = self.selected_media_idx {
+                    if let Some(item) = frame.media_items.get_mut(index) {
+                        media_transform::scale_around(item, (anchor.x,anchor.y),factor);
+                    }
+                }
                 self.has_unsaved_changes = true;
             }
         }
+        self.propagate_video_media();
     }
 
+        
     fn move_selected_items(&mut self, delta: egui::Vec2) {
         if self.is_active_layer_locked() || delta.length_sq() <= 0.0 { return; }
         self.ensure_editable_keyframe();
@@ -2278,9 +2305,15 @@ impl StickApp {
                         text.x += delta.x; text.y += delta.y;
                     }
                 }
+                if let Some(index) = self.selected_media_idx {
+                    if let Some(item) = frame.media_items.get_mut(index) {
+                        media_transform::translate(item,delta.x,delta.y);
+                    }
+                }
                 self.has_unsaved_changes = true;
             }
         }
+        self.propagate_video_media();
     }
 
     fn rotate_selection_around(&mut self, pivot: egui::Pos2, radians: f32) {
@@ -2303,13 +2336,36 @@ impl StickApp {
                         text.y = pivot.y + dx * sn + dy * cs;
                     }
                 }
+                if let Some(index) = self.selected_media_idx {
+                    if let Some(item) = frame.media_items.get_mut(index) {
+                        media_transform::rotate_around(item,(pivot.x,pivot.y),radians);
+                    }
+                }
                 self.has_unsaved_changes = true;
             }
         }
+        self.propagate_video_media();
     }
 
     fn transform_selected_items(&mut self, scale_factor: f32, delta_angle_deg: f32, flip_h: bool, flip_v: bool) {
-        if self.is_active_layer_locked() || self.selected_stroke_indices.is_empty() { return; }
+        if self.is_active_layer_locked() { return; }
+        if let Some(index) = self.selected_media_idx {
+            self.ensure_editable_keyframe();
+            if let Some(layer)=self.project.layers.get_mut(self.active_layer_idx) {
+                if let Some(data)=layer.keyframes.get_mut(&self.current_frame) {
+                    if let Some(item)=data.media_items.get_mut(index) {
+                        let pivot=(item.x+item.width*0.5,item.y+item.height*0.5);
+                        media_transform::scale_around(item,pivot,scale_factor);
+                        media_transform::rotate_around(item,pivot,delta_angle_deg.to_radians());
+                        if flip_h { item.flip_h=!item.flip_h; }
+                        if flip_v { item.flip_v=!item.flip_v; }
+                        self.has_unsaved_changes=true;
+                    }
+                }
+            }
+            self.propagate_video_media();
+        }
+        if self.selected_stroke_indices.is_empty() { return; }
         self.ensure_editable_keyframe();
         if let Some(layer) = self.project.layers.get_mut(self.active_layer_idx) {
             if let Some(frame) = layer.keyframes.get_mut(&self.current_frame) {
@@ -5078,6 +5134,7 @@ impl eframe::App for StickApp {
                     if layer_response.clicked() {
                         self.active_layer_idx = idx;
                         self.selected_stroke_indices.clear();
+                        self.selected_media_idx = None;
                     }
                     if layer_response.double_clicked() { rename_layer_index = Some(idx); }
                     layer_response.context_menu(|ui| {
@@ -6129,7 +6186,8 @@ impl eframe::App for StickApp {
                                 let move_axis = bounds.and_then(|rect|
                                     transform_handles::translation_axis(rect, stage_pos, scale));
                                 let reuse_selection = bounds.is_some_and(|rect| rect.contains(stage_pos))
-                                    && (!self.selected_stroke_indices.is_empty() || self.selected_text_item_index.is_some());
+                                    && (!self.selected_stroke_indices.is_empty() || self.selected_text_item_index.is_some()
+                                        || self.selected_media_idx.is_some());
                                 if let Some(axis)=move_axis {
                                     self.save_undo_state();
                                     self.transform_axis=Some(axis);
@@ -6154,6 +6212,7 @@ impl eframe::App for StickApp {
                                 self.transform_rotate_pivot = None;
                                 self.selected_stroke_indices.clear();
                                 self.selected_text_item_index = None;
+                                self.selected_media_idx = None;
                                 self.selection_rect_start = None;
                                 self.selection_rect_current = None;
                                 if let Some(layer) = self.project.layers.get(self.active_layer_idx) {
@@ -6163,6 +6222,11 @@ impl eframe::App for StickApp {
                                         .find(|(_, text)| selection_tools::text_bounds(text).contains(stage_pos))
                                         .map(|(index, _)| index);
                                     if self.selected_text_item_index.is_none() {
+                                        self.selected_media_idx = frame.media_items.iter().enumerate().rev()
+                                            .find(|(_,item)| media_transform::hit_test(item,stage_pos.x,stage_pos.y))
+                                            .map(|(index,_)| index);
+                                    }
+                                    if self.selected_text_item_index.is_none() && self.selected_media_idx.is_none() {
                                         if let Some((index, _)) = frame.strokes.iter().enumerate().rev()
                                             .find(|(_, stroke)| selection_tools::stroke_hit_test(
                                                 stroke, stage_pos, (6.0 / scale).max(1.0))) {
@@ -6170,7 +6234,8 @@ impl eframe::App for StickApp {
                                         }
                                     }
                                 }
-                                if self.selected_text_item_index.is_none() && self.selected_stroke_indices.is_empty() {
+                                if self.selected_text_item_index.is_none() && self.selected_media_idx.is_none()
+                                    && self.selected_stroke_indices.is_empty() {
                                     self.selection_rect_start = Some(stage_pos);
                                     self.selection_rect_current = Some(stage_pos);
                                 } else {
@@ -6210,13 +6275,15 @@ impl eframe::App for StickApp {
                                 let existing = self.selected_canvas_bounds().is_some_and(
                                     |bounds| bounds.contains(stage_pos));
                                 self.lasso_dragging_selection = existing &&
-                                    (!self.selected_stroke_indices.is_empty() || self.selected_text_item_index.is_some());
+                                    (!self.selected_stroke_indices.is_empty() || self.selected_text_item_index.is_some()
+                                        || self.selected_media_idx.is_some());
                                 self.lasso_points.clear();
                                 if self.lasso_dragging_selection {
                                     self.save_undo_state();
                                 } else {
                                     self.selected_stroke_indices.clear();
                                     self.selected_text_item_index = None;
+                                    self.selected_media_idx = None;
                                     self.lasso_points.push(stage_pos);
                                 }
                             } else if pointer_down && self.lasso_dragging_selection {
