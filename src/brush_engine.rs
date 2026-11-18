@@ -19,12 +19,13 @@ pub fn visit_round_marks(stroke: &Stroke, mut paint: impl FnMut(RoundMark, f32))
         (false, KritaBrushPreset::SoftAirbrush) => &[(1.55, 0.25), (1.05, 0.5), (0.65, 1.0)],
         _ => &[(1.0, 1.0)],
     };
-    let pressure = if stroke.is_vector {
+    let pressure = if stroke.is_vector || stroke.brush_preset == KritaBrushPreset::Fineliner {
         1.0
     } else {
         first.pressure.clamp(0.02, 2.0)
     };
     let varying = !stroke.is_vector
+        && stroke.brush_preset != KritaBrushPreset::Fineliner
         && stroke
             .points
             .iter()
@@ -32,13 +33,32 @@ pub fn visit_round_marks(stroke: &Stroke, mut paint: impl FnMut(RoundMark, f32))
     for &(size, flow) in layers {
         let width = stroke.base_width * size;
         if stroke.points.len() == 1 {
-            let dab = dab_for(first, width);
+            let mut dab = dab_for(first, width);
+            if stroke.brush_preset == KritaBrushPreset::Fineliner {
+                dab.radius = (0.5 * width).max(0.25);
+            }
             if stroke.is_vector && stroke.tip_shape == BrushTipShape::Square {
                 paint(RoundMark::Outline(dab_polygon(BrushTipShape::Square, dab)), flow);
             } else {
                 paint(RoundMark::Dot(dab), flow);
             }
         } else {
+            if !stroke.is_vector && stroke.brush_preset == KritaBrushPreset::TaperedPen {
+                let tapered = taper_pressure_profile(&stroke.points);
+                let outline = crate::stroke_geometry::pressure_outline(&tapered, width);
+                if !outline.is_empty() {
+                    paint(RoundMark::Outline(outline), flow);
+                    continue;
+                }
+            }
+            if !stroke.is_vector && stroke.brush_preset == KritaBrushPreset::SmoothInk {
+                let smoothed = smooth_ink_points(&stroke.points, width);
+                let outline = crate::stroke_geometry::pressure_outline(&smoothed, width);
+                if !outline.is_empty() {
+                    paint(RoundMark::Outline(outline), flow);
+                    continue;
+                }
+            }
             if varying || (!stroke.is_vector && stroke.brush_preset == KritaBrushPreset::GPenInk) {
                 let outline = crate::stroke_geometry::pressure_outline(&stroke.points, width);
                 if !outline.is_empty() {
@@ -54,6 +74,54 @@ pub fn visit_round_marks(stroke: &Stroke, mut paint: impl FnMut(RoundMark, f32))
             );
         }
     }
+}
+
+/// Smooth only shallow accidental deviations, not corners and node landmarks.
+fn smooth_ink_points(points: &[StrokePoint], width: f32) -> Vec<StrokePoint> {
+    let mut result = points.to_vec();
+    let tolerance = (width * 0.18).clamp(0.35, 2.2);
+    for i in 1..points.len().saturating_sub(1) {
+        let a = &points[i - 1];
+        let b = &points[i];
+        let c = &points[i + 1];
+        let prev = (b.x-a.x,b.y-a.y);
+        let next = (c.x-b.x,c.y-b.y);
+        let l1=prev.0.hypot(prev.1);
+        let l2=next.0.hypot(next.1);
+        let chord=(c.x-a.x).hypot(c.y-a.y);
+        if l1<=0.001 || l2<=0.001 || chord<=0.001 {continue;}
+        let cos=(prev.0*next.0+prev.1*next.1)/(l1*l2);
+        let offset=((b.x-a.x)*(c.y-a.y)-(b.y-a.y)*(c.x-a.x)).abs()/chord;
+        if cos>0.62 && offset<=tolerance {
+            result[i].x=0.2*a.x+0.6*b.x+0.2*c.x;
+            result[i].y=0.2*a.y+0.6*b.y+0.2*c.y;
+        }
+    }
+    result
+}
+
+/// Natural tapered nib: reduce width progressively over the first and last
+/// 16% of travel while retaining real input pressure through the middle.
+fn taper_pressure_profile(points: &[StrokePoint]) -> Vec<StrokePoint> {
+    let mut result=points.to_vec();
+    if result.len()<2 { return result; }
+    let mut traveled=Vec::with_capacity(result.len());
+    traveled.push(0.0f32);
+    for pair in points.windows(2) {
+        let distance=(pair[1].x-pair[0].x).hypot(pair[1].y-pair[0].y);
+        traveled.push(traveled.last().copied().unwrap_or(0.0)+
+            if distance.is_finite() {distance.max(0.)} else {0.});
+    }
+    let total=traveled.last().copied().unwrap_or(0.0);
+    if total<=0.001 {return result;}
+    for (p, traveled) in result.iter_mut().zip(traveled) {
+        let t=(traveled/total).clamp(0.,1.);
+        let edge=(t.min(1.-t)/0.16).clamp(0.,1.);
+        // Smoothstep avoids an abrupt shoulder as the taper reaches full size.
+        let eased=edge*edge*(3.-2.*edge);
+        p.pressure *= 0.16+0.84*eased;
+    }
+    result
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -215,6 +283,35 @@ mod tests {
         assert!(dabs.iter().all(|d| d.radius.is_finite() && d.radius > 0.0));
     }
 
+    #[test]
+    fn fineliner_ignores_pressure_and_keeps_constant_width() {
+        let s=Stroke {
+            points:vec![point(0.,0.,0.2),point(30.,0.,1.0)],
+            color:[0,0,0,255],fill_color:None,base_width:8.,is_vector:false,
+            brush_preset:KritaBrushPreset::Fineliner,opacity:1.,brush_texture_id:None,
+            tip_shape:BrushTipShape::Round,
+        };
+        let mut widths=Vec::new();
+        visit_round_marks(&s,|mark,_|if let RoundMark::Line{width}=mark {widths.push(width)});
+        assert_eq!(widths,vec![8.]);
+    }
+    #[test]
+    fn tapered_pen_reduces_end_pressure_and_preserves_midstroke() {
+        let points=[point(0.,0.,1.),point(10.,0.,1.),point(20.,0.,1.),point(30.,0.,1.)];
+        let profile=taper_pressure_profile(&points);
+        assert!(profile[0].pressure<profile[1].pressure);
+        assert!(profile[3].pressure<profile[2].pressure);
+        assert!(profile[1].pressure>0.95);
+    }
+    #[test]
+    fn smooth_ink_keeps_intentional_sharp_corners() {
+        let points=[point(0.,0.,1.),point(10.,0.,1.),point(10.,10.,1.)];
+        let sample=smooth_ink_points(&points,8.);
+        assert_eq!(sample,points);
+        let j=[point(0.,0.,1.),point(10.,1.,1.),point(20.,0.,1.)];
+        let smooth=smooth_ink_points(&j,12.);
+        assert!(smooth[1].y<j[1].y);
+    }
     #[test]
     fn invalid_or_empty_input_is_safe() {
         assert!(sample_pressure_dabs(&[], 7.0).is_empty());

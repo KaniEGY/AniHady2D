@@ -1,5 +1,57 @@
 # Stick Studio — Session Handoff / سجل استكمال المشروع
 
+## 18 November 2026 — Work overhaul integrated review
+- PRs #40 (vector geometry), #41 (canvas appearance/sizes), #42 (pressure stroke smoothing), #43 (Advanced Timeline), #44 (five new brush presets) were merged in sequence into `integration/work-overhaul-20261118` using preserved source changes and explicitly resolved shared documentation / main.rs differences.
+- The build 213 released main was unchanged while staging. After one combined Windows cargo test/Clippy/release build and review, merge the integration PR to main and require the main push release workflow to succeed. Verify `Stick.exe`, `version.txt` and `SHA256SUMS.txt`.
+- **No backend relay or internet-wide collaboration replacement shipped in this batch.** Online external networking remains unverified.
+- Physical pen, multiple Windows machines, long video/audio files, live UI interaction and visually comparing SVG/PNG exports remain separate manual QA, not claimed as done.
+- Later Work/Codex tasks should check current GitHub main head and release first, not reimplement already-merged stage code.
+
+## 18 November 2026 — five new functional drawing presets (PR pending)
+
+- Feature branch `feature/new-real-brush-presets-20261118` from main build 213.
+- Appended 5 `KritaBrushPreset` enum variants after the original nine to preserve legacy enum order and maintain .stick schema compatibility. Added actual bilingual UI icons.
+- **Fineliner:** fixed geometric width independent of sampled stylus pressure; smoothed centerline shared by egui and raster/video export.
+- **Smooth Ink:** cross-track micro-jitter reduction at gentle bends and pressure-aware continuous outline; intentional sharp turns maintained.
+- **Tapered Pen:** travel-distance-based smoothly easing tip width at both ends while retaining real pressure through the main stroke.
+- **Calligraphy:** fixed-angle 30-degree chisel texture stamp, independent of draw direction, with shared procedural preview/export alpha mask.
+- **Soft Sketch Pencil:** distinct lightweight textured/grainy mask and semi-transparent pressure-sensitive stamping.
+- Added brush geometry and texture mask tests. No user project files were edited or deleted. Existing 9 presets remain.
+- **Pending:** GitHub CI, physical pen/mouse and PNG/video comparison, texture visual QA. Hardness/pressure-curve/spacing sliders remain future work; do not misrepresent them as implemented.
+
+## 18 November 2026 — Advanced Timeline core (PR pending)
+
+- Feature branch `feature/advanced-timeline-keyframe-edit-20261118`, based on main build 213.
+- `src/advanced_timeline.rs`: atomic group move/copy of authored keyframes with layer/frame bounds, locked-layer and collision validation. The operation does not modify audio and the editor wraps successful mutations in existing Undo snapshots.
+- Timeline Settings now exposes an **Advanced Timeline — التايم لاين المتقدم** selection alongside OLD and NEW. It renders a distinct timecode ruler/exposure tracks, Ctrl/Shift-click multi-keyframe selection, drag move, Alt-drag duplicate, and +1 frame batch buttons.
+- Existing video/image layer cels and sampled waveform audio remain on the same shared timeline, and all three modes read/write the existing project schema. New editor selection state is transient.
+- **Limits:** this first core slice does not yet implement non-destructive audio trim, video thumbnails, multi-cell clipboard paste, exposure edge stretching, advanced snap magnets or panel panning. Manual GUI drag acceptance and Windows CI remain outstanding; do not describe it as feature-complete.
+
+## 18 November 2026 — pressure stroke stabilizer/resampler (PR pending)
+
+- Branch `feature/pressure-stroke-quality-20261118` from main build 213.
+- Reworked `src/stroke_geometry.rs` G-Pen pressure outline with bounded cross-track jitter reduction on gentle lines, path-distance resampling (24k sample limit), pressure interpolation, short miter limits at sharp corners and consistent round end caps.
+- Existing `brush_engine::visit_round_marks` shares this outline in egui preview and tiny-skia raster/video export. No .stick schema change, no alteration to stored points or reported tablet pressure.
+- Unit tests cover long fast lines, intentional corners, pressure width, duplicate/invalid points, circular paths and memory budgets.
+- **Not accepted yet:** Windows tests/Clippy/release build, real pen hardware, zoom/rotation, translucent anti-alias visual parity and long stroke performance should be checked before merging.
+
+## 18 November 2026 — Canvas Appearance and Canvas Size Mode (PR pending)
+
+- Branch: `feature/canvas-appearance-sizes-20261118` from main build 213 (`fa5136795b6e6f14802ae2afeb661a2aba753dc9`).
+- New `src/canvas_appearance.rs`: display-only configurable border color/width, rounded corner mask, optional shadow, workspace color. Settings are user-local AppConfig with serde defaults (old settings still load), never .stick file content or exporter decorations.
+- General settings now include a bilingual Canvas Appearance section, live sample and reset button.
+- Canvas Size Mode includes named YouTube Thumbnail/HD/Full HD presets, custom ratio lock, and confirmation on shrinking the stage; the existing Undo-backed size action is reused. Original legacy presets remain offered.
+- Old artwork is not rescaled or erased when changing canvas bounds. Old .stick schema remains unchanged.
+- Requires Windows CI, real GUI inspection, rotation/zoom display checks and actual file preservation/export QA before release; no verification of those physical checks is asserted here.
+
+## 18 November 2026 — adaptive vector interpolation (PR pending)
+
+- Feature branch: `feature/vector-geometry-quality-20261118`, based on main SHA `fa5136795b6e6f14802ae2afeb661a2aba753dc9` (Windows build 213).
+- Changed `src/vector_path.rs`: adaptive subdivision (3–24 samples/segment), chord-weighted Hermite tangents, hard-corner preservation, duplicate point filtering, cyclic closed-path interpolation and safer square-cap extension.
+- Non-destructive geometry only: the .stick format and stored editable nodes are untouched. The existing preview and raster/video export call this shared path function.
+- Added unit tests for straight strokes, corners, closed loops, duplicates, invalid input, adaptive sampling and cap behavior.
+- The PR must pass GitHub Windows tests/Clippy/release build before merge. Physical pen, 4K/long-session performance, preview/export image diffs and Windows visual inspection are **not yet validated**. Do not claim a published build based on this branch.
+
 ## 18 November 2026 — imported media, audio timeline and bounded fill controls
 
 - Branch: `feature/media-audio-fill-studio-20261118`. This entry records work in progress until the Windows CI run passes and a merge/release is confirmed.
