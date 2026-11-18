@@ -238,3 +238,10 @@
 - New-project action writes a recovery snapshot first when the active project has unsaved changes, then creates a clean one-frame default document without changing Drawing vs Animation workspace.
 - Removed the `Credits / عن البرنامج` menu item.
 - Added a red links/credits heart beside the existing yellow Support heart; red opens the existing YouTube/Instagram credits window, yellow remains support-only.
+
+
+## 18 November 2026 — interface presets branch
+- Branch: `feat/interface-style-presets-20261118` from v4.1.0.243 main.
+- Hamburger now contains `Interface / الواجهة` with Current, Cartoon, Serious, Cute Pink, Animate Style, Krita Style and Blender Style.
+- Presets are stored in AppConfig and alter Stick-owned palette, density, icon scale, timeline style and dock proportions.
+- No third-party logos, icons or copied program assets are bundled; named styles are familiarity presets only.
