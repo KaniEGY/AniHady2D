@@ -44,18 +44,17 @@ pub fn show(
                 egui::Sense::hover(),
             );
             let center = rect.center();
-            let painter = ui.painter();
-            painter.circle_filled(
+            ui.painter().circle_filled(
                 center,
                 31.0,
                 egui::Color32::from_rgba_unmultiplied(18, 24, 33, 246),
             );
-            painter.circle_stroke(
+            ui.painter().circle_stroke(
                 center,
                 31.0,
                 egui::Stroke::new(1.4, egui::Color32::from_rgb(66, 205, 242)),
             );
-            painter.circle_stroke(
+            ui.painter().circle_stroke(
                 center,
                 104.0,
                 egui::Stroke::new(1.0, egui::Color32::from_rgba_unmultiplied(66, 205, 242, 72)),
@@ -63,7 +62,7 @@ pub fn show(
 
             match state.kind {
                 QuickMenuKind::Shapes => {
-                    painter.text(
+                    ui.painter().text(
                         center,
                         egui::Align2::CENTER_CENTER,
                         "SHAPE",
@@ -84,8 +83,8 @@ pub fn show(
                         } else {
                             egui::Color32::from_rgb(28, 34, 43)
                         };
-                        painter.circle_filled(p, 20.0, fill);
-                        painter.circle_stroke(
+                        ui.painter().circle_filled(p, 20.0, fill);
+                        ui.painter().circle_stroke(
                             p,
                             20.0,
                             egui::Stroke::new(
@@ -97,7 +96,7 @@ pub fn show(
                                 },
                             ),
                         );
-                        painter.text(
+                        ui.painter().text(
                             p,
                             egui::Align2::CENTER_CENTER,
                             *label,
@@ -110,7 +109,7 @@ pub fn show(
                     }
                 }
                 QuickMenuKind::Colors => {
-                    painter.text(
+                    ui.painter().text(
                         center,
                         egui::Align2::CENTER_CENTER,
                         "COLOR",
@@ -127,8 +126,8 @@ pub fn show(
                         let fill = egui::Color32::from_rgba_unmultiplied(
                             color[0], color[1], color[2], color[3],
                         );
-                        painter.circle_filled(p, 13.0, fill);
-                        painter.circle_stroke(
+                        ui.painter().circle_filled(p, 13.0, fill);
+                        ui.painter().circle_stroke(
                             p,
                             if color == selected_color { 16.0 } else { 14.0 },
                             egui::Stroke::new(
