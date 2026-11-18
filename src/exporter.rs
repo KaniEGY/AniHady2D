@@ -179,12 +179,20 @@ pub fn render_frame_pixmap(project: &AniProject, frame_idx: usize, transparent_b
                     .to_rgba8();
                 if let Some(mut sub_pix) = Pixmap::new(resized.width(), resized.height()) {
                     sub_pix.data_mut().copy_from_slice(resized.as_raw());
+                    let w = resized.width() as f32;
+                    let h = resized.height() as f32;
+                    let x_scale = if m.flip_h { -1.0 } else { 1.0 };
+                    let y_scale = if m.flip_v { -1.0 } else { 1.0 };
+                    let transform = Transform::from_translate(-w * 0.5, -h * 0.5)
+                        .post_scale(x_scale, y_scale)
+                        .post_rotate(m.rotation_deg)
+                        .post_translate(m.x + m.width * 0.5, m.y + m.height * 0.5);
                     layer_pixmap.draw_pixmap(
-                        m.x as i32,
-                        m.y as i32,
+                        0,
+                        0,
                         sub_pix.as_ref(),
                         &tiny_skia::PixmapPaint::default(),
-                        Transform::identity(),
+                        transform,
                         None,
                     );
                 }

@@ -28,6 +28,8 @@ mod cloud_sync;
 mod project_sync;
 mod remote_access;
 mod transform_handles;
+mod media_transform;
+mod audio_timeline;
 
 use arabic_reshaper::arabic_reshape;
 use brushes::{draw_brush_preset_icon, draw_stroke_pro};
@@ -1140,6 +1142,7 @@ struct StickApp {
     active_layer_idx: usize,
     editing_symbol_name: Option<String>,
     selected_audio_idx: Option<usize>,
+    audio_drag_origin: Option<(usize,usize)>,
     active_tool_ui: ActiveToolUI,
     active_krita_brush: KritaBrushPreset,
     brush_opacity: f32,
@@ -1172,6 +1175,7 @@ struct StickApp {
     transform_axis: Option<char>,
     lasso_dragging_selection: bool,
     selected_text_item_index: Option<usize>,
+    selected_media_idx: Option<usize>,
     selection_rect_start: Option<egui::Pos2>,
     selection_rect_current: Option<egui::Pos2>,
     lasso_points: Vec<egui::Pos2>,
@@ -1180,6 +1184,9 @@ struct StickApp {
     stage_bg_color: [u8; 4],
     brush_size: f32,
     bucket_gap_close: f32,
+    bucket_precision: f32,
+    bucket_dilate_contract: f32,
+    bucket_thickness: f32,
     bucket_reference_all_layers: bool,
     brush_tip_shape: BrushTipShape,
     zoom_level: f32,
@@ -1235,7 +1242,7 @@ struct StickApp {
     stylus_tracker: TouchPressureTracker,
     texture_cache: HashMap<String, egui::TextureHandle>,
     status_message: String,
-    audio_sink: Option<(OutputStream, Sink)>,
+    audio_sink: Option<(OutputStream, Vec<Sink>)>,
     last_pointer_pos: Option<egui::Pos2>,
     last_secondary_pointer_pos: Option<egui::Pos2>,
 }
@@ -1294,6 +1301,7 @@ impl StickApp {
             active_layer_idx: 0,
             editing_symbol_name: None,
             selected_audio_idx: None,
+            audio_drag_origin: None,
             active_tool_ui: ActiveToolUI::Brush,
             active_krita_brush: KritaBrushPreset::GPenInk,
             brush_opacity: 1.0,
@@ -1326,6 +1334,7 @@ impl StickApp {
             transform_axis: None,
             lasso_dragging_selection: false,
             selected_text_item_index: None,
+            selected_media_idx: None,
             selection_rect_start: None,
             selection_rect_current: None,
             lasso_points: Vec::new(),
@@ -1334,6 +1343,9 @@ impl StickApp {
             stage_bg_color: [255, 255, 255, 255],
             brush_size: 7.0,
             bucket_gap_close: 3.0,
+            bucket_precision: 1.0,
+            bucket_dilate_contract: 0.0,
+            bucket_thickness: 0.0,
             bucket_reference_all_layers: false,
             brush_tip_shape: BrushTipShape::Round,
             zoom_level: 0.75,
@@ -2108,6 +2120,7 @@ impl StickApp {
         self.transform_rotate_pivot = None;
         self.transform_axis = None;
         self.selected_text_item_index = None;
+        self.selected_media_idx = None;
         self.selection_rect_start = None;
         self.selection_rect_current = None;
         self.lasso_points.clear();
@@ -2220,8 +2233,37 @@ impl StickApp {
                 found = true;
             }
         }
+        if let Some(index) = self.selected_media_idx {
+            if let Some(media) = frame.media_items.get(index) {
+                for (x,y) in media_transform::corners(media) {
+                    min = min.min(egui::pos2(x,y));
+                    max = max.max(egui::pos2(x,y));
+                    found = true;
+                }
+            }
+        }
         if found { Some(egui::Rect::from_min_max(min, max).expand(2.0)) }
         else { None }
+    }
+
+    // Video imports are separate decoded frames. Keep one shared visual transform
+    // across all frames of their layer while preserving each individual source path.
+    fn propagate_video_media(&mut self) {
+        let Some(index) = self.selected_media_idx else { return; };
+        let Some(layer) = self.project.layers.get(self.active_layer_idx) else { return; };
+        let Some(item) = self.project.evaluate_layer_at_frame(layer, self.current_frame)
+            .media_items.get(index).cloned() else { return; };
+        if item.media_type != MediaType::VideoFrame { return; }
+        let Some(layer) = self.project.layers.get_mut(self.active_layer_idx) else { return; };
+        for data in layer.keyframes.values_mut() {
+            if let Some(other) = data.media_items.get_mut(index) {
+                if other.media_type == MediaType::VideoFrame {
+                    other.x=item.x; other.y=item.y; other.width=item.width; other.height=item.height;
+                    other.rotation_deg=item.rotation_deg;
+                    other.flip_h=item.flip_h; other.flip_v=item.flip_v;
+                }
+            }
+        }
     }
 
     fn resize_selection_from_corner(&mut self, anchor: egui::Pos2, factor: f32) {
@@ -2242,11 +2284,18 @@ impl StickApp {
                         text.font_size = (text.font_size * factor).clamp(4.0, 512.0);
                     }
                 }
+                if let Some(index) = self.selected_media_idx {
+                    if let Some(item) = frame.media_items.get_mut(index) {
+                        media_transform::scale_around(item, (anchor.x,anchor.y),factor);
+                    }
+                }
                 self.has_unsaved_changes = true;
             }
         }
+        self.propagate_video_media();
     }
 
+        
     fn move_selected_items(&mut self, delta: egui::Vec2) {
         if self.is_active_layer_locked() || delta.length_sq() <= 0.0 { return; }
         self.ensure_editable_keyframe();
@@ -2262,9 +2311,15 @@ impl StickApp {
                         text.x += delta.x; text.y += delta.y;
                     }
                 }
+                if let Some(index) = self.selected_media_idx {
+                    if let Some(item) = frame.media_items.get_mut(index) {
+                        media_transform::translate(item,delta.x,delta.y);
+                    }
+                }
                 self.has_unsaved_changes = true;
             }
         }
+        self.propagate_video_media();
     }
 
     fn rotate_selection_around(&mut self, pivot: egui::Pos2, radians: f32) {
@@ -2287,13 +2342,36 @@ impl StickApp {
                         text.y = pivot.y + dx * sn + dy * cs;
                     }
                 }
+                if let Some(index) = self.selected_media_idx {
+                    if let Some(item) = frame.media_items.get_mut(index) {
+                        media_transform::rotate_around(item,(pivot.x,pivot.y),radians);
+                    }
+                }
                 self.has_unsaved_changes = true;
             }
         }
+        self.propagate_video_media();
     }
 
     fn transform_selected_items(&mut self, scale_factor: f32, delta_angle_deg: f32, flip_h: bool, flip_v: bool) {
-        if self.is_active_layer_locked() || self.selected_stroke_indices.is_empty() { return; }
+        if self.is_active_layer_locked() { return; }
+        if let Some(index) = self.selected_media_idx {
+            self.ensure_editable_keyframe();
+            if let Some(layer)=self.project.layers.get_mut(self.active_layer_idx) {
+                if let Some(data)=layer.keyframes.get_mut(&self.current_frame) {
+                    if let Some(item)=data.media_items.get_mut(index) {
+                        let pivot=(item.x+item.width*0.5,item.y+item.height*0.5);
+                        media_transform::scale_around(item,pivot,scale_factor);
+                        media_transform::rotate_around(item,pivot,delta_angle_deg.to_radians());
+                        if flip_h { item.flip_h=!item.flip_h; }
+                        if flip_v { item.flip_v=!item.flip_v; }
+                        self.has_unsaved_changes=true;
+                    }
+                }
+            }
+            self.propagate_video_media();
+        }
+        if self.selected_stroke_indices.is_empty() { return; }
         self.ensure_editable_keyframe();
         if let Some(layer) = self.project.layers.get_mut(self.active_layer_idx) {
             if let Some(frame) = layer.keyframes.get_mut(&self.current_frame) {
@@ -2431,15 +2509,18 @@ impl StickApp {
         if self.is_playing { return; }
         let fps = self.project.fps.max(1) as f64;
         for track in &self.project.audio_tracks {
-            if track.sync_mode == AudioSyncMode::Stream && self.current_frame >= track.start_frame && self.current_frame <= track.end_frame {
+            if track.sync_mode == AudioSyncMode::Stream && !track.muted && track.gain > 0.0
+                && self.current_frame >= track.start_frame && self.current_frame <= track.end_frame {
                 let seek_secs = (self.current_frame - track.start_frame) as f64 / fps;
                 let path = track.file_path.clone();
+                let gain = track.gain.clamp(0.0,2.0);
                 let frame_dur_ms = (1000.0 / fps).clamp(40.0, 120.0) as u64;
                 std::thread::spawn(move || {
                     if let Ok((_s, h)) = OutputStream::try_default() {
                         if let Ok(sink) = Sink::try_new(&h) {
                             if let Ok(file) = File::open(&path) {
                                 if let Ok(src) = Decoder::new(BufReader::new(file)) {
+                                    sink.set_volume(gain);
                                     sink.append(src.skip_duration(Duration::from_secs_f64(seek_secs)).take_duration(Duration::from_millis(frame_dur_ms)));
                                     sink.sleep_until_end();
                                 }
@@ -2453,26 +2534,32 @@ impl StickApp {
     }
 
     fn start_audio_playback(&mut self) {
-        if let Some(track) = self.project.audio_tracks.first() {
-            if self.current_frame > track.end_frame { return; }
-            let fps = self.project.fps.max(1) as f64;
-            let start_offset = self.current_frame.saturating_sub(track.start_frame) as f64 / fps;
-            let max_dur = (track.end_frame.saturating_sub(self.current_frame) + 1) as f64 / fps;
-            if let Ok((stream, handle)) = OutputStream::try_default() {
-                if let Ok(sink) = Sink::try_new(&handle) {
-                    if let Ok(file) = File::open(&track.file_path) {
-                        if let Ok(src) = Decoder::new(BufReader::new(file)) {
-                            sink.append(src.skip_duration(Duration::from_secs_f64(start_offset)).take_duration(Duration::from_secs_f64(max_dur.max(0.1))));
-                            self.audio_sink = Some((stream, sink));
-                        }
-                    }
-                }
-            }
+        self.stop_audio_playback();
+        let Ok((stream, handle)) = OutputStream::try_default() else { return; };
+        let fps = self.project.fps.max(1) as f64;
+        let mut sinks = Vec::new();
+        for track in &self.project.audio_tracks {
+            if track.muted || track.gain <= 0.0 || self.current_frame > track.end_frame { continue; }
+            let Ok(file) = File::open(&track.file_path) else { continue; };
+            let Ok(source) = Decoder::new(BufReader::new(file)) else { continue; };
+            let Ok(sink) = Sink::try_new(&handle) else { continue; };
+            let skip = self.current_frame.saturating_sub(track.start_frame) as f64 / fps;
+            let delay = track.start_frame.saturating_sub(self.current_frame) as f64 / fps;
+            let audible = (track.end_frame.saturating_sub(track.start_frame) + 1) as f64 / fps - skip;
+            if audible <= 0.0 { continue; }
+            sink.set_volume(track.gain.clamp(0.0,2.0));
+            sink.append(source.skip_duration(Duration::from_secs_f64(skip))
+                .take_duration(Duration::from_secs_f64(audible))
+                .delay(Duration::from_secs_f64(delay)));
+            sinks.push(sink);
         }
+        if !sinks.is_empty() { self.audio_sink = Some((stream,sinks)); }
     }
 
     fn stop_audio_playback(&mut self) {
-        if let Some((_, sink)) = self.audio_sink.take() { sink.stop(); }
+        if let Some((_, sinks)) = self.audio_sink.take() {
+            for sink in sinks { sink.stop(); }
+        }
     }
 
     fn remember_recent_project(&mut self, path: &Path) {
@@ -2621,10 +2708,21 @@ impl StickApp {
             let img_name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
             let mut kf = HashMap::new();
             let mut fd = FrameData::default();
-            fd.media_items.push(MediaItem { path: path.to_string_lossy().to_string(), media_type: MediaType::Image, x: 100.0, y: 50.0, width: 400.0, height: 300.0 });
+            let (ow, oh) = image::image_dimensions(&path).unwrap_or((400,300));
+            let ratio = (self.project.width as f32 * 0.8 / ow.max(1) as f32)
+                .min(self.project.height as f32 * 0.8 / oh.max(1) as f32).min(1.0);
+            let (width,height) = (ow as f32 * ratio, oh as f32 * ratio);
+            fd.media_items.push(MediaItem {
+                path: path.to_string_lossy().to_string(), media_type: MediaType::Image,
+                x: (self.project.width as f32-width)*0.5,
+                y: (self.project.height as f32-height)*0.5,
+                width, height, rotation_deg: 0.0, flip_h: false, flip_v: false });
             kf.insert(self.current_frame, fd);
             self.project.layers.insert(0, Layer { name: format!("Img_{}", img_name), visible: true, locked: false, is_guide: false, xp_first_paint_rewarded: false, opacity: 1.0, keyframes: kf });
             self.active_layer_idx = 0;
+            self.clear_cel_selection();
+            self.selected_media_idx = Some(0);
+            self.active_tool_ui = ActiveToolUI::FreeTransform;
             self.has_unsaved_changes = true;
             self.play_sfx(SfxType::NewFrame);
         }
@@ -2666,11 +2764,14 @@ impl StickApp {
                 let mut kf = HashMap::new();
                 for (i, f_path) in frames.iter().enumerate() {
                     let mut fd = FrameData::default();
-                    fd.media_items.push(MediaItem { path: f_path.to_string_lossy().to_string(), media_type: MediaType::VideoFrame, x: 0.0, y: 0.0, width: self.project.width as f32, height: self.project.height as f32 });
+                    fd.media_items.push(MediaItem { path: f_path.to_string_lossy().to_string(), media_type: MediaType::VideoFrame, x: 0.0, y: 0.0, width: self.project.width as f32, height: self.project.height as f32, rotation_deg: 0.0, flip_h: false, flip_v: false });
                     kf.insert(self.current_frame + i, fd);
                 }
                 self.project.layers.insert(0, Layer { name: "Video_Layer".to_string(), visible: true, locked: false, is_guide: false, xp_first_paint_rewarded: false, opacity: 1.0, keyframes: kf });
                 self.active_layer_idx = 0;
+                self.clear_cel_selection();
+                self.selected_media_idx = Some(0);
+                self.active_tool_ui = ActiveToolUI::FreeTransform;
                 self.has_unsaved_changes = true;
                 self.play_sfx(SfxType::NewFrame);
             }
@@ -2681,10 +2782,21 @@ impl StickApp {
         if let Some(path) = rfd::FileDialog::new().add_filter("Audio", &["mp3", "wav"]).pick_file() {
             let name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
             let p_str = path.to_string_lossy().to_string();
+            let duration = File::open(&path).ok()
+                .and_then(|file| Decoder::new(BufReader::new(file)).ok())
+                .and_then(|decoder| decoder.total_duration());
             let peaks = extract_audio_waveform(&p_str, 120);
             self.save_undo_state();
-            if self.timeline_length < 24 { self.timeline_length = 24; self.project.total_frames = 24; }
-            self.project.audio_tracks.push(AudioTrack { name, file_path: p_str, start_frame: self.current_frame, end_frame: self.timeline_length, sync_mode: AudioSyncMode::Stream, waveform_peaks: peaks });
+            let frames = duration.map(|d| (d.as_secs_f64()*self.project.fps.max(1) as f64)
+                .ceil() as usize).unwrap_or(120).max(1);
+            let end_frame = self.current_frame.saturating_add(frames - 1)
+                .min(timeline_ops::MAX_TIMELINE_FRAMES);
+            self.timeline_length = self.timeline_length.max(end_frame);
+            self.project.total_frames=self.timeline_length;
+            self.project.audio_tracks.push(AudioTrack {
+                name, file_path: p_str, start_frame: self.current_frame,
+                end_frame, sync_mode: AudioSyncMode::Stream,
+                waveform_peaks: peaks, gain: 1.0, muted: false });
             self.selected_audio_idx = Some(self.project.audio_tracks.len() - 1);
             self.has_unsaved_changes = true;
             self.play_sfx(SfxType::NewFrame);
@@ -2866,21 +2978,26 @@ impl StickApp {
     }
 
     fn preload_frame_textures(&mut self, ctx: &egui::Context) {
-        let mut paths = Vec::new();
+        // Only retain textures needed on the *current* frame. Decoded video
+        // frames otherwise accumulate unbounded GPU memory while playing.
+        let mut wanted = std::collections::HashSet::new();
         for layer in &self.project.layers {
-            if layer.visible {
-                // Tweens interpolate strokes and symbols. Media paths belong to the held key.
-                let Some(fd) = Self::get_effective_frame_data(layer, self.current_frame) else { continue };
-                for m in &fd.media_items {
-                    if !self.texture_cache.contains_key(&m.path) { paths.push(m.path.clone()); }
-                }
-            }
+            if !layer.visible { continue; }
+            let Some(fd) = Self::get_effective_frame_data(layer,self.current_frame) else { continue };
+            for media in &fd.media_items { wanted.insert(media.path.clone()); }
         }
-        for path in paths {
+        self.texture_cache.retain(|path,_| wanted.contains(path));
+        for path in wanted {
+            if self.texture_cache.contains_key(&path) { continue; }
             if let Ok(img) = image::open(&path) {
-                let rgba = img.to_rgba8();
-                let ci = egui::ColorImage::from_rgba_unmultiplied([rgba.width() as usize, rgba.height() as usize], rgba.as_raw());
-                self.texture_cache.insert(path.clone(), ctx.load_texture(&path, ci, egui::TextureOptions::LINEAR));
+                let reduced = if img.width() > 2048 || img.height() > 2048 {
+                    img.thumbnail(2048,2048)
+                } else { img };
+                let rgba = reduced.to_rgba8();
+                let ci = egui::ColorImage::from_rgba_unmultiplied(
+                    [rgba.width() as usize,rgba.height() as usize],rgba.as_raw());
+                self.texture_cache.insert(path.clone(),
+                    ctx.load_texture(&path,ci,egui::TextureOptions::LINEAR));
             }
         }
     }
@@ -3025,6 +3142,89 @@ impl StickApp {
     }
 
     fn render_tool_properties_ui(&mut self, ui: &mut egui::Ui, lang: AppLang) {
+        if let Some(index) = self.selected_media_idx {
+            let source = self.project.layers.get(self.active_layer_idx).and_then(|layer|
+                self.project.evaluate_layer_at_frame(layer, self.current_frame)
+                    .media_items.get(index).cloned());
+            if let Some(previous) = source {
+                let mut item = previous.clone();
+                ui.strong(tr(lang,"Selected Image / Video Transform","تحويل الصورة / الفيديو المحدد"));
+                ui.small(if item.media_type == MediaType::VideoFrame {
+                    tr(lang,"Edits apply to every decoded frame in this video layer.",
+                        "التعديلات دي بتتطبق على كل فريمات الفيديو في اللير.")
+                } else {
+                    tr(lang,"Select and drag the image on canvas. Use the blue handles to resize or rotate.",
+                        "اسحب الصورة على اللوحة، واستخدم مقابض التحديد للتكبير والدوران.")
+                });
+                ui.horizontal(|ui| {
+                    ui.label("X"); ui.add(egui::DragValue::new(&mut item.x).speed(1.0));
+                    ui.label("Y"); ui.add(egui::DragValue::new(&mut item.y).speed(1.0));
+                });
+                ui.horizontal(|ui| {
+                    ui.label(tr(lang,"Width","العرض"));
+                    ui.add(egui::DragValue::new(&mut item.width).range(4.0..=8192.0).speed(1.0));
+                    ui.label(tr(lang,"Height","الارتفاع"));
+                    ui.add(egui::DragValue::new(&mut item.height).range(4.0..=8192.0).speed(1.0));
+                });
+                ui.add(egui::Slider::new(&mut item.rotation_deg,-180.0..=180.0)
+                    .text(tr(lang,"Rotation (degrees)","الدوران (درجة)")));
+                ui.horizontal(|ui| {
+                    if ui.button(tr(lang,"Flip H","عكس أفقي")).clicked() { item.flip_h=!item.flip_h; }
+                    if ui.button(tr(lang,"Flip V","عكس رأسي")).clicked() { item.flip_v=!item.flip_v; }
+                    if ui.button(tr(lang,"Reset","إعادة الضبط")).clicked() {
+                        item.rotation_deg=0.0; item.flip_h=false; item.flip_v=false;
+                    }
+                });
+                if item != previous && !self.is_active_layer_locked() {
+                    self.save_undo_state();
+                    self.ensure_editable_keyframe();
+                    if let Some(layer) = self.project.layers.get_mut(self.active_layer_idx) {
+                        if let Some(data) = layer.keyframes.get_mut(&self.current_frame) {
+                            if let Some(slot) = data.media_items.get_mut(index) { *slot = item; }
+                        }
+                    }
+                    self.propagate_video_media();
+                    self.has_unsaved_changes=true;
+                }
+                ui.separator();
+            }
+        }
+        if let Some(index) = self.selected_audio_idx {
+            if let Some(previous) = self.project.audio_tracks.get(index).cloned() {
+                let mut item=previous.clone();
+                ui.strong(tr(lang,"Audio track properties","خصائص لير الصوت"));
+                ui.add(egui::TextEdit::singleline(&mut item.name));
+                ui.horizontal(|ui| {
+                    ui.label(tr(lang,"Start frame","بداية الصوت"));
+                    let mut start=item.start_frame;
+                    if ui.add(egui::DragValue::new(&mut start).range(1..=timeline_ops::MAX_TIMELINE_FRAMES)).changed() {
+                        audio_timeline::move_clip(&mut item,start,timeline_ops::MAX_TIMELINE_FRAMES);
+                    }
+                });
+                ui.horizontal(|ui| {
+                    ui.label(tr(lang,"End frame","نهاية الصوت"));
+                    ui.add(egui::DragValue::new(&mut item.end_frame)
+                        .range(item.start_frame..=timeline_ops::MAX_TIMELINE_FRAMES));
+                });
+                ui.add(egui::Slider::new(&mut item.gain,0.0..=2.0)
+                    .text(tr(lang,"Volume","مستوى الصوت")));
+                ui.checkbox(&mut item.muted,tr(lang,"Mute","كتم"));
+                ui.horizontal(|ui| {
+                    ui.selectable_value(&mut item.sync_mode, AudioSyncMode::Stream,
+                        tr(lang,"Scrub preview","معاينة عند التحريك"));
+                    ui.selectable_value(&mut item.sync_mode, AudioSyncMode::Normal,
+                        tr(lang,"Playback only","تشغيل فقط"));
+                });
+                ui.small(tr(lang,"Drag the colored audio lane beneath the frame tracks to change its start time.",
+                    "اسحب المسار الصوتي الملون تحت الفريمات لتحريك توقيته."));
+                if item != previous {
+                    self.save_undo_state();
+                    self.project.audio_tracks[index]=item;
+                    self.has_unsaved_changes=true;
+                }
+                ui.separator();
+            }
+        }
         match self.active_tool_ui {
             ActiveToolUI::SelectNormal | ActiveToolUI::SelectLasso | ActiveToolUI::FreeTransform | ActiveToolUI::VectorDirectSelect => {
                 ui.strong(tr(lang, "Transform & Selection", "خصائص التحديد والتحويل الحر"));
@@ -3168,6 +3368,17 @@ impl StickApp {
                 ui.color_edit_button_srgba_unmultiplied(&mut self.brush_color);
                 ui.add(egui::Slider::new(&mut self.bucket_gap_close, 0.0..=12.0)
                     .text(tr(lang, "Close small gaps", "قفل الفجوات الصغيرة")));
+                ui.separator();
+                ui.strong(tr(lang, "Blender-inspired fill controls", "خصائص تعبئة مستوحاة من بلندر"));
+                ui.add(egui::Slider::new(&mut self.bucket_precision, 0.5..=2.5)
+                    .text(tr(lang, "Precision", "الدقة")));
+                ui.add(egui::Slider::new(&mut self.bucket_dilate_contract, -12.0..=12.0)
+                    .text(tr(lang, "Dilate / Contract (px)", "تمدد / انكماش (بكسل)")));
+                ui.add(egui::Slider::new(&mut self.bucket_thickness, 0.0..=20.0)
+                    .text(tr(lang, "Boundary Thickness (px)", "سُمك حدود التعبئة (بكسل)")));
+                ui.small(tr(lang,
+                    "Precision balances detail and memory. Positive dilate reaches under ink; negative shrinks the fill. Thickness changes the temporary boundary mask, not your strokes.",
+                    "الدقة بتوازن بين التفاصيل والذاكرة. التمدد الموجب بيدخل اللون تحت الخط، والسالب بيقلصه. السُمك بيغير قناع التعبئة المؤقت مش الرسمة."));
                 ui.checkbox(&mut self.bucket_reference_all_layers,
                     tr(lang, "Reference all visible layers", "استخدم حدود كل الليرات الظاهرة"));
                 ui.small(tr(lang,
@@ -5048,6 +5259,7 @@ impl eframe::App for StickApp {
                     if layer_response.clicked() {
                         self.active_layer_idx = idx;
                         self.selected_stroke_indices.clear();
+                        self.selected_media_idx = None;
                     }
                     if layer_response.double_clicked() { rename_layer_index = Some(idx); }
                     layer_response.context_menu(|ui| {
@@ -5211,6 +5423,8 @@ impl eframe::App for StickApp {
         }
 
         let mut frame_menu_action: Option<(usize, usize, timeline_ops::FrameAction)> = None;
+        let mut audio_move_request: Option<(usize, usize)> = None;
+        let mut audio_drag_started = false;
         let mut timeline_seek = None;
         let mut timeline_visibility_toggle: Option<usize> = None;
         let mut timeline_lock_toggle: Option<usize> = None;
@@ -5511,9 +5725,94 @@ impl eframe::App for StickApp {
                             }
                         });
                     }
+                    // Audio lanes share the exact frame ruler and horizontal scroll
+                    // with visual layers; each clip can be dragged without moving art.
+                    for (audio_index, track) in self.project.audio_tracks.iter().enumerate() {
+                        ui.horizontal(|ui| {
+                            ui.allocate_ui(egui::vec2(label_w, row_h), |ui| {
+                                let is_active=self.selected_audio_idx==Some(audio_index);
+                                let label=format!("♫ {}",track.name);
+                                if ui.selectable_label(is_active,egui::RichText::new(&label)
+                                    .color(if is_active {egui::Color32::from_rgb(118,234,176)}
+                                        else {egui::Color32::from_rgb(173,221,192)}))
+                                    .on_hover_text(tr(lang,"Audio track properties (right panel)",
+                                        "خصائص الصوت في الشريط اليمين")).clicked() {
+                                    self.selected_audio_idx=Some(audio_index);
+                                    self.config.show_right_dock=true;
+                                }
+                                ui.small(if track.muted {tr(lang,"Muted","مكتوم")}
+                                    else {tr(lang,"Waveform / Drag ↔","موجات / اسحب ↔")});
+                            });
+                            let lane_width=cell_w * cols as f32;
+                            let (rect,resp)=ui.allocate_exact_size(
+                                egui::vec2(lane_width,row_h),egui::Sense::click_and_drag());
+                            ui.painter().rect_filled(rect,3.0,egui::Color32::from_rgb(30,39,46));
+                            let left=rect.left()+(track.start_frame.saturating_sub(1) as f32)*cell_w;
+                            let right=rect.left()+(track.end_frame.min(cols) as f32)*cell_w;
+                            if right>left && left<rect.right() {
+                                let clip=egui::Rect::from_min_max(
+                                    egui::pos2(left.max(rect.left()),rect.top()+2.0),
+                                    egui::pos2(right.min(rect.right()),rect.bottom()-2.0));
+                                let selected=self.selected_audio_idx==Some(audio_index);
+                                let base=if selected {egui::Color32::from_rgb(24,107,81)}
+                                    else if track.muted {egui::Color32::from_rgb(61,68,70)}
+                                    else {egui::Color32::from_rgb(34,77,70)};
+                                ui.painter().rect_filled(clip,4.0,base);
+                                ui.painter().rect_stroke(clip,4.0,egui::Stroke::new(1.0,
+                                    egui::Color32::from_rgb(87,191,146)));
+                                let bars=((clip.width()/6.0) as usize).clamp(1,600);
+                                let duration=track.end_frame.saturating_sub(track.start_frame)+1;
+                                let palette=if track.muted {egui::Color32::from_gray(128)}
+                                    else {egui::Color32::from_rgb(120,241,187)};
+                                for b in 0..bars {
+                                    let progress=(b as f32+0.5)/bars as f32;
+                                    let frame_offset=(progress*duration as f32) as usize;
+                                    let peak=audio_timeline::peak_for_frame(
+                                        &track.waveform_peaks,frame_offset,duration);
+                                    let x=clip.left()+progress*clip.width();
+                                    let height=peak*(clip.height()-8.0).max(3.0);
+                                    ui.painter().line_segment([
+                                        egui::pos2(x,clip.center().y-height*0.5),
+                                        egui::pos2(x,clip.center().y+height*0.5)
+                                    ],egui::Stroke::new(2.0,palette));
+                                }
+                                if resp.drag_started() && resp.interact_pointer_pos()
+                                    .is_some_and(|pos| clip.contains(pos)) {
+                                    self.audio_drag_origin=Some((audio_index,track.start_frame));
+                                    audio_drag_started=true;
+                                    self.selected_audio_idx=Some(audio_index);
+                                }
+                                if resp.dragged() {
+                                    if let Some((drag_index,origin))=self.audio_drag_origin {
+                                        if drag_index==audio_index {
+                                            let shift=(resp.drag_delta().x/cell_w).round() as i64;
+                                            let start=(origin as i64+shift)
+                                                .clamp(1,timeline_ops::MAX_TIMELINE_FRAMES as i64) as usize;
+                                            audio_move_request=Some((audio_index,start));
+                                        }
+                                    }
+                                }
+                                if resp.drag_stopped() { self.audio_drag_origin=None; }
+                                if resp.clicked() && resp.interact_pointer_pos()
+                                    .is_some_and(|pos|clip.contains(pos)) {
+                                    self.selected_audio_idx=Some(audio_index);
+                                }
+                            }
+                        });
+                    }
                 });
             });
             // The grip and the height slider both modify the same persisted value.
+        }
+        if audio_drag_started { self.save_undo_state(); }
+        if let Some((index,start)) = audio_move_request {
+            if let Some(track)=self.project.audio_tracks.get_mut(index) {
+                if audio_timeline::move_clip(track,start,timeline_ops::MAX_TIMELINE_FRAMES) {
+                    self.timeline_length=self.timeline_length.max(track.end_frame);
+                    self.project.total_frames=self.timeline_length;
+                    self.has_unsaved_changes=true;
+                }
+            }
         }
         if let Some((layer, frame)) = timeline_seek {
             if frame > self.timeline_length {
@@ -5864,10 +6163,15 @@ impl eframe::App for StickApp {
                                         self.project.evaluate_layer_at_frame(layer, self.current_frame).strokes)
                                     .unwrap_or_default()
                             };
-                            let fallback = fill_tools::flood_fill_polygon(
+                            let fallback = fill_tools::flood_fill_polygon_with_options(
                                 &reference_strokes, (stage_pos.x, stage_pos.y),
                                 (self.project.width as f32, self.project.height as f32),
-                                self.bucket_gap_close);
+                                self.bucket_gap_close,
+                                fill_tools::FillOptions {
+                                    precision: self.bucket_precision,
+                                    dilate_contract: self.bucket_dilate_contract,
+                                    boundary_thickness: self.bucket_thickness,
+                                });
                             let can_fill = !self.bucket_reference_all_layers
                                 && fallback.is_none()
                                 && fill_tools::can_fill_contour(
@@ -6099,7 +6403,8 @@ impl eframe::App for StickApp {
                                 let move_axis = bounds.and_then(|rect|
                                     transform_handles::translation_axis(rect, stage_pos, scale));
                                 let reuse_selection = bounds.is_some_and(|rect| rect.contains(stage_pos))
-                                    && (!self.selected_stroke_indices.is_empty() || self.selected_text_item_index.is_some());
+                                    && (!self.selected_stroke_indices.is_empty() || self.selected_text_item_index.is_some()
+                                        || self.selected_media_idx.is_some());
                                 if let Some(axis)=move_axis {
                                     self.save_undo_state();
                                     self.transform_axis=Some(axis);
@@ -6124,6 +6429,7 @@ impl eframe::App for StickApp {
                                 self.transform_rotate_pivot = None;
                                 self.selected_stroke_indices.clear();
                                 self.selected_text_item_index = None;
+                                self.selected_media_idx = None;
                                 self.selection_rect_start = None;
                                 self.selection_rect_current = None;
                                 if let Some(layer) = self.project.layers.get(self.active_layer_idx) {
@@ -6133,6 +6439,11 @@ impl eframe::App for StickApp {
                                         .find(|(_, text)| selection_tools::text_bounds(text).contains(stage_pos))
                                         .map(|(index, _)| index);
                                     if self.selected_text_item_index.is_none() {
+                                        self.selected_media_idx = frame.media_items.iter().enumerate().rev()
+                                            .find(|(_,item)| media_transform::hit_test(item,stage_pos.x,stage_pos.y))
+                                            .map(|(index,_)| index);
+                                    }
+                                    if self.selected_text_item_index.is_none() && self.selected_media_idx.is_none() {
                                         if let Some((index, _)) = frame.strokes.iter().enumerate().rev()
                                             .find(|(_, stroke)| selection_tools::stroke_hit_test(
                                                 stroke, stage_pos, (6.0 / scale).max(1.0))) {
@@ -6140,7 +6451,8 @@ impl eframe::App for StickApp {
                                         }
                                     }
                                 }
-                                if self.selected_text_item_index.is_none() && self.selected_stroke_indices.is_empty() {
+                                if self.selected_text_item_index.is_none() && self.selected_media_idx.is_none()
+                                    && self.selected_stroke_indices.is_empty() {
                                     self.selection_rect_start = Some(stage_pos);
                                     self.selection_rect_current = Some(stage_pos);
                                 } else {
@@ -6180,13 +6492,15 @@ impl eframe::App for StickApp {
                                 let existing = self.selected_canvas_bounds().is_some_and(
                                     |bounds| bounds.contains(stage_pos));
                                 self.lasso_dragging_selection = existing &&
-                                    (!self.selected_stroke_indices.is_empty() || self.selected_text_item_index.is_some());
+                                    (!self.selected_stroke_indices.is_empty() || self.selected_text_item_index.is_some()
+                                        || self.selected_media_idx.is_some());
                                 self.lasso_points.clear();
                                 if self.lasso_dragging_selection {
                                     self.save_undo_state();
                                 } else {
                                     self.selected_stroke_indices.clear();
                                     self.selected_text_item_index = None;
+                                    self.selected_media_idx = None;
                                     self.lasso_points.push(stage_pos);
                                 }
                             } else if pointer_down && self.lasso_dragging_selection {
@@ -6359,13 +6673,12 @@ impl eframe::App for StickApp {
                         if let Some(tex) = self.texture_cache.get(&m.path) {
                             let mut mesh = egui::Mesh::with_texture(tex.id());
                             let tint = egui::Color32::from_white_alpha((255.0 * l_op) as u8);
-                            for (pt, uv) in [
-                                (egui::pos2(m.x, m.y), egui::pos2(0.0, 0.0)),
-                                (egui::pos2(m.x + m.width, m.y), egui::pos2(1.0, 0.0)),
-                                (egui::pos2(m.x + m.width, m.y + m.height), egui::pos2(1.0, 1.0)),
-                                (egui::pos2(m.x, m.y + m.height), egui::pos2(0.0, 1.0)),
-                            ] {
-                                mesh.vertices.push(egui::epaint::Vertex { pos: to_screen(pt), uv, color: tint });
+                            let (u0,u1) = if m.flip_h { (1.0,0.0) } else { (0.0,1.0) };
+                            let (v0,v1) = if m.flip_v { (1.0,0.0) } else { (0.0,1.0) };
+                            let uvs = [egui::pos2(u0,v0),egui::pos2(u1,v0),egui::pos2(u1,v1),egui::pos2(u0,v1)];
+                            for ((x,y), uv) in media_transform::corners(m).into_iter().zip(uvs) {
+                                mesh.vertices.push(egui::epaint::Vertex {
+                                    pos: to_screen(egui::pos2(x,y)), uv, color: tint });
                             }
                             mesh.indices.extend_from_slice(&[0, 1, 2, 0, 2, 3]);
                             painter.add(egui::Shape::mesh(mesh));

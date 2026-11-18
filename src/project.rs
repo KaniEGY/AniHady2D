@@ -338,6 +338,12 @@ pub struct MediaItem {
     pub width: f32,
     #[serde(default = "default_media_dim")]
     pub height: f32,
+    #[serde(default)]
+    pub rotation_deg: f32,
+    #[serde(default)]
+    pub flip_h: bool,
+    #[serde(default)]
+    pub flip_v: bool,
 }
 
 fn default_media_dim() -> f32 {
@@ -435,7 +441,13 @@ pub struct AudioTrack {
     pub sync_mode: AudioSyncMode,
     #[serde(default)]
     pub waveform_peaks: Vec<f32>,
+    #[serde(default = "default_audio_gain")]
+    pub gain: f32,
+    #[serde(default)]
+    pub muted: bool,
 }
+
+fn default_audio_gain() -> f32 { 1.0 }
 
 fn default_one() -> usize {
     1
@@ -928,6 +940,23 @@ mod brush_tip_compat_tests {
         assert_eq!(restored.tip_shape, BrushTipShape::Round);
         assert_eq!(restored.points.len(), 1);
         assert_eq!(restored.color, [12, 34, 56, 255]);
+    }
+
+    #[test]
+    fn old_media_and_audio_load_without_new_transform_fields() {
+        let old_media: MediaItem = serde_json::from_str(
+            r#"{"path":"art.png","media_type":"Image","x":20.0,"y":30.0,"width":100.0,"height":80.0}"#
+        ).expect("legacy media item");
+        assert_eq!(old_media.rotation_deg, 0.0);
+        assert!(!old_media.flip_h && !old_media.flip_v);
+        let old_audio: AudioTrack = serde_json::from_str(
+            r#"{"name":"voice","file_path":"voice.wav","start_frame":10,"end_frame":30,"sync_mode":"Stream","waveform_peaks":[0.1,0.5]}"#
+        ).expect("legacy audio track");
+        assert_eq!(old_audio.gain,1.0);
+        assert!(!old_audio.muted);
+        assert_eq!((old_audio.start_frame,old_audio.end_frame),(10,30));
+        let roundtrip: MediaItem=serde_json::from_str(&serde_json::to_string(&old_media).unwrap()).unwrap();
+        assert_eq!(old_media,roundtrip);
     }
 
     #[test]

@@ -1,5 +1,15 @@
 # Stick Studio — Session Handoff / سجل استكمال المشروع
 
+## 18 November 2026 — imported media, audio timeline and bounded fill controls
+
+- Branch: `feature/media-audio-fill-studio-20261118`. This entry records work in progress until the Windows CI run passes and a merge/release is confirmed.
+- `MediaItem` gained optional `rotation_deg`, `flip_h` and `flip_v` fields with serde defaults. Imported stills keep aspect ratio, and imported video-frame layers propagate the chosen geometry across keyframes. Stage preview and raster export apply transforms. Source video is still decoded to external image files; the editor does not embed source media within .stick.
+- `AudioTrack` gained defaulted `gain` and `muted`. Audio strips are visible in the shared timeline and draggable, with waveform previews, right-dock controls and delayed multi-track playback. Waveform extraction remains sampled (first-minute preview); QA for long MP3s, move/undo, multiple clips and alignment is still needed.
+- Bounded bucket fill supports optional precision, positive/negative Dilate/Contract and temporary boundary thickness settings. This is Stick's own vector-contour solver, not Blender's exact raster/vector algorithm. Verify filled regions and undo on actual drawings.
+- Texture cache evicts non-current video frames to bound GPU memory. Real hardware performance and imported media duration/file availability must be smoke-tested.
+- Before publishing, require `cargo test`, `cargo clippy`, Windows `cargo build --release`, main release `Stick.exe`/version/SHA256 and a physical GUI check where available. Don't claim external media and audio are embedded in cloud backups.
+
+
 ## 18 November 2026 — timeline layer icons, canvas sizes, smoother vector and help
 - Branch: `feature/ui-layer-vector-canvas-online-help-20261118` (base: `5b4c996ccdc169ac751c8c3d805c7c6864323b01`, release `v4.1.0.207`).
 - New `src/vector_path.rs` smoothed vector render/export geometry preserves editable nodes and reuses the already-serialized `Stroke.tip_shape` for round/square end caps (default Round). `src/brushes.rs`, `src/exporter.rs`, `src/brush_engine.rs` use consistent stroke geometry; old projects remain readable.

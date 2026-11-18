@@ -31,6 +31,11 @@
 - **Known boundaries:** bucket fill operates on recognized closed stroke contours (now with improved near-closure tolerance), not arbitrary raster flood fill. Imported artwork/text still needs further parity tests for every transform. No Krita GPL code is copied into Stick.
 
 ### What's new
+- **Editable imports:** imported images and video-frame layers can be selected and transformed on the canvas. Right-side properties offer position, size, rotation, horizontal/vertical flips, with matching raster export rendering. Video layer transforms follow its decoded frames.
+- **Audio in timeline:** visible green waveform lanes below animation cels; drag audio strips to change start time. Right panel exposes mute, gain, clip timing and scrub mode. Timed clips mix during playback; very long audio waveform data is currently a limited preview.
+- **Bucket options:** Precision, Dilate/Contract, and boundary Thickness adjust Stick's bounded contour solver, inspired by Blender Grease Pencil behavior; these are not the same implementation as Blender's fill.
+- **Video memory safety:** the editor no longer caches every decoded movie frame on the GPU, and preview textures are bounded. Source files remain referenced by path; save copies of external media.
+
 - DryBrush and Chalk add pressure-sensitive bristles and grain to the brush picker. Their patterns follow the saved stroke in the editor and raster exports.
 - Room participants can see one another's named, colored pointers on the same frame. All peers need this protocol v5 build or a compatible newer build.
 - Both timeline styles can duplicate a cel after the selection or insert one empty cel before it. Later keys on that layer shift forward and either edit supports Undo.
@@ -126,6 +131,11 @@
 - **تجهيز تسجيل Google:** أضفنا معرّف OAuth العام الخاص بـStick Studio في إصدارات ويندوز، مع إصلاح الإعدادات القديمة الفارغة أو غير الصحيحة. ما زال Google في وضع Testing، ولا نعتبر تسجيل الدخول والنسخ السحابي مختبرين عمليًا قبل تجارب أجهزة ويندوز.
 
 ### المشاكل اللي اتصلحت
+- **الصور والفيديو:** بقى ممكن تحديد الصور وفريمات الفيديو، تحريكها وتدويرها وتغيير مقاسها وقلبها من أدوات التحديد والخصائص، والتحويل يظهر كمان في التصدير.
+- **الصوت:** مسارات صوت بموجات واضحة تحت الفريمات، والسحب لتغيير البداية، والتحكم في التوقيت ومستوى الصوت والكتم من خصائص اليمين.
+- **الدلو:** Precision وDilate/Contract وThickness بضوابط آمنة على خوارزمية التعبئة الخاصة بـStick؛ مستوحاة من بلندر وليست نفس الكود.
+- **الأداء:** تخفيف استهلاك ذاكرة كارت الشاشة بعدم تخزين كل فريمات الفيديو المفتوحة كمجموعة خامات دائمة. ملفات الوسائط الخارجية لازم تفضل موجودة.
+
 - القطّارة بتختار من الطبقة الظاهرة في الأمام وبتفرّق بين لون حدود الشكل وتعبئته. الممحاة الجزئية بتمسح نقطة الفرشة لما تلمس حافتها.
 - فتح مشروع أو استرجاع نسخة أو استيراد مشروع كامل بيمسح سجل التراجع ومسار الحفظ بتوع المشروع السابق.
 - **نافذة الدعم:** حجم ثابت ونص قابل للتمرير وزر إغلاق ظاهر واختصار Esc، لحل مشكلة النافذة الممتدة خارج الشاشة.
