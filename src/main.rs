@@ -3097,6 +3097,9 @@ impl StickApp {
             self.active_layer_idx = 0;
             self.clear_cel_selection();
             self.selected_media_idx = Some(0);
+            self.selected_audio_idx = None;
+            self.right_panel_tab = 2;
+            self.config.show_right_dock = true;
             self.active_tool_ui = ActiveToolUI::FreeTransform;
             self.has_unsaved_changes = true;
             self.play_sfx(SfxType::NewFrame);
@@ -3146,6 +3149,9 @@ impl StickApp {
                 self.active_layer_idx = 0;
                 self.clear_cel_selection();
                 self.selected_media_idx = Some(0);
+                self.selected_audio_idx = None;
+                self.right_panel_tab = 2;
+                self.config.show_right_dock = true;
                 self.active_tool_ui = ActiveToolUI::FreeTransform;
                 self.has_unsaved_changes = true;
                 self.play_sfx(SfxType::NewFrame);
@@ -3173,6 +3179,9 @@ impl StickApp {
                 end_frame, sync_mode: AudioSyncMode::Stream,
                 waveform_peaks: peaks, gain: 1.0, muted: false });
             self.selected_audio_idx = Some(self.project.audio_tracks.len() - 1);
+            self.selected_media_idx = None;
+            self.right_panel_tab = 2;
+            self.config.show_right_dock = true;
             self.has_unsaved_changes = true;
             self.play_sfx(SfxType::NewFrame);
         }
@@ -5706,6 +5715,7 @@ impl eframe::App for StickApp {
                         });
                         if response.clicked() {
                             self.active_tool_ui = tool;
+                            self.right_panel_tab = 0;
                             self.play_sfx(SfxType::ToolSelect(tool as u8));
                         }
                         ui.add_space(3.0);
@@ -5733,8 +5743,19 @@ impl eframe::App for StickApp {
         if self.config.show_right_dock {
         egui::SidePanel::right("right_panel").resizable(true).default_width(376.0)
             .min_width(285.0).show(ctx, |ui| {
+            if self.right_panel_tab==2
+                && self.selected_media_idx.is_none() && self.selected_audio_idx.is_none() {
+                self.right_panel_tab=0;
+            }
             ui.horizontal(|ui| {
-                ui.strong(tr(lang, "Tool Properties", "خصائص الأداة"));
+                ui.selectable_value(&mut self.right_panel_tab,0,
+                    tr(lang,"Properties","الخصائص"));
+                ui.selectable_value(&mut self.right_panel_tab,1,
+                    tr(lang,"Sizes","المقاسات"));
+                if self.selected_media_idx.is_some() || self.selected_audio_idx.is_some() {
+                    ui.selectable_value(&mut self.right_panel_tab,2,
+                        tr(lang,"Media","وسائط"));
+                }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if ui.add(egui::Slider::new(&mut self.config.right_panel_split, 0.18..=0.85)
                         .show_value(false).text(tr(lang, "Split", "تقسيم"))).changed() {
@@ -5751,10 +5772,14 @@ impl eframe::App for StickApp {
                 |ui| {
                     egui::ScrollArea::vertical().id_salt("tool_properties_scroll")
                         .auto_shrink([false, false]).show(ui, |ui| {
-                            self.render_tool_properties_ui(ui, lang);
-            ui.add_space(10.0);
+                            if self.right_panel_tab != 1 {
+                                self.render_tool_properties_ui(ui, lang);
+                            }
+            if self.right_panel_tab == 1 {
+            ui.add_space(4.0);
+            ui.strong(tr(lang, "Canvas Size & Presets", "مقاسات الكانفا"));
             ui.separator();
-            egui::CollapsingHeader::new(tr(lang, "Canvas Size & Presets", "مقاس الكانفا والاختصارات"))
+            egui::CollapsingHeader::new(tr(lang, "Presets & custom size", "المقاسات الجاهزة والمخصصة"))
                 .default_open(true).show(ui, |ui| {
                 ui.label(egui::RichText::new(format!("{} × {} px", self.project.width, self.project.height))
                     .strong().color(egui::Color32::from_rgb(130,209,250)));
@@ -5817,6 +5842,8 @@ impl eframe::App for StickApp {
                     }
                 });
             });
+            }
+            if self.right_panel_tab == 0 {
             ui.add_space(8.0);
             ui.separator();
             egui::CollapsingHeader::new(tr(lang, "Colors", "الألوان"))
@@ -5869,6 +5896,7 @@ impl eframe::App for StickApp {
                 }
             });
             });
+            }
             ui.add_space(6.0);
                         }); // independent tool-props scroll
                 }); // adjustable upper dock
