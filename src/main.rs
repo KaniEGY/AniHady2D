@@ -7663,7 +7663,9 @@ impl eframe::App for StickApp {
             let show_tool_icon = is_inside_workspace && !any_modal_open && !space_down
                 && !alt_down && !ctrl_down && !custom_brush_cursor
                 && self.active_tool_ui != ActiveToolUI::HandCanvas;
-            let tool_cursor = if show_dot || show_tool_icon {
+            let tool_cursor = if !is_inside_workspace || any_modal_open {
+                egui::CursorIcon::Default
+            } else if show_dot || show_tool_icon {
                 egui::CursorIcon::None
             } else if space_down || self.active_tool_ui == ActiveToolUI::HandCanvas {
                 if pointer_down || ctx.input(|i| i.pointer.secondary_down()) {
