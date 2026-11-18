@@ -1,0 +1,214 @@
+//! Fast canvas radial menus and on-canvas adjustment feedback.
+//! Kept separate from the editor state machine so popup painting/hit-testing
+//! does not add more branches to the main drawing loop.
+use eframe::egui;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum QuickMenuKind {
+    Shapes,
+    Colors,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct QuickMenuState {
+    pub kind: QuickMenuKind,
+    pub center: egui::Pos2,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum QuickMenuAction {
+    Shape(usize),
+    Color([u8; 4]),
+    Close,
+}
+
+const MENU_SIZE: f32 = 236.0;
+const RING_RADIUS: f32 = 78.0;
+
+pub fn show(
+    ctx: &egui::Context,
+    state: QuickMenuState,
+    shape_labels: &[&str; 6],
+    colors: &[[u8; 4]],
+    selected_shape: usize,
+    selected_color: [u8; 4],
+) -> Option<QuickMenuAction> {
+    let origin = state.center - egui::vec2(MENU_SIZE * 0.5, MENU_SIZE * 0.5);
+    let mut action = None;
+    egui::Area::new(egui::Id::new("stick_canvas_quick_radial_menu"))
+        .order(egui::Order::Foreground)
+        .fixed_pos(origin)
+        .show(ctx, |ui| {
+            let (rect, _) = ui.allocate_exact_size(
+                egui::vec2(MENU_SIZE, MENU_SIZE),
+                egui::Sense::hover(),
+            );
+            let center = rect.center();
+            let painter = ui.painter();
+            painter.circle_filled(
+                center,
+                31.0,
+                egui::Color32::from_rgba_unmultiplied(18, 24, 33, 246),
+            );
+            painter.circle_stroke(
+                center,
+                31.0,
+                egui::Stroke::new(1.4, egui::Color32::from_rgb(66, 205, 242)),
+            );
+            painter.circle_stroke(
+                center,
+                104.0,
+                egui::Stroke::new(1.0, egui::Color32::from_rgba_unmultiplied(66, 205, 242, 72)),
+            );
+
+            match state.kind {
+                QuickMenuKind::Shapes => {
+                    painter.text(
+                        center,
+                        egui::Align2::CENTER_CENTER,
+                        "SHAPE",
+                        egui::FontId::proportional(10.0),
+                        egui::Color32::from_rgb(223, 232, 241),
+                    );
+                    for (index, label) in shape_labels.iter().enumerate() {
+                        let angle = -std::f32::consts::FRAC_PI_2
+                            + index as f32 * std::f32::consts::TAU / shape_labels.len() as f32;
+                        let p = center + egui::vec2(angle.cos(), angle.sin()) * RING_RADIUS;
+                        let r = egui::Rect::from_center_size(p, egui::vec2(43.0, 43.0));
+                        let response = ui.allocate_rect(r, egui::Sense::click());
+                        let active = index == selected_shape;
+                        let fill = if active {
+                            egui::Color32::from_rgb(14, 104, 126)
+                        } else if response.hovered() {
+                            egui::Color32::from_rgb(35, 58, 72)
+                        } else {
+                            egui::Color32::from_rgb(28, 34, 43)
+                        };
+                        painter.circle_filled(p, 20.0, fill);
+                        painter.circle_stroke(
+                            p,
+                            20.0,
+                            egui::Stroke::new(
+                                if active { 2.0 } else { 1.1 },
+                                if active {
+                                    egui::Color32::from_rgb(255, 205, 63)
+                                } else {
+                                    egui::Color32::from_rgb(66, 205, 242)
+                                },
+                            ),
+                        );
+                        painter.text(
+                            p,
+                            egui::Align2::CENTER_CENTER,
+                            *label,
+                            egui::FontId::proportional(17.0),
+                            egui::Color32::WHITE,
+                        );
+                        if response.clicked() {
+                            action = Some(QuickMenuAction::Shape(index));
+                        }
+                    }
+                }
+                QuickMenuKind::Colors => {
+                    painter.text(
+                        center,
+                        egui::Align2::CENTER_CENTER,
+                        "COLOR",
+                        egui::FontId::proportional(10.0),
+                        egui::Color32::from_rgb(223, 232, 241),
+                    );
+                    let count = colors.len().max(1);
+                    for (index, color) in colors.iter().copied().enumerate() {
+                        let angle = -std::f32::consts::FRAC_PI_2
+                            + index as f32 * std::f32::consts::TAU / count as f32;
+                        let p = center + egui::vec2(angle.cos(), angle.sin()) * RING_RADIUS;
+                        let r = egui::Rect::from_center_size(p, egui::vec2(32.0, 32.0));
+                        let response = ui.allocate_rect(r, egui::Sense::click());
+                        let fill = egui::Color32::from_rgba_unmultiplied(
+                            color[0], color[1], color[2], color[3],
+                        );
+                        painter.circle_filled(p, 13.0, fill);
+                        painter.circle_stroke(
+                            p,
+                            if color == selected_color { 16.0 } else { 14.0 },
+                            egui::Stroke::new(
+                                if color == selected_color { 2.2 } else { 1.2 },
+                                if color == selected_color {
+                                    egui::Color32::from_rgb(255, 205, 63)
+                                } else {
+                                    egui::Color32::from_rgb(225, 230, 235)
+                                },
+                            ),
+                        );
+                        if response.clicked() {
+                            action = Some(QuickMenuAction::Color(color));
+                        }
+                    }
+                }
+            }
+        });
+
+    if action.is_none() && ctx.input(|i| i.pointer.primary_pressed()) {
+        let outside = ctx.input(|i| i.pointer.interact_pos())
+            .is_none_or(|p| p.distance(state.center) > 118.0);
+        if outside {
+            action = Some(QuickMenuAction::Close);
+        }
+    }
+    action
+}
+
+pub fn draw_size_feedback(
+    painter: &egui::Painter,
+    center: egui::Pos2,
+    radius_px: f32,
+    color: egui::Color32,
+    value: f32,
+) {
+    let r = radius_px.clamp(3.0, 220.0);
+    painter.circle_stroke(center, r, egui::Stroke::new(1.5, color));
+    painter.circle_stroke(center, r + 1.5, egui::Stroke::new(1.0, egui::Color32::BLACK));
+    painter.text(
+        center + egui::vec2(0.0, r + 9.0),
+        egui::Align2::CENTER_TOP,
+        format!("{:.0}", value),
+        egui::FontId::monospace(11.0),
+        egui::Color32::WHITE,
+    );
+}
+
+pub fn draw_opacity_feedback(
+    painter: &egui::Painter,
+    center: egui::Pos2,
+    color: [u8; 4],
+    opacity: f32,
+) {
+    let alpha = ((color[3] as f32) * opacity.clamp(0.0, 1.0)).round() as u8;
+    let fill = egui::Color32::from_rgba_unmultiplied(color[0], color[1], color[2], alpha);
+    painter.circle_filled(center, 10.0, fill);
+    painter.circle_stroke(center, 11.5, egui::Stroke::new(1.3, egui::Color32::WHITE));
+    painter.circle_stroke(center, 13.0, egui::Stroke::new(1.0, egui::Color32::BLACK));
+    painter.text(
+        center + egui::vec2(0.0, 18.0),
+        egui::Align2::CENTER_TOP,
+        format!("{}%", (opacity.clamp(0.0, 1.0) * 100.0).round() as u32),
+        egui::FontId::monospace(11.0),
+        egui::Color32::WHITE,
+    );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn quick_menu_state_is_copyable_and_kind_is_stable() {
+        let state = QuickMenuState {
+            kind: QuickMenuKind::Colors,
+            center: egui::pos2(40.0, 50.0),
+        };
+        let copied = state;
+        assert_eq!(copied.kind, QuickMenuKind::Colors);
+        assert_eq!(copied.center, egui::pos2(40.0, 50.0));
+    }
+}
