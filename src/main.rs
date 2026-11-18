@@ -512,6 +512,14 @@ struct AppConfig {
     ui_accent_color: [u8; 4],
     #[serde(default)]
     ui_style_preset: u8,
+    #[serde(default)]
+    symmetry_axis_guide: bool,
+    #[serde(default = "default_true_val")]
+    tablet_pressure_enabled: bool,
+    #[serde(default = "default_tablet_pressure_sensitivity")]
+    tablet_pressure_sensitivity: f32,
+    #[serde(default = "default_tablet_min_pressure")]
+    tablet_min_pressure: f32,
     #[serde(default = "default_autosave_mins")]
     autosave_interval_minutes: u64,
     #[serde(default = "default_cursor_scale")]
@@ -581,6 +589,8 @@ fn default_right_split() -> f32 { 0.45 }
 fn default_grid_size() -> f32 { 40.0 }
 fn default_autosave_mins() -> u64 { 5 }
 fn default_cursor_scale() -> f32 { 1.0 }
+fn default_tablet_pressure_sensitivity() -> f32 { 1.0 }
+fn default_tablet_min_pressure() -> f32 { 0.02 }
 // Public Desktop OAuth identifier for the Stick Studio Google Cloud project.
 // Not a client secret. A valid build-time override is still supported.
 const OFFICIAL_GOOGLE_CLIENT_ID: &str =
@@ -614,7 +624,7 @@ fn default_partial_eraser_key() -> String { "T".to_string() }
 fn default_text_key() -> String { "N".to_string() }
 fn default_shape_key() -> String { "U".to_string() }
 fn default_hand_key() -> String { "H".to_string() }
-fn default_del_frame_key() -> String { "X".to_string() }
+fn default_del_frame_key() -> String { "F4".to_string() }
 
 impl Default for AppConfig {
     fn default() -> Self {
@@ -657,6 +667,10 @@ impl Default for AppConfig {
             ui_panel_color: default_ui_panel_color(),
             ui_accent_color: default_ui_accent_color(),
             ui_style_preset: 0,
+            symmetry_axis_guide: false,
+            tablet_pressure_enabled: true,
+            tablet_pressure_sensitivity: 1.0,
+            tablet_min_pressure: 0.02,
             autosave_interval_minutes: 5,
             brush_cursor_scale: 1.0,
             tool_icon_scale: 1.0,
@@ -1344,6 +1358,9 @@ struct StickApp {
     active_tool_ui: ActiveToolUI,
     active_krita_brush: KritaBrushPreset,
     brush_opacity: f32,
+    vector_pen_opacity: f32,
+    shape_opacity: f32,
+    text_opacity: f32,
     selected_shape_kind: GeometricShapeKind,
     shape_fill_enabled: bool,
     pending_delete_layer: Option<usize>,
@@ -1354,6 +1371,7 @@ struct StickApp {
     layer_clipboard: Option<Layer>,
     symmetry_mode: SymmetryMode,
     stabilizer_strength: f32,
+    vector_stabilizer_strength: f32,
     stabilized_cursor: Option<egui::Pos2>,
     shape_drag_start: Option<egui::Pos2>,
     shape_drag_current: Option<egui::Pos2>,
@@ -1383,6 +1401,10 @@ struct StickApp {
     brush_color: [u8; 4],
     stage_bg_color: [u8; 4],
     brush_size: f32,
+    vector_pen_size: f32,
+    eraser_full_size: f32,
+    eraser_partial_size: f32,
+    shape_outline_size: f32,
     bucket_gap_close: f32,
     bucket_precision: f32,
     bucket_dilate_contract: f32,
@@ -1446,6 +1468,7 @@ struct StickApp {
     audio_sink: Option<(OutputStream, Vec<Sink>)>,
     last_pointer_pos: Option<egui::Pos2>,
     last_secondary_pointer_pos: Option<egui::Pos2>,
+    alt_size_drag_origin: Option<(egui::Pos2, f32)>,
 }
 
 impl StickApp {
@@ -1517,6 +1540,9 @@ impl StickApp {
             active_tool_ui: ActiveToolUI::Brush,
             active_krita_brush: KritaBrushPreset::GPenInk,
             brush_opacity: 1.0,
+            vector_pen_opacity: 1.0,
+            shape_opacity: 1.0,
+            text_opacity: 1.0,
             selected_shape_kind: GeometricShapeKind::StraightLine,
             shape_fill_enabled: false,
             pending_delete_layer: None,
@@ -1527,6 +1553,7 @@ impl StickApp {
             layer_clipboard: None,
             symmetry_mode: SymmetryMode::Off,
             stabilizer_strength: 0.30,
+            vector_stabilizer_strength: 0.30,
             stabilized_cursor: None,
             shape_drag_start: None,
             shape_drag_current: None,
@@ -1556,6 +1583,10 @@ impl StickApp {
             brush_color: [0, 0, 0, 255],
             stage_bg_color: [255, 255, 255, 255],
             brush_size: 7.0,
+            vector_pen_size: 7.0,
+            eraser_full_size: 35.0,
+            eraser_partial_size: 35.0,
+            shape_outline_size: 7.0,
             bucket_gap_close: 3.0,
             bucket_precision: 1.0,
             bucket_dilate_contract: 0.0,
@@ -1619,6 +1650,7 @@ impl StickApp {
             audio_sink: None,
             last_pointer_pos: None,
             last_secondary_pointer_pos: None,
+            alt_size_drag_origin: None,
         }
     }
 
@@ -2439,6 +2471,53 @@ impl StickApp {
         }
     }
 
+    fn mirrored_stroke(&self, stroke: &Stroke) -> Option<Stroke> {
+        let (stage_w, stage_h) = (self.project.width as f32, self.project.height as f32);
+        let mut mirrored = stroke.clone();
+        match self.symmetry_mode {
+            SymmetryMode::Horizontal => {
+                for p in &mut mirrored.points { p.x = stage_w - p.x; }
+            }
+            SymmetryMode::Vertical => {
+                for p in &mut mirrored.points { p.y = stage_h - p.y; }
+            }
+            SymmetryMode::Off => return None,
+        }
+        let changed = stroke.points.iter().zip(&mirrored.points)
+            .any(|(a,b)| (a.x-b.x).abs() > 0.001 || (a.y-b.y).abs() > 0.001);
+        changed.then_some(mirrored)
+    }
+
+    fn active_sizable_tool_size(&self) -> Option<f32> {
+        match self.active_tool_ui {
+            ActiveToolUI::Brush => Some(self.brush_size),
+            ActiveToolUI::VectorPen => Some(self.vector_pen_size),
+            ActiveToolUI::EraserRed => Some(self.eraser_full_size),
+            ActiveToolUI::EraserGreen => Some(self.eraser_partial_size),
+            ActiveToolUI::ShapeLine => Some(self.shape_outline_size),
+            ActiveToolUI::Sculpt => Some(self.sculpt_radius),
+            _ => None,
+        }
+    }
+
+    fn set_active_sizable_tool_size(&mut self, value: f32) {
+        match self.active_tool_ui {
+            ActiveToolUI::Brush => self.brush_size = value.clamp(1.0, 120.0),
+            ActiveToolUI::VectorPen => self.vector_pen_size = value.clamp(1.0, 100.0),
+            ActiveToolUI::EraserRed => self.eraser_full_size = value.clamp(2.0, 120.0),
+            ActiveToolUI::EraserGreen => self.eraser_partial_size = value.clamp(2.0, 120.0),
+            ActiveToolUI::ShapeLine => self.shape_outline_size = value.clamp(1.0, 120.0),
+            ActiveToolUI::Sculpt => self.sculpt_radius = value.clamp(8.0, 360.0),
+            _ => {}
+        }
+    }
+
+    fn adjust_active_sizable_tool_size(&mut self, delta: f32) {
+        if let Some(current) = self.active_sizable_tool_size() {
+            self.set_active_sizable_tool_size(current + delta);
+        }
+    }
+
     fn commit_stroke_with_symmetry(&mut self, stroke: Stroke, now_time: f64) {
         if let Some(ref sym_name) = self.editing_symbol_name.clone() {
             if let Some(sym) = self.project.library_symbols.get_mut(sym_name) {
@@ -2450,21 +2529,9 @@ impl StickApp {
                 return;
             }
         }
-        let (stage_w, stage_h) = (self.project.width as f32, self.project.height as f32);
-        let mut strokes_to_add = vec![stroke.clone()];
-        match self.symmetry_mode {
-            SymmetryMode::Horizontal => {
-                let mut m = stroke;
-                for p in &mut m.points { p.x = stage_w - p.x; }
-                strokes_to_add.push(m);
-            }
-            SymmetryMode::Vertical => {
-                let mut m = stroke;
-                for p in &mut m.points { p.y = stage_h - p.y; }
-                strokes_to_add.push(m);
-            }
-            SymmetryMode::Off => {}
-        }
+        let mirrored = self.mirrored_stroke(&stroke);
+        let mut strokes_to_add = vec![stroke];
+        if let Some(m) = mirrored { strokes_to_add.push(m); }
         self.ensure_editable_keyframe();
         if let Some(layer) = self.project.layers.get_mut(self.active_layer_idx) {
             layer.keyframes.entry(self.current_frame).or_default().strokes.extend(strokes_to_add);
@@ -3763,10 +3830,10 @@ impl StickApp {
                 ui.strong(tr(lang, "Vector Ink Pen (P)", "قلم الفيكتور الثابت (بدون ذيل)"));
                 ui.horizontal(|ui| {
                     ui.label(tr(lang, "Stroke Width:", "سُمك الخط:"));
-                    ui.add(egui::DragValue::new(&mut self.brush_size).range(1.0..=100.0));
+                    ui.add(egui::DragValue::new(&mut self.vector_pen_size).range(1.0..=100.0));
                 });
-                ui.add(egui::Slider::new(&mut self.brush_size, 1.0..=100.0).show_value(false));
-                ui.add(egui::Slider::new(&mut self.brush_opacity, 0.0..=1.0)
+                ui.add(egui::Slider::new(&mut self.vector_pen_size, 1.0..=100.0).show_value(false));
+                ui.add(egui::Slider::new(&mut self.vector_pen_opacity, 0.0..=1.0)
                     .text(tr(lang, "Opacity", "الشفافية")));
                 ui.add(egui::Slider::new(&mut self.vector_tolerance,0.4..=8.0)
                     .text(tr(lang,"Node reduction","تقليل النقاط")));
@@ -3777,7 +3844,7 @@ impl StickApp {
                     ui.selectable_value(&mut self.vector_pen_cap, BrushTipShape::Square,
                         tr(lang, "■ Square", "■ مربع"));
                 });
-                ui.add(egui::Slider::new(&mut self.stabilizer_strength, 0.0..=0.70)
+                ui.add(egui::Slider::new(&mut self.vector_stabilizer_strength, 0.0..=0.70)
                     .text(tr(lang,"Hand stabilizer","مثبّت اليد")));
                 ui.small(tr(lang,
                     "Smooth preview and export keep the original editable vector nodes.",
@@ -3843,9 +3910,9 @@ impl StickApp {
                 ui.radio_value(&mut self.selected_shape_kind, GeometricShapeKind::Triangle, tr(lang, "Triangle", "مثلث"));
                 ui.radio_value(&mut self.selected_shape_kind, GeometricShapeKind::Pentagon, tr(lang, "Pentagon", "خماسي"));
                 ui.separator();
-                ui.add(egui::Slider::new(&mut self.brush_size, 1.0..=120.0)
+                ui.add(egui::Slider::new(&mut self.shape_outline_size, 1.0..=120.0)
                     .text(tr(lang, "Outline Size", "سُمك حدود الشكل")));
-                ui.add(egui::Slider::new(&mut self.brush_opacity, 0.0..=1.0)
+                ui.add(egui::Slider::new(&mut self.shape_opacity, 0.0..=1.0)
                     .text(tr(lang, "Opacity", "شفافية الشكل")));
                 ui.checkbox(&mut self.shape_fill_enabled, tr(lang, "Fill shape", "لوّن جوّه الشكل"));
             }
@@ -3855,15 +3922,20 @@ impl StickApp {
                     if ui.selectable_label(self.active_tool_ui == ActiveToolUI::EraserRed, tr(lang, "Red (Full E)", "حمراء (كامل E)")).clicked() { self.active_tool_ui = ActiveToolUI::EraserRed; }
                     if ui.selectable_label(self.active_tool_ui == ActiveToolUI::EraserGreen, tr(lang, "Green (Part T)", "خضراء (جزئي T)")).clicked() { self.active_tool_ui = ActiveToolUI::EraserGreen; }
                 });
-                ui.add(egui::Slider::new(&mut self.brush_size, 2.0..=120.0)
-                    .text(tr(lang, "Eraser Size", "حجم الممحاة")));
+                if self.active_tool_ui == ActiveToolUI::EraserRed {
+                    ui.add(egui::Slider::new(&mut self.eraser_full_size, 2.0..=120.0)
+                        .text(tr(lang, "Full eraser size", "حجم الممحاة الكاملة")));
+                } else {
+                    ui.add(egui::Slider::new(&mut self.eraser_partial_size, 2.0..=120.0)
+                        .text(tr(lang, "Partial eraser size", "حجم الممحاة الجزئية")));
+                }
             }
             ActiveToolUI::Text => {
                 ui.strong(tr(lang, "Text Properties", "خصائص النص"));
                 ui.add(egui::DragValue::new(&mut self.text_font_size).range(10.0..=180.0));
                 ui.small(tr(lang, "To move text, switch to Selection (V), click the text, then drag.",
                     "عشان تحرك النص: اختار تحديد (V)، دوس على النص واسحبه."));
-                ui.add(egui::Slider::new(&mut self.brush_opacity, 0.0..=1.0)
+                ui.add(egui::Slider::new(&mut self.text_opacity, 0.0..=1.0)
                     .text(tr(lang, "Text Opacity", "شفافية النص")));
             }
             ActiveToolUI::HandCanvas => {
@@ -5568,17 +5640,17 @@ impl eframe::App for StickApp {
 
                         ui.menu_button(tr(lang,"Interface","الواجهة"),|ui|{
                             ui.small(tr(lang,
-                                "Layout/color presets inspired by familiar creative workflows; no affiliation.",
-                                "ستايلات ألوان وتوزيع مألوفة لبرامج الإبداع، بدون شعارات أو تبعية للبرامج دي."));
+                                "Choose a saved Stick interface preset.",
+                                "اختار شكل واجهة Stick المحفوظ."));
                             ui.separator();
                             for (id,en,ar) in [
                                 (0u8,"Current Stick","واجهة Stick الحالية"),
-                                (1,"Cartoon","الواجهة الكرتونية"),
-                                (2,"Serious","الواجهة الجدية"),
-                                (3,"Cute Pink","واجهة البنات الكيوت"),
-                                (4,"Animate Style","انميت استايل"),
-                                (5,"Krita Style","كريتا استايل"),
-                                (6,"Blender Style","بلندر استايل"),
+                                (1,"Interface 1","واجهة 1"),
+                                (2,"Interface 2","واجهة 2"),
+                                (3,"Interface 3","واجهة 3"),
+                                (4,"Interface 4","واجهة 4"),
+                                (5,"Interface 5","واجهة 5"),
+                                (6,"Interface 6","واجهة 6"),
                             ] {
                                 if ui.selectable_label(self.config.ui_style_preset==id,tr(lang,en,ar)).clicked() {
                                     apply_interface_preset(&mut self.config,id);
@@ -5782,8 +5854,12 @@ impl eframe::App for StickApp {
                                         }
                                     }
                                 }
-                                ActiveToolUI::EraserRed | ActiveToolUI::EraserGreen => {
-                                    ui.add(egui::Slider::new(&mut self.brush_size, 1.0..=120.0)
+                                ActiveToolUI::EraserRed => {
+                                    ui.add(egui::Slider::new(&mut self.eraser_full_size, 2.0..=120.0)
+                                        .text(tr(lang, "Size", "الحجم")));
+                                }
+                                ActiveToolUI::EraserGreen => {
+                                    ui.add(egui::Slider::new(&mut self.eraser_partial_size, 2.0..=120.0)
                                         .text(tr(lang, "Size", "الحجم")));
                                 }
                                 ActiveToolUI::HandCanvas => {
@@ -5843,6 +5919,8 @@ impl eframe::App for StickApp {
                     tr(lang,"Properties","الخصائص"));
                 ui.selectable_value(&mut self.right_panel_tab,1,
                     tr(lang,"Sizes","المقاسات"));
+                ui.selectable_value(&mut self.right_panel_tab,3,
+                    tr(lang,"Tablet Pen","إعدادات القلم"));
                 if self.selected_media_idx.is_some() || self.selected_audio_idx.is_some() {
                     ui.selectable_value(&mut self.right_panel_tab,2,
                         tr(lang,"Media","وسائط"));
@@ -5863,9 +5941,35 @@ impl eframe::App for StickApp {
                 |ui| {
                     egui::ScrollArea::vertical().id_salt("tool_properties_scroll")
                         .auto_shrink([false, false]).show(ui, |ui| {
-                            if self.right_panel_tab != 1 {
+                            if self.right_panel_tab != 1 && self.right_panel_tab != 3 {
                                 self.render_tool_properties_ui(ui, lang);
                             }
+            if self.right_panel_tab == 3 {
+                ui.add_space(4.0);
+                ui.strong(tr(lang, "Graphics tablet pen", "إعدادات قلم الجرافيك تابلت"));
+                ui.separator();
+                let mut tablet_changed = false;
+                tablet_changed |= ui.checkbox(&mut self.config.tablet_pressure_enabled,
+                    tr(lang, "Enable pressure sensitivity", "تشغيل حساسية ضغط القلم")).changed();
+                tablet_changed |= ui.add(egui::Slider::new(
+                    &mut self.config.tablet_pressure_sensitivity, 0.25..=3.0)
+                    .text(tr(lang, "Pressure sensitivity", "قوة استجابة الحساسية"))).changed();
+                tablet_changed |= ui.add(egui::Slider::new(
+                    &mut self.config.tablet_min_pressure, 0.0..=0.35)
+                    .text(tr(lang, "Minimum pressure", "أقل ضغط"))).changed();
+                if tablet_changed { self.config.save(); }
+                let detected = self.stylus_tracker.pressure_is_available();
+                ui.label(if detected {
+                    tr(lang, "Tablet pressure signal detected.", "إشارة ضغط القلم متوصلة دلوقتي.")
+                } else {
+                    tr(lang,
+                        "No pressure sample detected yet. Move the tablet pen on the canvas to test it.",
+                        "لسه مفيش إشارة ضغط ظهرت. حرّك قلم التابلت على الكانفا عشان تختبره.")
+                });
+                ui.small(tr(lang,
+                    "Pressure filtering is isolated from mouse input, so mouse drawing stays at full pressure.",
+                    "فلترة ضغط القلم منفصلة عن الماوس؛ رسم الماوس بيفضل بقوة كاملة."));
+            }
             if self.right_panel_tab == 1 {
             ui.add_space(4.0);
             ui.strong(tr(lang, "Canvas Size & Presets", "مقاسات الكانفا"));
@@ -5986,6 +6090,10 @@ impl eframe::App for StickApp {
                     }
                 }
             });
+            if ui.checkbox(&mut self.config.symmetry_axis_guide,
+                tr(lang, "Show symmetry divider", "إظهار الخط الفاصل للتماثل")).changed() {
+                self.config.save();
+            }
             });
             }
             ui.add_space(6.0);
