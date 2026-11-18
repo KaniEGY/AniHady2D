@@ -2110,11 +2110,11 @@ impl StickApp {
         self.loop_end_frame = snap.loop_end_frame;
         self.has_unsaved_changes = true;
         self.clear_cel_selection();
+        self.advanced_selected_cels.clear();
     }
 
     fn clear_cel_selection(&mut self) {
         self.selected_stroke_indices.clear();
-        self.advanced_selected_cels.clear();
         self.selected_vector_node = None;
         self.selected_vector_nodes.clear();
         self.vector_marquee_start = None;
