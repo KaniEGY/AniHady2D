@@ -143,14 +143,14 @@
 - User explicitly requests publication of EVERY tested update through GitHub Releases and Stick updater. Do not hold working builds or replace full versions with repair-only files. Preserve historical releases for rollback and never publish a known failing build.
 - Online beta PR #20 merged to main at commit 5afb33b2b2ece1e5ccb44e100dde2395608198fb, following latest-HEAD passing Windows CI. Confirm main publication run separately.
 - Next branch: feature/release-rollback-layers-20261117
-- src/updater.rs: query GitHub Releases, sort by published_at, verify official asset URLs, SHA-256 digest and sizes, offer up to 5 older builds. Reuse existing safe staged installer. Regression tests added.
-- src/main.rs: settings Previous Versions tab with immediate predecessor, 5 older releases, dates, confirmation and unsaved work guard; improved resizable right Layers dock with search, sampled actual thumbnail preview, per-layer metadata, double-click rename and guide action.
+- src/updater.rs: query GitHub Releases, sort by published_at, verify official asset URLs, SHA-256 digest and sizes, offer the immediate previous release plus up to 10 older builds. Reuse existing safe staged installer. Regression tests added.
+- src/main.rs: settings Previous Versions tab with immediate predecessor, 10 older releases, dates, confirmation and unsaved work guard; improved resizable right Layers dock with search, sampled actual thumbnail preview, per-layer metadata, double-click rename and guide action.
 - RELEASE_NOTES.md bilingual update. No GPL Krita source code imported.
 - QA: latest PR Windows cargo test and release build must be green before merge; Windows manual rollback, export, reopening older projects and live layer dock validation remain unverified. Online beta is NOT secure/encrypted Internet collaboration, only limited LAN/direct-IP stroke synchronization.
 
 ## 17 Nov 2026 — New online/bucket/perspective UI sprint
 - Branch: feature/online-bucket-perspective-ui-20261117, based on main babfb56cc54f3da2c4dc09cf728ab9ef1873fcc7.
-- Fixed rollback duplicated immediate prior release; parse 6 candidates, previous first + 5 older in list.
+- Fixed rollback duplicated immediate prior release; parse 11 candidates, previous first + 10 older in list.
 - Added project-independent non-destructive perspective guide overlays, configurable stage-aware square, lines and one-point perspective; timeline height config with manual slider and drag-memory; adjustable persistent properties/layers split and collapsible Colors/Symmetry sections.
 - Rebuilt bucket fallback with bounded wall mask, flood-region trace to vector fill for split freehand contours; tests for closed vs open.
 - Online protocol v2: local room code 8 digits, room roster with colored names and self-reported local levels, hosts currently open project, directed UDP broadcast. No worldwide rendezvous, automatic Google OAuth or universal concurrent operation syncing.
