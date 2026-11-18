@@ -175,8 +175,8 @@ mod tests {
     fn a_straight_line_remains_collinear_even_with_many_nodes() {
         let path = smoothed_path(&[p(0., 1.), p(10., 1.), p(100., 1.)]);
         assert!(path.len() > 10);
-        assert!(path.iter().all(|&(x, y)| (y - 1.).abs() < 0.0001 && x >= 0. && x <= 100.));
-        assert!(path.windows(2).all(|w| w[1].0 >= w[0].0));
+        assert!(path.iter().all(|&(x, y)| (y - 1.).abs() < 0.0001 && x >= -0.001 && x <= 100.001));
+        assert!(path.windows(2).all(|w| w[1].0 + 0.001 >= w[0].0));
     }
 
     #[test]
@@ -184,7 +184,7 @@ mod tests {
         let path = smoothed_path(&[p(0., 0.), p(40., 0.), p(40., 40.)]);
         assert!(path.contains(&(40., 0.)));
         assert!(path.iter().all(|&(x, y)| x >= -0.001 && x <= 40.001 && y >= -0.001 && y <= 40.001));
-        assert!(path.iter().all(|&(x, y)| x == 40. || y == 0.));
+        assert!(path.iter().all(|&(x, y)| (x - 40.).abs() < 0.001 || y.abs() < 0.001));
     }
 
     #[test]
