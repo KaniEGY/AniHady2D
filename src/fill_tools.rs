@@ -275,6 +275,26 @@ pub fn flood_fill_polygon_with_options(
             }
         }
     }
+    // The physical paper edge is a valid paint-bucket boundary. This lets
+    // artists close a region against the canvas border (for example, a
+    // three-sided shape touching the left edge) without leaking into the
+    // temporary padding used by the bounded flood solver. Drawing itself is
+    // still allowed outside the paper; this wall exists only for bucket math.
+    let left = 2usize;
+    let top = 2usize;
+    let right = ((cw / cell).ceil() as usize + 2).min(w.saturating_sub(2));
+    let bottom = ((ch / cell).ceil() as usize + 2).min(h.saturating_sub(2));
+    if left < right && top < bottom {
+        for x in left..=right {
+            wall[top * w + x] = true;
+            wall[bottom * w + x] = true;
+        }
+        for y in top..=bottom {
+            wall[y * w + left] = true;
+            wall[y * w + right] = true;
+        }
+    }
+
     let (px, py) = world_to_px(sx, sy);
     let ix = px.floor() as usize;
     let iy = py.floor() as usize;
@@ -640,6 +660,23 @@ mod tests {
         assert!(contour_contains(&left,72.,110.));
         assert!(!contour_contains(&left,147.,110.),
             "diameter must separate the other half");
+    }
+
+    #[test]
+    fn canvas_edge_closes_region_for_bucket_fill() {
+        // Three drawn sides end on the left paper edge. The paper edge itself
+        // must act as the fourth wall for fill purposes.
+        let lines = vec![
+            shape(&[(0.,25.),(100.,25.)]),
+            shape(&[(100.,25.),(100.,105.)]),
+            shape(&[(100.,105.),(0.,105.)]),
+        ];
+        let ring = flood_fill_polygon(&lines,(55.,65.),(140.,140.),1.4)
+            .expect("canvas edge should close the region");
+        let fill = polygon_fill_stroke(ring,[30,120,240,255]);
+        assert!(contour_contains(&fill,55.,65.));
+        assert!(!contour_contains(&fill,120.,65.),
+            "fill must stay on the canvas-edge-bounded side");
     }
 
     #[test]
