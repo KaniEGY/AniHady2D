@@ -4,6 +4,13 @@
 
 ## English (US)
 
+### Interface style presets
+- Added a saved **Interface / الواجهة** submenu to the hamburger menu.
+- Presets: Current Stick, Cartoon, Serious, Cute Pink, Animate Style, Krita Style and Blender Style.
+- Presets change Stick-owned colors, UI density, tool icon scale, timeline styling and dock proportions while preserving the same project format and commands.
+- Animate/Krita/Blender names describe familiar workflow-inspired layouts only; Stick does not copy third-party logos/assets or claim affiliation.
+
+
 ### Media, timeline and drawing interaction overhaul
 - Round brush tips now get explicit circular start/end caps for ordinary G-Pen/freehand lines, not only vector/Fineliner strokes.
 - Audio clips can be deleted with Delete or from a right-click menu and can be duplicated from the same menu/Media inspector.
