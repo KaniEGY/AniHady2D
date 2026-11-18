@@ -6689,6 +6689,20 @@ mod tool_discovery_tests {
     use super::*;
 
     #[test]
+    fn canvas_size_mode_is_undoable_and_rejects_unsafe_sizes() {
+        let mut app = StickApp::new(&egui::Context::default());
+        let original = (app.project.width, app.project.height);
+        app.apply_canvas_size(1080, 1920);
+        assert_eq!((app.project.width, app.project.height), (1080, 1920));
+        assert!(app.has_unsaved_changes);
+        app.undo();
+        assert_eq!((app.project.width, app.project.height), original);
+        assert_eq!((app.canvas_width_edit, app.canvas_height_edit), original);
+        app.apply_canvas_size(8192, 8192);
+        assert_eq!((app.project.width, app.project.height), original);
+    }
+
+    #[test]
     fn remote_shortening_clamps_playhead_loop_and_selection() {
         let mut app = StickApp::new(&egui::Context::default());
         app.timeline_length = 12;
