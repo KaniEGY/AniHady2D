@@ -943,6 +943,23 @@ mod brush_tip_compat_tests {
     }
 
     #[test]
+    fn old_media_and_audio_load_without_new_transform_fields() {
+        let old_media: MediaItem = serde_json::from_str(
+            r#"{"path":"art.png","media_type":"Image","x":20.0,"y":30.0,"width":100.0,"height":80.0}"#
+        ).expect("legacy media item");
+        assert_eq!(old_media.rotation_deg, 0.0);
+        assert!(!old_media.flip_h && !old_media.flip_v);
+        let old_audio: AudioTrack = serde_json::from_str(
+            r#"{"name":"voice","file_path":"voice.wav","start_frame":10,"end_frame":30,"sync_mode":"Stream","waveform_peaks":[0.1,0.5]}"#
+        ).expect("legacy audio track");
+        assert_eq!(old_audio.gain,1.0);
+        assert!(!old_audio.muted);
+        assert_eq!((old_audio.start_frame,old_audio.end_frame),(10,30));
+        let roundtrip: MediaItem=serde_json::from_str(&serde_json::to_string(&old_media).unwrap()).unwrap();
+        assert_eq!(old_media,roundtrip);
+    }
+
+    #[test]
     fn polygonal_brush_tips_roundtrip() {
         let mut stroke: Stroke = serde_json::from_str(
             r#"{"points":[],"color":[0,0,0,255],"brush_preset":"GPenInk"}"#
