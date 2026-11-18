@@ -1,11 +1,22 @@
 # Stick Studio — Session Handoff / سجل استكمال المشروع
 
+## 18 November 2026 — The System / unified Transform / all-timeline quick actions
+- Branch `feat/the-system-transform-timeline-20261118` is based on main after PR #54.
+- Removed normal Selection from the visible toolbar/shortcut editor. Free Transform remains the unified object selector + box selector + move/scale/rotate tool; the legacy Selection key is accepted as a Transform alias for existing configs.
+- Replaced stage-coordinate transform-handle hit testing with exact screen-coordinate targets. Rotate, resize and X/Y translation hitboxes now follow the same positions that are painted after zoom/pan/rotation/flip; transformed outlines use mapped corners instead of an axis-aligned screen approximation.
+- Added `The System` interface preset (id 7) using the supplied visual reference direction: dark navy HUD surfaces, cyan neon outlines, gold accents and extra workspace/timeline HUD chrome. Switching into it plays a dedicated synthesized System activation SFX.
+- Artist System new-project overlay is 4 seconds instead of 8, has separate appearance/dismissal SFX, and selects one of exactly 100 bilingual System words per appearance.
+- OLD, NEW and New mine share icon-only Copy +1 / Move +1 / Clear-selection controls. Tooltips use a two-second hover delay.
+- Frame provenance gaps were closed: next-key creation, clipboard paste and New mine multi-copy explicitly save `CopiedPose`/Blank markers so green/red/white frame semantics survive save/reopen.
+- Artist System/level-up overlays are included in the canvas input-modal guard so canvas cursor/tool actions do not leak behind them.
+- Publishing target remains the normal main-branch Windows release flow (`Stick.exe` + version/update metadata + SHA-256). Do not wait indefinitely for Actions UI; if GitHub accepts the merge, inspect the workflow status separately and fix any reported failure in the next pass.
+
 ## 18 November 2026 — brush/select fixes, timeline action markers and Artist System intro (PR #54)
 - Branch `fix/brush-selection-timeline-artist-system-20261118` is based on main `e6ba73bd427d59e48157cfd1eea17ce749953bfa` / release `v4.1.0.259`.
 - Smooth Ink/Tapered Pen pressure geometry now avoids self-intersecting hairpin failures while preserving their intended smoothing/taper; Smooth Ink centerline behavior is shared by canvas and raster/video export.
 - Selection/Lasso no longer activates Free Transform axis gizmos. Free Transform has a smaller dedicated transform icon.
 - `FrameData.timeline_marker` is serde-defaulted and records InsertedEmpty / CopiedPose / Blank provenance. OLD, NEW and New mine render requested green / red / white-with-black-border circles; old projects remain readable with Legacy markers.
-- New-project Artist System intro is 8 seconds, cyan/gold HUD styled, with deterministic animated electric effects and synthesized lightning SFX. General Settings can disable the intro.
+- New-project Artist System intro was introduced here at 8 seconds; the later The System update above changes it to 4 seconds with separate appearance/dismissal sounds.
 - PR #54 must pass the Windows tests/Clippy/release build on its latest head before merge. Manual visual QA of exact HUD feel, brush behavior and input devices remains separate and must not be claimed from CI alone.
 
 ## 18 November 2026 — screen-recording QA, smooth audio dragging and invite joins

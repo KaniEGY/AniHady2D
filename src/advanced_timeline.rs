@@ -62,8 +62,13 @@ pub fn relocate_keyframes(
         targets.push(destination);
     }
 
-    let content: Vec<_> = selected.iter().map(|c|
-        project.layers[c.layer].keyframes[&c.frame].clone()).collect();
+    let content: Vec<_> = selected.iter().map(|c| {
+        let mut data = project.layers[c.layer].keyframes[&c.frame].clone();
+        if mode == RelocateMode::Copy {
+            data.timeline_marker = FrameMarkerKind::CopiedPose;
+        }
+        data
+    }).collect();
     if mode == RelocateMode::Move {
         for &cell in selected {
             project.layers[cell.layer].keyframes.remove(&cell.frame);
