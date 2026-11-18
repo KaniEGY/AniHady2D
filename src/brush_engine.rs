@@ -24,12 +24,24 @@ pub fn visit_round_marks(stroke: &Stroke, mut paint: impl FnMut(RoundMark, f32))
     } else {
         first.pressure.clamp(0.02, 2.0)
     };
+    // Mouse input (and some tablets at rest) is effectively constant pressure.
+    // Building and triangulating a filled pressure outline for that case is both
+    // expensive and unsafe at very tight reversals where the outline can
+    // self-intersect. Only switch to the pressure polygon when the pressure
+    // range is visually meaningful; otherwise use the renderer's native
+    // round-joined line path.
+    let (min_pressure, max_pressure) = if stroke.is_vector
+        || stroke.brush_preset == KritaBrushPreset::Fineliner {
+        (pressure, pressure)
+    } else {
+        stroke.points.iter().fold((pressure, pressure), |(min_p, max_p), p| {
+            let p = p.pressure.clamp(0.02, 2.0);
+            (min_p.min(p), max_p.max(p))
+        })
+    };
     let varying = !stroke.is_vector
         && stroke.brush_preset != KritaBrushPreset::Fineliner
-        && stroke
-            .points
-            .iter()
-            .any(|p| (p.pressure - pressure).abs() > 0.001);
+        && max_pressure - min_pressure > 0.03;
     for &(size, flow) in layers {
         let width = stroke.base_width * size;
         if stroke.points.len() == 1 {
@@ -59,7 +71,7 @@ pub fn visit_round_marks(stroke: &Stroke, mut paint: impl FnMut(RoundMark, f32))
                     continue;
                 }
             }
-            if varying || (!stroke.is_vector && stroke.brush_preset == KritaBrushPreset::GPenInk) {
+            if varying {
                 let outline = crate::stroke_geometry::pressure_outline(&stroke.points, width);
                 if !outline.is_empty() {
                     paint(RoundMark::Outline(outline), flow);
@@ -295,6 +307,52 @@ mod tests {
         visit_round_marks(&s,|mark,_|if let RoundMark::Line{width}=mark {widths.push(width)});
         assert_eq!(widths,vec![8.]);
     }
+    #[test]
+    fn constant_pressure_gpen_uses_fast_line_not_filled_outline() {
+        let s=Stroke {
+            points:vec![point(0.,0.,1.0),point(10.,0.,1.0),point(10.,2.,1.0),
+                point(2.,2.,1.0),point(2.,4.,1.0)],
+            color:[0,0,0,255],fill_color:None,base_width:7.,is_vector:false,
+            brush_preset:KritaBrushPreset::GPenInk,opacity:1.,brush_texture_id:None,
+            tip_shape:BrushTipShape::Round,
+        };
+        let mut lines=0;
+        let mut outlines=0;
+        visit_round_marks(&s,|mark,_|match mark {
+            RoundMark::Line{..}=>lines+=1,
+            RoundMark::Outline(_)=>outlines+=1,
+            RoundMark::Dot(_)=>{}
+        });
+        assert_eq!(lines,1);
+        assert_eq!(outlines,0);
+    }
+
+    #[test]
+    fn meaningful_pressure_gpen_still_uses_pressure_outline() {
+        let s=Stroke {
+            points:vec![point(0.,0.,0.25),point(20.,0.,0.7),point(40.,5.,1.0)],
+            color:[0,0,0,255],fill_color:None,base_width:8.,is_vector:false,
+            brush_preset:KritaBrushPreset::GPenInk,opacity:1.,brush_texture_id:None,
+            tip_shape:BrushTipShape::Round,
+        };
+        let mut outlines=0;
+        visit_round_marks(&s,|mark,_|if matches!(mark,RoundMark::Outline(_)){outlines+=1});
+        assert_eq!(outlines,1);
+    }
+
+    #[test]
+    fn tiny_pressure_noise_does_not_force_polygon_geometry() {
+        let s=Stroke {
+            points:vec![point(0.,0.,0.99),point(10.,0.,1.0),point(20.,0.,1.01)],
+            color:[0,0,0,255],fill_color:None,base_width:8.,is_vector:false,
+            brush_preset:KritaBrushPreset::GPenInk,opacity:1.,brush_texture_id:None,
+            tip_shape:BrushTipShape::Round,
+        };
+        let mut lines=0;
+        visit_round_marks(&s,|mark,_|if matches!(mark,RoundMark::Line{..}){lines+=1});
+        assert_eq!(lines,1);
+    }
+
     #[test]
     fn tapered_pen_reduces_end_pressure_and_preserves_midstroke() {
         let points=[point(0.,0.,1.),point(10.,0.,1.),point(20.,0.,1.),point(30.,0.,1.)];
