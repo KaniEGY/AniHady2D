@@ -1,5 +1,14 @@
 # Stick Studio — Session Handoff / سجل استكمال المشروع
 
+## 18 November 2026 — screen-recording QA, smooth audio dragging and invite joins
+- Source screen recording: silent MP4, 1920x1080, 60fps, approximately 9m47s. See `VIDEO_QA_2026-11-18.md` for timestamped observations, fixed issues and remaining QA.
+- PR #46 on `fix/video-qa-audio-scrub-invites-20261118` captures audio clip from initial pointer press, disables timeline's drag-to-scroll conflict, saves a single Undo state per actual audio move, and implements continuous ruler mouse-held frame scrubbing.
+- Unrotated paper now clips artwork/ghost preview at stage bounds; egui rectangular clipping isn't a full solution for rotated paper.
+- New `src/online_invite.rs` makes password-free copy/paste `stick://join` invitations with strict address/code/mode validation. A connected host can supply reachable LAN, private overlay or public IPv4/DNS endpoint. DNS resolution occurs in background online worker; optional ZeroTier setup is documented alongside Tailscale.
+- **Do not claim the invite links globally discover rooms or cross CGNAT:** there is no deployed internet relay, no TLS in direct Stick TCP and no actual two-PC external test. Password never goes inside the invitation.
+- The customer-visible fill settings use Stick-specific wording, with no mention of unrelated products. Internal historic Rust enum naming is left alone for compatibility.
+- Require Windows CI test, Clippy, release build and release asset verification before publishing; successful CI is not manual brush/GUI or multi-PC acceptance.
+
 ## 18 November 2026 — Work overhaul integrated review
 - PRs #40 (vector geometry), #41 (canvas appearance/sizes), #42 (pressure stroke smoothing), #43 (Advanced Timeline), #44 (five new brush presets) were merged in sequence into `integration/work-overhaul-20261118` using preserved source changes and explicitly resolved shared documentation / main.rs differences.
 - The build 213 released main was unchanged while staging. After one combined Windows cargo test/Clippy/release build and review, merge the integration PR to main and require the main push release workflow to succeed. Verify `Stick.exe`, `version.txt` and `SHA256SUMS.txt`.
