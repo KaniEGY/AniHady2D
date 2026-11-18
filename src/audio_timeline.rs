@@ -1,6 +1,41 @@
 //! Audio timeline operations; no audio data is modified when clips are moved.
 use crate::project::AudioTrack;
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PlaybackWindow {
+    pub skip_secs: f64,
+    pub delay_secs: f64,
+    pub audible_secs: f64,
+}
+
+pub fn playback_window(track: &AudioTrack, current_frame: usize, fps: u32) -> Option<PlaybackWindow> {
+    if track.muted || track.gain <= 0.0 || current_frame > track.end_frame { return None; }
+    let fps = fps.max(1) as f64;
+    let skip_secs = current_frame.saturating_sub(track.start_frame) as f64 / fps;
+    let delay_secs = track.start_frame.saturating_sub(current_frame) as f64 / fps;
+    let duration_secs = (track.end_frame.saturating_sub(track.start_frame) + 1) as f64 / fps;
+    let audible_secs = duration_secs - skip_secs;
+    (audible_secs > 0.0).then_some(PlaybackWindow { skip_secs, delay_secs, audible_secs })
+}
+
+pub fn duplicate_clip(tracks: &mut Vec<AudioTrack>, index: usize, max_frames: usize) -> Option<usize> {
+    let original = tracks.get(index)?.clone();
+    let duration = original.end_frame.saturating_sub(original.start_frame);
+    if max_frames == 0 || duration >= max_frames { return None; }
+    let mut copy = original.clone();
+    copy.name = if original.name.trim().is_empty() {
+        "Audio Copy".to_string()
+    } else {
+        format!("{} Copy", original.name)
+    };
+    let preferred = original.end_frame.saturating_add(1);
+    let fallback = original.start_frame.saturating_add(1);
+    let requested = if preferred.saturating_add(duration) <= max_frames { preferred } else { fallback };
+    let _ = move_clip(&mut copy, requested, max_frames);
+    tracks.push(copy);
+    Some(tracks.len() - 1)
+}
+
 pub fn move_clip(track: &mut AudioTrack, requested_start: usize, max_frames: usize) -> bool {
     let duration = track.end_frame.saturating_sub(track.start_frame);
     if duration >= max_frames || max_frames == 0 { return false; }
@@ -38,6 +73,30 @@ mod tests {
         AudioTrack {name: "test".to_string(), file_path: "sample.wav".into(),
             start_frame: 5, end_frame: 25, sync_mode: AudioSyncMode::Stream,
             waveform_peaks: vec![0.2,0.8,0.1], gain: 1.0, muted: false }
+    }
+
+    #[test]
+    fn playback_window_schedules_overlapping_tracks_independently() {
+        let mut a=track();
+        a.start_frame=1; a.end_frame=50;
+        let mut b=track();
+        b.start_frame=20; b.end_frame=80;
+        let wa=playback_window(&a,10,10).unwrap();
+        let wb=playback_window(&b,10,10).unwrap();
+        assert!((wa.skip_secs-0.9).abs()<0.0001);
+        assert_eq!(wa.delay_secs,0.0);
+        assert!((wb.delay_secs-1.0).abs()<0.0001);
+        assert_eq!(wb.skip_secs,0.0);
+    }
+
+    #[test]
+    fn duplicate_audio_keeps_duration_and_selectable_copy() {
+        let mut tracks=vec![track()];
+        let idx=duplicate_clip(&mut tracks,0,200).unwrap();
+        assert_eq!(idx,1);
+        assert_eq!(tracks[1].end_frame-tracks[1].start_frame,20);
+        assert!(tracks[1].name.ends_with("Copy"));
+        assert!(tracks[1].start_frame>tracks[0].start_frame);
     }
 
     #[test]
