@@ -1158,6 +1158,7 @@ struct StickApp {
     editing_symbol_name: Option<String>,
     selected_audio_idx: Option<usize>,
     audio_drag_origin: Option<(usize,usize)>,
+    audio_drag_pointer_x: Option<f32>,
     audio_drag_undo_captured: bool,
     timeline_scrub_active: bool,
     active_tool_ui: ActiveToolUI,
@@ -1323,6 +1324,7 @@ impl StickApp {
             editing_symbol_name: None,
             selected_audio_idx: None,
             audio_drag_origin: None,
+            audio_drag_pointer_x: None,
             audio_drag_undo_captured: false,
             timeline_scrub_active: false,
             active_tool_ui: ActiveToolUI::Brush,
@@ -4424,7 +4426,7 @@ impl eframe::App for StickApp {
                                         });
                                         ui.add_space(10.0);
                                         ui.label(egui::RichText::new(tr(lang,
-                                            "Five versions before the previous release", "آخر 5 نسخ قبل النسخة السابقة")).strong());
+                                            "Ten versions before the previous release", "آخر 10 نسخ قبل النسخة السابقة")).strong());
                                         egui::ScrollArea::vertical().max_height(205.0).show(ui, |ui| {
                                             for (index, release) in releases.iter().skip(1).enumerate() {
                                                 ui.horizontal(|ui| {
@@ -5641,6 +5643,7 @@ impl eframe::App for StickApp {
         let mut timeline_seek = None;
         if !pointer_down {
             self.audio_drag_origin=None;
+            self.audio_drag_pointer_x=None;
             self.audio_drag_undo_captured=false;
             self.timeline_scrub_active=false;
         }
@@ -6066,21 +6069,24 @@ impl eframe::App for StickApp {
                                 // slip out from under the pointer before drag_started().
                                 if pointer_pressed && pointer_pos.is_some_and(|pos|clip.contains(pos)) {
                                     self.audio_drag_origin=Some((audio_index,track.start_frame));
+                                    self.audio_drag_pointer_x=pointer_pos.map(|pos|pos.x);
                                     self.audio_drag_undo_captured=false;
                                     self.selected_audio_idx=Some(audio_index);
                                     self.config.show_right_dock=true;
                                 }
                                 if pointer_down {
                                     if let Some((drag_index,origin))=self.audio_drag_origin {
-                                        if drag_index==audio_index && resp.dragged() {
-                                            let start=audio_timeline::drag_target_frame(
-                                                origin,resp.drag_delta().x,cell_w,
-                                                timeline_ops::MAX_TIMELINE_FRAMES).unwrap_or(origin);
-                                            if start != track.start_frame {
-                                                audio_move_request=Some((audio_index,start));
-                                                if !self.audio_drag_undo_captured {
-                                                    audio_drag_started=true;
-                                                    self.audio_drag_undo_captured=true;
+                                        if drag_index==audio_index {
+                                            if let (Some(pos),Some(press_x))=(pointer_pos,self.audio_drag_pointer_x) {
+                                                let start=audio_timeline::drag_target_frame(
+                                                    origin,pos.x-press_x,cell_w,
+                                                    timeline_ops::MAX_TIMELINE_FRAMES).unwrap_or(origin);
+                                                if start != track.start_frame {
+                                                    audio_move_request=Some((audio_index,start));
+                                                    if !self.audio_drag_undo_captured {
+                                                        audio_drag_started=true;
+                                                        self.audio_drag_undo_captured=true;
+                                                    }
                                                 }
                                             }
                                         }
