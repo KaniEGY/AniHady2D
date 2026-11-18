@@ -2846,7 +2846,6 @@ impl StickApp {
         self.replace_document(project);
         self.has_unsaved_changes = false;
         self.status_message = "New project created".to_string();
-        self.play_sfx(SfxType::NewFrame);
         Ok(())
     }
 
