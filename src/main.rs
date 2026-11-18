@@ -238,17 +238,31 @@ enum AppLang {
     Arabic,
 }
 
+fn mirror_rtl_punctuation(text: &str) -> String {
+    text.chars().map(|c| match c {
+        '(' => ')', ')' => '(',
+        '[' => ']', ']' => '[',
+        '{' => '}', '}' => '{',
+        '<' => '>', '>' => '<',
+        '«' => '»', '»' => '«',
+        _ => c,
+    }).collect()
+}
+
 fn fix_ar(text: &str) -> String {
     if !text.chars().any(|c| ('\u{0600}'..='\u{06FF}').contains(&c)) {
         return text.to_string();
     }
     // Shape each line independently: a multiline TextItem must not lose
-    // right-to-left ordering after the first paragraph.
+    // right-to-left ordering after the first paragraph. unicode-bidi's
+    // reorder_line intentionally leaves UAX#9 rule L4 (paired punctuation
+    // mirroring) to the renderer, so apply the common mirrored pairs here.
     text.split('\n').map(|line| {
         let reshaped = arabic_reshape(line);
         let bidi_info = BidiInfo::new(&reshaped, None);
         if let Some(para) = bidi_info.paragraphs.first() {
-            bidi_info.reorder_line(para, para.range.clone()).into_owned()
+            let visual = bidi_info.reorder_line(para, para.range.clone()).into_owned();
+            if para.level.is_rtl() { mirror_rtl_punctuation(&visual) } else { visual }
         } else {
             reshaped
         }
@@ -458,6 +472,12 @@ struct AppConfig {
     vanishing_right_x: f32,
     #[serde(default = "default_two_point_y")]
     vanishing_2point_y: f32,
+    #[serde(default = "default_true_val")]
+    perspective_show_horizon: bool,
+    #[serde(default = "default_perspective_ray_count")]
+    perspective_ray_count: u16,
+    #[serde(default)]
+    perspective_parallel_angle_deg: f32,
     #[serde(default = "default_timeline_height")]
     timeline_dock_height: f32,
     #[serde(default)]
@@ -551,6 +571,7 @@ fn default_vanishing_y() -> f32 { 0.30 }
 fn default_left_vp_x() -> f32 { 0.14 }
 fn default_right_vp_x() -> f32 { 0.86 }
 fn default_two_point_y() -> f32 { 0.36 }
+fn default_perspective_ray_count() -> u16 { 18 }
 fn default_timeline_height() -> f32 { 310.0 }
 fn default_new_timeline_row_height() -> f32 { 50.0 }
 fn default_new_timeline_cell_width() -> f32 { 64.0 }
@@ -614,6 +635,9 @@ impl Default for AppConfig {
             vanishing_left_x: default_left_vp_x(),
             vanishing_right_x: default_right_vp_x(),
             vanishing_2point_y: default_two_point_y(),
+            perspective_show_horizon: true,
+            perspective_ray_count: default_perspective_ray_count(),
+            perspective_parallel_angle_deg: 0.0,
             timeline_dock_height: default_timeline_height(),
             timeline_style: 0,
             timeline_new_cell_width: default_new_timeline_cell_width(),
@@ -684,9 +708,9 @@ impl AppConfig {
         for path in local_setting_paths("stick_config.json") {
             if let Ok(data) = std::fs::read_to_string(path) {
                 if let Ok(mut parsed) = serde_json::from_str::<Self>(&data) {
-                    // Perspective overlays are tools, not saved project content.
-                    // Never silently re-enable guides on the next launch.
-                    parsed.perspective_mode = 0;
+                    // Perspective and workspace choices are user preferences.
+                    // Keep the saved mode so a user-defined workspace/profile
+                    // actually returns exactly as it was on the next launch.
                     // Existing installations may persist an empty OAuth ID,
                     // overriding a newly configured public Desktop client ID
                     // embedded in updated official releases.
@@ -708,6 +732,31 @@ impl AppConfig {
                 if std::fs::write(&path, &json).is_ok() { break; }
             }
         }
+    }
+
+    fn portable_json(&self) -> Result<String, String> {
+        let mut copy = self.clone();
+        // A settings profile is meant to share workspace/tool preferences,
+        // never local account identity or recent private file paths.
+        copy.recent_projects.clear();
+        copy.last_seen_patch_version.clear();
+        copy.cloud_email.clear();
+        copy.cloud_auto_backup = false;
+        copy.cloud_google_client_id = default_google_client_id();
+        serde_json::to_string_pretty(&copy).map_err(|e| e.to_string())
+    }
+
+    fn import_portable_json(data: &str, local: &Self) -> Result<Self, String> {
+        let mut imported: Self = serde_json::from_str(data)
+            .map_err(|e| format!("Invalid Stick settings profile: {e}"))?;
+        // Preserve this computer's account/release-local state. Imported
+        // profiles cannot silently switch Google identity or expose paths.
+        imported.cloud_google_client_id = local.cloud_google_client_id.clone();
+        imported.cloud_email = local.cloud_email.clone();
+        imported.cloud_auto_backup = local.cloud_auto_backup;
+        imported.recent_projects = local.recent_projects.clone();
+        imported.last_seen_patch_version = local.last_seen_patch_version.clone();
+        Ok(imported)
     }
 }
 
@@ -746,9 +795,21 @@ fn generate_stick_window_icon() -> egui::IconData {
 
 fn setup_custom_fonts(ctx: &egui::Context) {
     let mut fonts = egui::FontDefinitions::default();
-    if let Ok(font_data) = std::fs::read("C:\\Windows\\Fonts\\tahoma.ttf") {
-        fonts.font_data.insert("arabic_font".to_owned(), egui::FontData::from_owned(font_data));
-        fonts.families.entry(egui::FontFamily::Proportional).or_default().insert(0, "arabic_font".to_owned());
+    let mut preferred = Vec::new();
+    for (name, path) in [
+        ("arabic_font", "C:\\Windows\\Fonts\\tahoma.ttf"),
+        ("emoji_font", "C:\\Windows\\Fonts\\seguiemj.ttf"),
+        ("symbol_font", "C:\\Windows\\Fonts\\seguisym.ttf"),
+        ("ui_fallback", "C:\\Windows\\Fonts\\segoeui.ttf"),
+    ] {
+        if let Ok(font_data) = std::fs::read(path) {
+            fonts.font_data.insert(name.to_owned(), egui::FontData::from_owned(font_data));
+            preferred.push(name.to_owned());
+        }
+    }
+    let family = fonts.families.entry(egui::FontFamily::Proportional).or_default();
+    for (index, name) in preferred.into_iter().enumerate() {
+        family.insert(index.min(family.len()), name);
     }
     ctx.set_fonts(fonts);
 }
@@ -826,6 +887,73 @@ fn draw_undo_redo_arrow(painter: &egui::Painter, rect: egui::Rect, is_undo: bool
         painter.line_segment([c + egui::vec2(-6.0, 0.0), c + egui::vec2(6.0, 0.0)], stroke);
         painter.line_segment([c + egui::vec2(6.0, 0.0), c + egui::vec2(1.0, -5.0)], stroke);
         painter.line_segment([c + egui::vec2(6.0, 0.0), c + egui::vec2(1.0, 5.0)], stroke);
+    }
+}
+
+fn draw_home_icon(painter: &egui::Painter, rect: egui::Rect, hovered: bool) {
+    let c = rect.center();
+    let col = if hovered { egui::Color32::WHITE } else { egui::Color32::from_gray(225) };
+    let stroke = egui::Stroke::new(2.0, col);
+    painter.add(egui::Shape::line(vec![
+        c + egui::vec2(-8.0, -1.0), c + egui::vec2(0.0, -8.0),
+        c + egui::vec2(8.0, -1.0)
+    ], stroke));
+    painter.rect_stroke(
+        egui::Rect::from_min_max(c + egui::vec2(-6.0,-1.0), c + egui::vec2(6.0,8.0)),
+        1.0, stroke);
+    painter.rect_filled(
+        egui::Rect::from_min_max(c + egui::vec2(-1.7,3.0), c + egui::vec2(1.7,8.0)),
+        0.5, col);
+}
+
+fn draw_support_heart_icon(painter: &egui::Painter, rect: egui::Rect, hovered: bool) {
+    let c = rect.center();
+    let gold = if hovered { egui::Color32::from_rgb(255, 226, 88) }
+        else { egui::Color32::from_rgb(255, 206, 53) };
+    let mut pts = Vec::with_capacity(40);
+    for i in 0..40 {
+        let t = (i as f32 / 40.0) * std::f32::consts::TAU;
+        let x = 16.0 * t.sin().powi(3);
+        let y = -(13.0 * t.cos() - 5.0 * (2.0 * t).cos()
+            - 2.0 * (3.0 * t).cos() - (4.0 * t).cos());
+        pts.push(c + egui::vec2(x * 0.43, y * 0.43));
+    }
+    painter.add(egui::Shape::convex_polygon(pts, gold, egui::Stroke::NONE));
+}
+
+fn draw_symmetry_icon(
+    painter: &egui::Painter, rect: egui::Rect, mode: SymmetryMode, active: bool,
+) {
+    let c = rect.center();
+    let accent = if active { egui::Color32::from_rgb(92, 200, 247) }
+        else { egui::Color32::from_gray(185) };
+    let axis = egui::Stroke::new(1.3, egui::Color32::from_gray(120));
+    let shape = egui::Stroke::new(2.0, accent);
+    match mode {
+        SymmetryMode::Off => {
+            painter.line_segment([c+egui::vec2(-7.0,-7.0),c+egui::vec2(7.0,7.0)],
+                egui::Stroke::new(2.1, accent));
+            painter.line_segment([c+egui::vec2(-7.0,7.0),c+egui::vec2(7.0,-7.0)],
+                egui::Stroke::new(2.1, accent));
+        }
+        SymmetryMode::Horizontal => {
+            painter.line_segment([c+egui::vec2(0.0,-10.0),c+egui::vec2(0.0,10.0)],axis);
+            painter.add(egui::Shape::line(vec![
+                c+egui::vec2(-3.0,-7.0),c+egui::vec2(-8.0,-3.0),c+egui::vec2(-5.0,5.0)
+            ],shape));
+            painter.add(egui::Shape::line(vec![
+                c+egui::vec2(3.0,-7.0),c+egui::vec2(8.0,-3.0),c+egui::vec2(5.0,5.0)
+            ],shape));
+        }
+        SymmetryMode::Vertical => {
+            painter.line_segment([c+egui::vec2(-10.0,0.0),c+egui::vec2(10.0,0.0)],axis);
+            painter.add(egui::Shape::line(vec![
+                c+egui::vec2(-7.0,-3.0),c+egui::vec2(-3.0,-8.0),c+egui::vec2(5.0,-5.0)
+            ],shape));
+            painter.add(egui::Shape::line(vec![
+                c+egui::vec2(-7.0,3.0),c+egui::vec2(-3.0,8.0),c+egui::vec2(5.0,5.0)
+            ],shape));
+        }
     }
 }
 
@@ -1125,6 +1253,7 @@ struct StickApp {
     online_share_address: String,
     online_code_input: String,
     online_participants: Vec<Participant>,
+    pending_online_rename: Option<(u64, String)>,
     online_rooms: Vec<RoomListing>,
     online_discovery: Option<std::sync::mpsc::Receiver<collab::RoomSearchResult>>,
     online_remote_info: Option<remote_access::TailnetInfo>,
@@ -1236,6 +1365,7 @@ struct StickApp {
     show_update_dialog: bool,
     show_patch_notes_dialog: bool,
     show_settings_dialog: bool,
+    settings_profile_message: String,
     cloud_job: Option<std::sync::mpsc::Receiver<cloud_sync::Event>>,
     profile_sync_pending: bool,
     last_profile_cloud_sync_time: f64,
@@ -1291,6 +1421,7 @@ impl StickApp {
             online_share_address: String::new(),
             online_code_input: String::new(),
             online_participants: Vec::new(),
+            pending_online_rename: None,
             online_rooms: Vec::new(),
             online_discovery: None,
             online_remote_info: None,
@@ -1373,7 +1504,7 @@ impl StickApp {
             bucket_precision: 1.0,
             bucket_dilate_contract: 0.0,
             bucket_thickness: 0.0,
-            bucket_reference_all_layers: false,
+            bucket_reference_all_layers: true,
             brush_tip_shape: BrushTipShape::Round,
             zoom_level: 0.75,
             pan_offset: egui::Vec2::ZERO,
@@ -1402,6 +1533,7 @@ impl StickApp {
             show_update_dialog: false,
             show_patch_notes_dialog: AppConfig::load().last_seen_patch_version != get_installed_version(),
             show_settings_dialog: false,
+            settings_profile_message: String::new(),
             cloud_job: None,
             profile_sync_pending: false,
             last_profile_cloud_sync_time: 0.0,
@@ -3462,10 +3594,11 @@ impl StickApp {
                     "Precision balances detail and memory. Positive dilate reaches under ink; negative shrinks the fill. Thickness changes the temporary boundary mask, not your strokes.",
                     "الدقة بتوازن بين التفاصيل والذاكرة. التمدد الموجب بيدخل اللون تحت الخط، والسالب بيقلصه. السُمك بيغير قناع التعبئة المؤقت مش الرسمة."));
                 ui.checkbox(&mut self.bucket_reference_all_layers,
-                    tr(lang, "Reference all visible layers", "استخدم حدود كل الليرات الظاهرة"));
+                    tr(lang, "Reference all visible layers (recommended)",
+                        "استخدم حدود كل الليرات الظاهرة (مُوصى به)"));
                 ui.small(tr(lang,
-                    "Fill follows the visible enclosed area and grows slightly under outlines. Lower gap tolerance if adjacent regions merge.",
-                    "الدلو بيلون المنطقة المقفولة ويمد اللون تحت الخط عشان ميعملش حواف بيضا. قلل قفل الفجوات لو منطقتين اتصلوا ببعض."));
+                    "The visible layers are used only as fill boundaries; the new color is always created on the active layer. Lower gap tolerance if adjacent regions merge.",
+                    "الليرات الظاهرة بتتستخدم كحدود للتعبئة بس؛ اللون الجديد بيتحط دايمًا على اللير النشط. قلل قفل الفجوات لو منطقتين اتصلوا ببعض."));
             }
             ActiveToolUI::Eyedropper => {
                 ui.strong(tr(lang, "Eyedropper • Pick Fill / Line", "القطّارة • لون التعبئة أو الخط"));
@@ -4119,8 +4252,8 @@ impl eframe::App for StickApp {
 
         if self.show_settings_dialog {
             egui::Window::new(tr(lang, "Stick Preferences", "إعدادات Stick"))
-                .collapsible(false).resizable(true).default_width(570.0)
-                .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0]).show(ctx, |ui| {
+                .collapsible(false).resizable(true).movable(true).default_width(570.0)
+                .default_pos(egui::pos2(54.0, 54.0)).show(ctx, |ui| {
                 ui.horizontal_wrapped(|ui| {
                     ui.selectable_value(&mut self.settings_tab, 0, tr(lang, "General", "عام"));
                     ui.selectable_value(&mut self.settings_tab, 1, tr(lang, "Art System", "نظام الفنان"));
@@ -4130,6 +4263,7 @@ impl eframe::App for StickApp {
                     ui.selectable_value(&mut self.settings_tab, 5, tr(lang, "Previous Versions", "النسخة الاحتياطية"));
                     ui.selectable_value(&mut self.settings_tab, 6, tr(lang, "Perspective", "المنظور"));
                     ui.selectable_value(&mut self.settings_tab, 7, tr(lang, "Sign in", "تسجيل دخول"));
+                    ui.selectable_value(&mut self.settings_tab, 8, tr(lang, "Settings Profile", "ملف الإعدادات"));
                 });
                 ui.separator();
                 match self.settings_tab {
@@ -4508,6 +4642,16 @@ impl eframe::App for StickApp {
                                 "Adjust both points independently. The guides are never exported.",
                                 "حرّك كل نقطة تلاشي بشكل مستقل. الخطوط إرشادية ومش بتظهر في التصدير."));
                         }
+                        ui.separator();
+                        changed |= ui.checkbox(&mut self.config.perspective_show_horizon,
+                            tr(lang, "Show horizon line", "إظهار خط الأفق")).changed();
+                        changed |= ui.add(egui::Slider::new(&mut self.config.perspective_ray_count, 4..=64)
+                            .text(tr(lang, "Perspective ray density", "كثافة خطوط المنظور"))).changed();
+                        if self.config.perspective_mode == 2 {
+                            changed |= ui.add(egui::Slider::new(
+                                &mut self.config.perspective_parallel_angle_deg, -85.0..=85.0)
+                                .text(tr(lang, "Parallel-line angle", "زاوية الخطوط المتوازية"))).changed();
+                        }
                         if ui.button(tr(lang, "Reset perspective settings", "رجّع إعدادات المنظور الأصلية")).clicked() {
                             self.config.perspective_spacing = default_perspective_spacing();
                             self.config.perspective_line_width = default_perspective_width();
@@ -4518,10 +4662,78 @@ impl eframe::App for StickApp {
                             self.config.vanishing_left_x = default_left_vp_x();
                             self.config.vanishing_right_x = default_right_vp_x();
                             self.config.vanishing_2point_y = default_two_point_y();
+                            self.config.perspective_show_horizon = true;
+                            self.config.perspective_ray_count = default_perspective_ray_count();
+                            self.config.perspective_parallel_angle_deg = 0.0;
                             self.config.perspective_mode = 0;
                             changed = true;
                         }
                         if changed { self.config.save(); }
+                    }
+                    8 => {
+                        ui.heading(tr(lang, "Settings profile", "ملف الإعدادات"));
+                        ui.label(tr(lang,
+                            "Stick already saves your preferences automatically on this PC. Export a portable profile to copy the same workspace, shortcuts, colors and perspective setup to another computer.",
+                            "Stick بيحفظ إعداداتك تلقائيًا على الجهاز. صدّر ملف إعدادات لو عايز تنقل نفس الواجهة والاختصارات والألوان والمنظور لجهاز تاني."));
+                        if let Some(path) = local_setting_paths("stick_config.json").first() {
+                            ui.monospace(path.display().to_string());
+                        }
+                        ui.separator();
+                        ui.horizontal_wrapped(|ui| {
+                            if ui.button(tr(lang, "Export settings...", "تصدير الإعدادات...")).clicked() {
+                                if let Some(mut path) = rfd::FileDialog::new()
+                                    .add_filter("Stick Settings", &["sticksettings", "json"])
+                                    .set_file_name("Stick_Settings.sticksettings").save_file() {
+                                    if path.extension().is_none() { path.set_extension("sticksettings"); }
+                                    self.settings_profile_message = match self.config.portable_json()
+                                        .and_then(|json| std::fs::write(&path, json)
+                                            .map_err(|e| e.to_string())) {
+                                        Ok(()) => format!("{} {}", tr(lang, "Saved:", "تم الحفظ:"), path.display()),
+                                        Err(err) => format!("{} {err}", tr(lang, "Export failed:", "فشل التصدير:")),
+                                    };
+                                }
+                            }
+                            if ui.button(tr(lang, "Import settings...", "استيراد الإعدادات...")).clicked() {
+                                if let Some(path) = rfd::FileDialog::new()
+                                    .add_filter("Stick Settings", &["sticksettings", "json"]).pick_file() {
+                                    self.settings_profile_message = match std::fs::read_to_string(&path)
+                                        .map_err(|e| e.to_string())
+                                        .and_then(|data| AppConfig::import_portable_json(&data, &self.config)) {
+                                        Ok(imported) => {
+                                            self.config = imported;
+                                            self.config.save();
+                                            tr(lang, "Settings imported and applied.", "تم استيراد الإعدادات وتطبيقها.")
+                                        }
+                                        Err(err) => format!("{} {err}", tr(lang, "Import failed:", "فشل الاستيراد:")),
+                                    };
+                                }
+                            }
+                        });
+                        ui.small(tr(lang,
+                            "Portable profiles exclude recent project paths and Google account identity.",
+                            "ملف الإعدادات ما بيحفظش مسارات مشاريعك الأخيرة ولا هوية حساب جوجل."));
+                        ui.separator();
+                        if ui.button(tr(lang, "Restore all program defaults", "رجّع إعدادات البرنامج الافتراضية")).clicked() {
+                            let cloud_id = self.config.cloud_google_client_id.clone();
+                            let cloud_email = self.config.cloud_email.clone();
+                            let cloud_auto = self.config.cloud_auto_backup;
+                            let recent = self.config.recent_projects.clone();
+                            let seen = self.config.last_seen_patch_version.clone();
+                            self.config = AppConfig::default();
+                            self.config.cloud_google_client_id = cloud_id;
+                            self.config.cloud_email = cloud_email;
+                            self.config.cloud_auto_backup = cloud_auto;
+                            self.config.recent_projects = recent;
+                            self.config.last_seen_patch_version = seen;
+                            self.config.save();
+                            self.settings_profile_message =
+                                tr(lang, "Program preferences restored to defaults.",
+                                    "تم إرجاع إعدادات البرنامج للوضع الافتراضي.");
+                        }
+                        if !self.settings_profile_message.is_empty() {
+                            ui.separator();
+                            ui.label(self.settings_profile_message.clone());
+                        }
                     }
                     7 => {
                         ui.heading(tr(lang,"Google account & Drive backup",
@@ -4868,20 +5080,48 @@ impl eframe::App for StickApp {
                                 [240,186,54], [229,98,184], [76,200,210], [248,102,135],
                             ];
                             for participant in self.online_participants.clone() {
-                                ui.horizontal(|ui| {
+                                let member_row = ui.horizontal(|ui| {
                                     let color = egui::Color32::from_rgb(
                                         participant.color[0], participant.color[1], participant.color[2]);
                                     ui.colored_label(color, format!("● {}  Lv.{}",
                                         participant.name, participant.level));
                                     if participant.id == 0 {
                                         ui.small(tr(lang, "HOST", "الهوست"));
-                                    } else if ui.small_button(tr(lang, "Kick", "طرد")).clicked() {
-                                        if let Err(err) = session.kick_member(participant.id) {
-                                            self.online_message = err;
-                                        }
-                                        ui.close_menu();
+                                    } else {
+                                        ui.small(tr(lang, "Right-click for permissions", "كلك يمين للصلاحيات"));
                                     }
-                                });
+                                }).response;
+                                if participant.id != 0 {
+                                    member_row.context_menu(|ui| {
+                                        ui.strong(&participant.name);
+                                        if ui.button(tr(lang, "Rename nickname...", "تغيير الاسم المستعار...")).clicked() {
+                                            self.pending_online_rename =
+                                                Some((participant.id, participant.name.clone()));
+                                            ui.close_menu();
+                                        }
+                                        ui.menu_button(tr(lang, "Change tool color", "تغيير لون الأدوات"), |ui| {
+                                            for rgb in palette {
+                                                let swatch = egui::Color32::from_rgb(rgb[0],rgb[1],rgb[2]);
+                                                let (rect, click) = ui.allocate_exact_size(
+                                                    egui::vec2(24.0,20.0),egui::Sense::click());
+                                                ui.painter().rect_filled(rect,3.0,swatch);
+                                                if click.clicked() {
+                                                    if let Err(err)=session.change_member_color(participant.id,rgb) {
+                                                        self.online_message=err;
+                                                    }
+                                                    ui.close_menu();
+                                                }
+                                            }
+                                        });
+                                        ui.separator();
+                                        if ui.button(tr(lang, "Kick from room", "طرد من الغرفة")).clicked() {
+                                            if let Err(err)=session.kick_member(participant.id) {
+                                                self.online_message=err;
+                                            }
+                                            ui.close_menu();
+                                        }
+                                    });
+                                }
                                 ui.horizontal_wrapped(|ui| {
                                     ui.small(tr(lang, "Tool color:", "لون الأدوات:"));
                                     for rgb in palette {
@@ -4930,82 +5170,135 @@ impl eframe::App for StickApp {
                 self.workspace_mode = WorkspaceMode::Launcher;
             }
         }
-        // الشريط العلوي
-        if self.config.show_top_bar {
-        egui::TopBottomPanel::top("top_bar").show(ctx, |ui| {
-            egui::menu::bar(ui, |ui| {
-                let (h_rect, h_resp) = ui.allocate_exact_size(egui::vec2(22.0, 20.0), egui::Sense::click());
-                draw_red_heart_icon(ui.painter(), h_rect, h_resp.hovered());
-                if h_resp.clicked() { self.show_credits_dialog = true; }
-                ui.colored_label(egui::Color32::from_rgb(255, 215, 25), "Stick");
-                ui.separator();
-
-                let m_lbl = if self.workspace_mode == WorkspaceMode::DrawingOnly { tr(lang, "Switch to Animation", "التبديل للأنيميشن") } else { tr(lang, "Switch to Drawing", "التبديل للرسم") };
-                if ui.add_enabled(self.online_session.is_none(), egui::Button::new(m_lbl)).clicked() {
-                    self.workspace_mode = if self.workspace_mode == WorkspaceMode::DrawingOnly { WorkspaceMode::AnimationStudio } else { WorkspaceMode::DrawingOnly };
-                }
-                ui.separator();
-                ui.menu_button(tr(lang, "File", "ملف"), |ui| {
-                    if ui.button(tr(lang, "Save (Ctrl+S)", "حفظ (Ctrl+S)")).clicked() { self.trigger_save(); ui.close_menu(); }
-                    if ui.button(tr(lang, "Save As... (Ctrl+Shift+S)", "حفظ باسم...")).clicked() { self.trigger_save_as(); ui.close_menu(); }
-                    if ui.button(tr(lang, "Open (.stick / .ah2d)", "فتح مشروع")).clicked() { self.trigger_open_project(); ui.close_menu(); }
-                    if ui.button(tr(lang, "Recover Project...", "استعادة نسخة احتياطية...")).clicked() { self.show_recovery_dialog = true; ui.close_menu(); }
-                    if ui.button(tr(lang, "Project Details", "تفاصيل إصدار المشروع")).clicked() { self.show_project_details = true; ui.close_menu(); }
-                    ui.separator();
-                    if ui.button(tr(lang, "Import Image...", "استيراد صورة")).clicked() { self.import_image_dialog(); ui.close_menu(); }
-                    if ui.button(tr(lang, "Import SVG...", "استيراد SVG")).clicked() { self.import_svg_dialog(); ui.close_menu(); }
-                    if ui.button(tr(lang, "Import Adobe Animate...", "استيراد Animate")).clicked() { self.import_animate_dialog(); ui.close_menu(); }
-                    if ui.button(tr(lang, "🚀 Export Studio...", "🚀 استوديو التصدير")).clicked() { self.show_export_studio = true; ui.close_menu(); }
+        if let Some((member_id, mut draft)) = self.pending_online_rename.clone() {
+            let mut open = true;
+            let mut apply = false;
+            let mut cancel = false;
+            egui::Window::new(tr(lang, "Rename room participant", "تغيير اسم عضو الغرفة"))
+                .collapsible(false).resizable(false).movable(true)
+                .default_width(330.0).open(&mut open).show(ctx, |ui| {
+                    ui.add(egui::TextEdit::singleline(&mut draft)
+                        .desired_width(f32::INFINITY).char_limit(40));
+                    ui.horizontal(|ui| {
+                        if ui.button(tr(lang, "Apply", "تطبيق")).clicked() { apply = true; }
+                        if ui.button(tr(lang, "Cancel", "إلغاء")).clicked() { cancel = true; }
+                    });
                 });
-                let can_u = !self.undo_stack.is_empty();
-                let (ur, uresp) = ui.allocate_exact_size(egui::vec2(26.0, 22.0), egui::Sense::click());
-                draw_undo_redo_arrow(ui.painter(), ur, true, can_u);
-                if uresp.clicked() && can_u { self.undo(); }
-
-                let can_r = !self.redo_stack.is_empty();
-                let (rr, rresp) = ui.allocate_exact_size(egui::vec2(26.0, 22.0), egui::Sense::click());
-                draw_undo_redo_arrow(ui.painter(), rr, false, can_r);
-                if rresp.clicked() && can_r { self.redo(); }
-
-                ui.separator();
-                if ui.button(tr(lang, "? Shortcuts (F1)", "؟ الاختصارات (F1)")).clicked() {
-                    self.show_shortcuts_dialog = true;
-                }
-                ui.separator();
-                if ui.button(tr(lang, "+ Image", "+ صورة")).clicked() { self.import_image_dialog(); }
-                if ui.button("+ SVG").clicked() { self.import_svg_dialog(); }
-                if self.workspace_mode == WorkspaceMode::AnimationStudio {
-                    if ui.button(tr(lang, "+ Video", "+ فيديو")).clicked() { self.import_video_dialog(); }
-                    if ui.button(tr(lang, "+ Audio", "+ صوت")).clicked() { self.import_audio_dialog(); }
-                }
-                if ui.button(egui::RichText::new(tr(lang, "Export Studio", "استوديو التصدير")).color(egui::Color32::from_rgb(56, 189, 248))).clicked() {
-                    self.show_export_studio = true;
-                }
-                if ui.button(tr(lang, "Check for Updates", "تحديث البرنامج")).clicked() { self.check_for_updates(ctx.clone()); }
-                if ui.link(egui::RichText::new(
-                    tr(lang, "Feedback", "ابلغ عن مشكلة"))
-                    .color(egui::Color32::from_rgb(80, 190, 255))).clicked() {
-                    self.show_feedback_dialog = true;
-                }
-
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    let (gr, gresp) = ui.allocate_exact_size(egui::vec2(34.0, 27.0), egui::Sense::click());
-                    draw_gear_icon(ui.painter(), gr, 1.18);
-                    let gresp = gresp.on_hover_text(tr(lang, "Settings • Google sign-in, appearance and shortcuts",
-                        "الإعدادات • تسجيل جوجل والمظهر والاختصارات"));
-                    if gresp.clicked() { self.show_settings_dialog = true; }
-                    if ui.small_button("F10 Fullscreen").clicked() {
-                        self.is_fullscreen = !self.is_fullscreen;
-                        ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(self.is_fullscreen));
+            if apply {
+                let result = self.online_session.as_ref()
+                    .ok_or_else(|| "Room is no longer active".to_string())
+                    .and_then(|session| session.change_member_name(member_id, draft.clone()));
+                match result {
+                    Ok(()) => {
+                        self.online_message = tr(lang, "Nickname updated.", "تم تغيير الاسم المستعار.");
+                        self.pending_online_rename = None;
                     }
-                    if ui.small_button("+15%").clicked() { self.zoom_level = (self.zoom_level * 1.15).clamp(0.1, 6.0); }
-                    ui.label(format!("{:.0}%", self.zoom_level * 100.0));
-                    if ui.small_button("-15%").clicked() { self.zoom_level = (self.zoom_level / 1.15).clamp(0.1, 6.0); }
-                    if ui.small_button("Center (R)").clicked() { self.zoom_level = 0.75; self.pan_offset = egui::Vec2::ZERO; }
+                    Err(err) => {
+                        self.online_message = err;
+                        self.pending_online_rename = Some((member_id, draft));
+                    }
+                }
+            } else if cancel || !open {
+                self.pending_online_rename = None;
+            } else {
+                self.pending_online_rename = Some((member_id, draft));
+            }
+        }
+
+        // Compact command bar: navigation stays visible while secondary
+        // commands live in one hamburger instead of consuming canvas width.
+        if self.config.show_top_bar {
+            egui::TopBottomPanel::top("top_bar").show(ctx, |ui| {
+                egui::menu::bar(ui, |ui| {
+                    let (home_rect, home_resp) = ui.allocate_exact_size(
+                        egui::vec2(28.0,24.0),egui::Sense::click());
+                    draw_home_icon(ui.painter(),home_rect,home_resp.hovered());
+                    if home_resp.on_hover_text(tr(lang,"Home","القائمة الرئيسية")).clicked() {
+                        if self.online_session.is_some() {
+                            self.leave_online_session();
+                            self.online_participants.clear();
+                            self.online_enabled=false;
+                            self.online_discovery=None;
+                            self.online_remote_info=None;
+                            self.online_rooms.clear();
+                        }
+                        self.workspace_mode=WorkspaceMode::Launcher;
+                    }
+
+                    let can_u=!self.undo_stack.is_empty();
+                    let (ur,uresp)=ui.allocate_exact_size(egui::vec2(28.0,24.0),egui::Sense::click());
+                    draw_undo_redo_arrow(ui.painter(),ur,true,can_u);
+                    if uresp.on_hover_text(tr(lang,"Undo","تراجع")).clicked() && can_u {self.undo();}
+
+                    let can_r=!self.redo_stack.is_empty();
+                    let (rr,rresp)=ui.allocate_exact_size(egui::vec2(28.0,24.0),egui::Sense::click());
+                    draw_undo_redo_arrow(ui.painter(),rr,false,can_r);
+                    if rresp.on_hover_text(tr(lang,"Redo","إعادة")).clicked() && can_r {self.redo();}
+
+                    ui.menu_button(egui::RichText::new("☰").size(19.0),|ui|{
+                        ui.set_min_width(285.0);
+                        ui.strong(tr(lang,"Stick commands","أوامر Stick"));
+                        ui.separator();
+
+                        let switch_label=if self.workspace_mode==WorkspaceMode::DrawingOnly {
+                            tr(lang,"Switch to Animation","التبديل للأنيميشن")
+                        } else {tr(lang,"Switch to Drawing","التبديل للرسم")};
+                        if ui.add_enabled(self.online_session.is_none(),
+                            egui::Button::new(switch_label)).clicked(){
+                            self.workspace_mode=if self.workspace_mode==WorkspaceMode::DrawingOnly {
+                                WorkspaceMode::AnimationStudio
+                            } else {WorkspaceMode::DrawingOnly};
+                            ui.close_menu();
+                        }
+
+                        ui.menu_button(tr(lang,"Project","المشروع"),|ui|{
+                            if ui.button(tr(lang,"Save (Ctrl+S)","حفظ (Ctrl+S)")).clicked(){self.trigger_save();ui.close_menu();}
+                            if ui.button(tr(lang,"Save As...","حفظ باسم...")).clicked(){self.trigger_save_as();ui.close_menu();}
+                            if ui.button(tr(lang,"Open project...","فتح مشروع...")).clicked(){self.trigger_open_project();ui.close_menu();}
+                            if ui.button(tr(lang,"Recover project...","استعادة نسخة احتياطية...")).clicked(){self.show_recovery_dialog=true;ui.close_menu();}
+                            if ui.button(tr(lang,"Project details","تفاصيل المشروع")).clicked(){self.show_project_details=true;ui.close_menu();}
+                        });
+                        ui.menu_button(tr(lang,"Import","استيراد"),|ui|{
+                            if ui.button(tr(lang,"Image...","صورة...")).clicked(){self.import_image_dialog();ui.close_menu();}
+                            if ui.button("SVG...").clicked(){self.import_svg_dialog();ui.close_menu();}
+                            if ui.button(tr(lang,"Adobe Animate...","Animate...")).clicked(){self.import_animate_dialog();ui.close_menu();}
+                            if self.workspace_mode==WorkspaceMode::AnimationStudio {
+                                if ui.button(tr(lang,"Video...","فيديو...")).clicked(){self.import_video_dialog();ui.close_menu();}
+                                if ui.button(tr(lang,"Audio...","صوت...")).clicked(){self.import_audio_dialog();ui.close_menu();}
+                            }
+                        });
+                        if ui.button(tr(lang,"Export Studio","استوديو التصدير")).clicked(){self.show_export_studio=true;ui.close_menu();}
+                        ui.separator();
+                        if ui.button(tr(lang,"Keyboard shortcuts (F1)","الاختصارات (F1)")).clicked(){self.show_shortcuts_dialog=true;ui.close_menu();}
+                        if ui.button(tr(lang,"Settings","الإعدادات")).clicked(){self.show_settings_dialog=true;ui.close_menu();}
+                        if ui.button(tr(lang,"Check for updates","تحديث البرنامج")).clicked(){self.check_for_updates(ctx.clone());ui.close_menu();}
+                        if ui.button(tr(lang,"Feedback / report a problem","إبلاغ عن مشكلة")).clicked(){self.show_feedback_dialog=true;ui.close_menu();}
+                        ui.separator();
+                        ui.menu_button(tr(lang,"View","العرض"),|ui|{
+                            if ui.button(tr(lang,"Zoom in +15%","تكبير +15%")).clicked(){self.zoom_level=(self.zoom_level*1.15).clamp(0.1,6.0);}
+                            if ui.button(tr(lang,"Zoom out -15%","تصغير -15%")).clicked(){self.zoom_level=(self.zoom_level/1.15).clamp(0.1,6.0);}
+                            if ui.button(tr(lang,"Center canvas (R)","توسيط الكانفا (R)")).clicked(){self.zoom_level=0.75;self.pan_offset=egui::Vec2::ZERO;}
+                            if ui.button(tr(lang,"Fullscreen (F10)","ملء الشاشة (F10)")).clicked(){
+                                self.is_fullscreen=!self.is_fullscreen;
+                                ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(self.is_fullscreen));
+                            }
+                        });
+                        if ui.button(tr(lang,"Credits","عن البرنامج")).clicked(){self.show_credits_dialog=true;ui.close_menu();}
+                    });
+
+                    let (heart_rect,heart_resp)=ui.allocate_exact_size(
+                        egui::vec2(30.0,24.0),egui::Sense::click());
+                    draw_support_heart_icon(ui.painter(),heart_rect,heart_resp.hovered());
+                    if heart_resp.on_hover_text(tr(lang,
+                        "Support Stick (optional)","دعم البرنامج (اختياري)")).clicked(){
+                        self.show_support_dialog=true;
+                    }
+
+                    ui.separator();
+                    ui.label(egui::RichText::new(format!("{:.0}%",self.zoom_level*100.0))
+                        .small().color(egui::Color32::from_gray(165)));
                 });
             });
-        });
-
         }
         if !self.config.show_top_bar {
             egui::Area::new(egui::Id::new("restore_workspace_settings"))
@@ -5203,8 +5496,8 @@ impl eframe::App for StickApp {
                             self.render_tool_properties_ui(ui, lang);
             ui.add_space(10.0);
             ui.separator();
-            egui::CollapsingHeader::new(tr(lang, "Canvas Size Mode / Presets", "مقاسات مود • الكانفا"))
-                .default_open(false).show(ui, |ui| {
+            egui::CollapsingHeader::new(tr(lang, "Canvas Size & Presets", "مقاس الكانفا والاختصارات"))
+                .default_open(true).show(ui, |ui| {
                 ui.label(egui::RichText::new(format!("{} × {} px", self.project.width, self.project.height))
                     .strong().color(egui::Color32::from_rgb(130,209,250)));
                 ui.small(tr(lang,
@@ -5298,9 +5591,24 @@ impl eframe::App for StickApp {
             egui::CollapsingHeader::new(tr(lang, "Symmetry Mirroring", "الرسم المتماثل"))
                 .default_open(true).show(ui, |ui| {
             ui.horizontal(|ui| {
-                ui.selectable_value(&mut self.symmetry_mode, SymmetryMode::Off, "Off");
-                ui.selectable_value(&mut self.symmetry_mode, SymmetryMode::Horizontal, "H");
-                ui.selectable_value(&mut self.symmetry_mode, SymmetryMode::Vertical, "V");
+                for (mode, en, ar) in [
+                    (SymmetryMode::Off, "Symmetry off", "إيقاف التماثل"),
+                    (SymmetryMode::Horizontal, "Mirror left / right", "تماثل يمين / شمال"),
+                    (SymmetryMode::Vertical, "Mirror top / bottom", "تماثل فوق / تحت"),
+                ] {
+                    let active = self.symmetry_mode == mode;
+                    let (rect, response) = ui.allocate_exact_size(
+                        egui::vec2(38.0, 32.0), egui::Sense::click());
+                    ui.painter().rect_filled(rect, 5.0, if active {
+                        egui::Color32::from_rgb(29, 105, 151)
+                    } else if response.hovered() {
+                        egui::Color32::from_rgb(59, 62, 70)
+                    } else { egui::Color32::from_rgb(43, 45, 52) });
+                    draw_symmetry_icon(ui.painter(), rect.shrink(4.0), mode, active);
+                    if response.on_hover_text(tr(lang,en,ar)).clicked() {
+                        self.symmetry_mode = mode;
+                    }
+                }
             });
             });
             ui.add_space(6.0);
@@ -6399,18 +6707,23 @@ impl eframe::App for StickApp {
                         }
                     }
                     2 => {
-                        for n in 1..=((stage_h / step).ceil() as usize).min(500) {
-                            let y = n as f32 * step;
-                            if y < stage_h {
-                                painter.line_segment([to_screen(egui::pos2(0.0, y)),
-                                    to_screen(egui::pos2(stage_w, y))], paint);
-                            }
+                        let angle = self.config.perspective_parallel_angle_deg
+                            .clamp(-85.0, 85.0).to_radians();
+                        let slope = angle.tan();
+                        let extra = stage_w * slope.abs();
+                        let count = (((stage_h + extra) / step).ceil() as usize).min(500);
+                        for n in 0..=count {
+                            let y = n as f32 * step - extra * 0.5;
+                            painter.line_segment([
+                                to_screen(egui::pos2(0.0, y - slope * stage_w * 0.5)),
+                                to_screen(egui::pos2(stage_w, y + slope * stage_w * 0.5))
+                            ], paint);
                         }
                     }
                     3 => {
                         let vp = egui::pos2(stage_w * self.config.vanishing_x.clamp(0.05,0.95),
                             stage_h * self.config.vanishing_y.clamp(0.05,0.85));
-                        let rays = ((stage_w / step).ceil() as usize).clamp(4, 48);
+                        let rays = self.config.perspective_ray_count.clamp(4, 64) as usize;
                         for n in 0..=rays {
                             let x = stage_w * n as f32 / rays as f32;
                             painter.line_segment([to_screen(vp), to_screen(egui::pos2(x, stage_h))], paint);
@@ -6425,6 +6738,12 @@ impl eframe::App for StickApp {
                             painter.line_segment([to_screen(egui::pos2(left, y)),
                                 to_screen(egui::pos2(right, y))], paint);
                         }
+                        if self.config.perspective_show_horizon {
+                            painter.line_segment([
+                                to_screen(egui::pos2(0.0, vp.y)),
+                                to_screen(egui::pos2(stage_w, vp.y))
+                            ], paint);
+                        }
                         painter.circle_stroke(to_screen(vp), 4.0, paint);
                     }
                     4 => {
@@ -6435,7 +6754,7 @@ impl eframe::App for StickApp {
                         let horizon = stage_h * self.config.vanishing_2point_y.clamp(0.07, 0.93);
                         let left = egui::pos2(stage_w * self.config.vanishing_left_x.clamp(0.02,0.47), horizon);
                         let right = egui::pos2(stage_w * self.config.vanishing_right_x.clamp(0.53,0.98), horizon);
-                        let rays = ((stage_w / step).ceil() as usize).clamp(6,48);
+                        let rays = self.config.perspective_ray_count.clamp(6,64) as usize;
                         for n in 0..=rays {
                             let x = stage_w * (n as f32) / (rays as f32);
                             for vp in [left, right] {
@@ -6448,8 +6767,10 @@ impl eframe::App for StickApp {
                                 }
                             }
                         }
-                        painter.line_segment([to_screen(egui::pos2(0.0,horizon)),
-                            to_screen(egui::pos2(stage_w,horizon))], paint);
+                        if self.config.perspective_show_horizon {
+                            painter.line_segment([to_screen(egui::pos2(0.0,horizon)),
+                                to_screen(egui::pos2(stage_w,horizon))], paint);
+                        }
                         for vp in [left,right] {
                             painter.circle_filled(to_screen(vp), 4.0, paint.color);
                             painter.circle_stroke(to_screen(vp), 8.0, paint);
@@ -7307,7 +7628,7 @@ impl eframe::App for StickApp {
         self.render_guides(ctx,lang);
         // Positioned relative to the full window, not just remaining menu
         // space: the optional-support heart stays in the TOP CENTER.
-        if !self.show_support_dialog && !self.show_settings_dialog {
+        if !self.config.show_top_bar && !self.show_support_dialog && !self.show_settings_dialog {
             egui::Area::new(egui::Id::new("center_gold_support_heart"))
                 .anchor(egui::Align2::CENTER_TOP, egui::vec2(0.0, 5.0))
                 .order(egui::Order::Foreground)
@@ -7326,6 +7647,12 @@ impl eframe::App for StickApp {
 }
 
 fn main() -> eframe::Result<()> {
+    // Stick already renders egui through WGPU. Prefer the high-performance
+    // adapter (normally the discrete GPU) unless the user explicitly set a
+    // WGPU_POWER_PREF override before launching.
+    if std::env::var_os("WGPU_POWER_PREF").is_none() {
+        std::env::set_var("WGPU_POWER_PREF", "high");
+    }
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default().with_title("Stick").with_inner_size([1366.0, 768.0]).with_icon(generate_stick_window_icon()),
         renderer: eframe::Renderer::Wgpu,
@@ -7386,6 +7713,25 @@ mod tool_discovery_tests {
     }
 
     #[test]
+    fn portable_settings_exclude_local_identity_and_preserve_it_on_import() {
+        let mut local = AppConfig::default();
+        local.cloud_email = "local@example.invalid".into();
+        local.cloud_auto_backup = true;
+        local.recent_projects = vec!["C:\\private\\project.stick".into()];
+        local.perspective_mode = 4;
+        local.perspective_ray_count = 31;
+        let json = local.portable_json().unwrap();
+        assert!(!json.contains("local@example.invalid"));
+        assert!(!json.contains("private"));
+        let mut other = AppConfig::default();
+        other.cloud_email = "keep@example.invalid".into();
+        let imported = AppConfig::import_portable_json(&json, &other).unwrap();
+        assert_eq!(imported.cloud_email, "keep@example.invalid");
+        assert_eq!(imported.perspective_mode, 4);
+        assert_eq!(imported.perspective_ray_count, 31);
+    }
+
+    #[test]
     fn official_google_desktop_oauth_client_is_configured() {
         let client = default_google_client_id();
         assert!(cloud_sync::oauth_client_is_configured(&client));
@@ -7393,6 +7739,13 @@ mod tool_discovery_tests {
         assert_eq!(resolve_saved_google_client_id("not-a-client"), client);
         let custom = "1234-abc.apps.googleusercontent.com";
         assert_eq!(resolve_saved_google_client_id(custom), custom);
+    }
+
+    #[test]
+    fn rtl_punctuation_mirroring_covers_common_brackets() {
+        assert_eq!(mirror_rtl_punctuation("()[]{}<>«»"), ")(][}{><»«");
+        let rendered = fix_ar("اختبار (نص)");
+        assert!(rendered.contains('(') && rendered.contains(')'));
     }
 
     #[test]

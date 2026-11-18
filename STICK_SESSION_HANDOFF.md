@@ -220,3 +220,13 @@
 - `.github/workflows/build.yml`: public `STICK_GOOGLE_CLIENT_ID` variable available to Rust compile. Set this variable after provisioning Google Cloud Desktop OAuth and Drive API/consent screen (see `GOOGLE_DRIVE_SETUP.md`).
 - Note: appDataFolder backup is invisible in standard My Drive. External media assets referenced by project file paths are not included; disclose limitation.
 - Need Windows CI and manual Google OAuth / cross-ISP connectivity test before claiming production integration fully works. Publish user-approved updates by default, preserve old releases; user specifically permits merge before green action, but flag untested paths truthfully.
+
+## 18 November 2026 — Round 2 video QA branch
+- Branch: `fix/round2-brush-fill-ui-performance-20261118` from main release v4.1.0.233.
+- New user video duration verified as 386.0167s, 1920×1080, 60fps.
+- Root cause found for tight-turn G-Pen black filling/lag: constant-pressure G-Pen was forcing a filled pressure-outline polygon and retriangulating it during live drawing. Common mouse strokes now use the native round-joined line path; real pressure variation keeps the outline path.
+- Bucket cross-layer issue: `bucket_reference_all_layers` existed but defaulted false. It now defaults true and still writes fills only to the active layer.
+- Preferences: movable window, perspective persistence + density/horizon/parallel angle, portable import/export profile and defaults reset.
+- UI: compact Home/Undo/Redo/hamburger/support bar, custom symmetry icons, open Canvas Size & Presets section, Arabic bracket mirroring and Windows emoji/symbol fallback fonts.
+- Online local moderation: host right-click actions for guest rename, color and kick. Cross-network relay remains isolated in draft PR #47 and is not claimed ready until deployed/tested on two networks.
+- Performance reference: AniCraft was reviewed for architectural ideas (tiled/background stage and zoom-aware fill boundaries); no source code was copied.

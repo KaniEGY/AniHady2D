@@ -689,6 +689,28 @@ impl OnlineSession {
         Ok(())
     }
 
+    pub fn change_member_name(&self, id: u64, name: String) -> Result<(), String> {
+        if id == 0 {
+            return Err("Change the host nickname from the local artist profile".into());
+        }
+        let name = name.trim().to_owned();
+        if name.is_empty() || name.chars().count() > 40 {
+            return Err("Nickname must contain 1–40 characters".into());
+        }
+        let host = self.host.as_ref().ok_or("Only the host can rename members")?;
+        {
+            let mut peers = host.peers.lock().map_err(|_| "Room participant lock failed")?;
+            if peers.values().any(|(_, member, _)| member.id != id
+                && member.name.eq_ignore_ascii_case(&name)) {
+                return Err("Another participant already uses this nickname".into());
+            }
+            let (_, member, _) = peers.get_mut(&id).ok_or("Member already disconnected")?;
+            member.name = name;
+        }
+        host.announce_members();
+        Ok(())
+    }
+
     pub fn change_member_color(&self, id: u64, color: [u8; 3]) -> Result<(), String> {
         let host = self.host.as_ref().ok_or("Only the host can change member colors")?;
         if id == 0 {
@@ -959,6 +981,22 @@ mod tests {
             thread::sleep(Duration::from_millis(25));
         }
         assert!(color_received, "host color edits must reach the guest");
+
+        host.change_member_name(1, "Renamed Guest".into()).expect("host renames first guest");
+        let deadline = std::time::Instant::now() + Duration::from_secs(4);
+        let mut name_received = false;
+        while std::time::Instant::now() < deadline {
+            for event in guest_two.events() {
+                if let OnlineEvent::Roster(members) = event {
+                    if members.iter().any(|p| p.id == 1 && p.name == "Renamed Guest") {
+                        name_received = true;
+                    }
+                }
+            }
+            if name_received { break; }
+            thread::sleep(Duration::from_millis(25));
+        }
+        assert!(name_received, "host nickname edits must reach other guests");
 
         // The earliest guest is elected. Real takeover/binding requires
         // separate Windows PCs because both instances here use TCP 47554.
