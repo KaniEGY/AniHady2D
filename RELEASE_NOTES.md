@@ -4,6 +4,11 @@
 
 ## English (US)
 
+### Pressure stroke quality (under review; not yet released)
+- Shared G-Pen outline now de-jitters small accidental movements on straight-ish strokes, resamples long movements by distance and limits hard-corner joins while keeping pressure variation.
+- Renderer geometry is bounded, with no alteration of saved raw project stroke data and no change to the .stick schema.
+- **Validation status:** unit regressions added; Windows CI and physical tablet/preview/export QA still required.
+
 ### UI, canvas & brush update (experimental)
 - **Timeline layers:** replaced ambiguous glyph boxes with drawn visibility-eye and open/closed lock icons. Right-click a layer title in either timeline layout to Rename, Duplicate, or Delete (with the existing confirmation and Undo).
 - **Vector ink pen:** non-destructive smoothed rendering keeps editable control points. Choose round or square end caps, opacity, and stabilizer in tool properties; preview and PNG/video raster export use the same smoothed curve.
