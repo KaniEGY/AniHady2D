@@ -4,6 +4,17 @@
 
 ## English (US)
 
+### What's new
+- Timeline action markers are consistent in OLD, NEW and New mine: a newly inserted empty cel is a green circle, a copied/current-pose keyframe is a red circle, and an explicit blank keyframe is a white circle with a black border. The marker type is saved with the project and old files default safely to legacy visuals.
+- Artist System has a new cyan/gold cyber-HUD identity. Creating a new project shows the artist level, rank and XP progress for 8 seconds with animated electric border effects and a synthesized lightning sound.
+- General Settings can disable the new-project Artist System intro; the global sound-effects switch still controls its sound.
+- Free Transform uses a smaller, distinct transform-gizmo icon.
+
+### Bugs fixed
+- Smooth Ink now keeps a stable smoothed centerline for constant-pressure drawing and falls back safely on risky hairpin geometry instead of producing self-intersecting filled blobs.
+- Tapered Pen keeps tapered ends but uses a safe pressure-dab fallback on sharp reversals that could fold the pressure outline over itself.
+- Selection and Lasso no longer expose or activate Free Transform X/Y axis handles; rotate/resize/axis gizmos belong only to Free Transform.
+
 ### Canvas-edge fill, independent tools, tablet and timeline fixes
 - Paint Bucket now treats the physical canvas border as a valid fill boundary, so an otherwise-open contour can close against the edge of the paper without leaking.
 - Drawing strokes and Onion Skin previews remain visible in the workspace outside the paper bounds; export bounds are unchanged.
@@ -231,6 +242,17 @@
 - Added an unsaved-work guard to avoid restarting with an unfinished project.
 
 ## العربية (المصري)
+
+### إيه الجديد؟
+- علامات إنشاء الفريم بقت موحّدة في OLD وNEW وNew mine: الفريم الفاضي الجديد دائرة خضرا، والكي فريم اللي بينسخ الوضع الحالي دائرة حمرا، والكي فريم الفاضي دائرة بيضا بحد أسود. النوع بيتحفظ جوه المشروع، والمشاريع القديمة بتفضل متوافقة.
+- نظام الفنان أخد شكل HUD جديد سماوي/ذهبي. مع كل مشروع جديد بتظهر نافذة المستوى والرتبة وتقدم XP لمدة 8 ثواني مع برق متحرك وصوت برق متولد جوه البرنامج.
+- في الإعدادات العامة تقدر تقفل نافذة نظام الفنان الخاصة بالمشروع الجديد، وزر الأصوات العام بيتحكم في صوتها.
+- أيقونة أداة التحويل بقت أصغر ومختلفة وواضحة عن أداة التحديد.
+
+### المشاكل اللي اتصلحت
+- الحبر الناعم بقى يرسم بخط مركزي ناعم وثابت مع الضغط الثابت، وبيستخدم مسار آمن لو الحركة فيها رجوع حاد بدل ما ينتج شكل أسود متداخل.
+- القلم المدبب حافظ على بداية ونهاية مدببة، ومع الانعطافات الخطرة بيستخدم رسم ضغط آمن بدل Polygon ممكن يلف على نفسه.
+- أداة التحديد والتحديد الحر مبقوش يعرضوا أو يشغلوا مقابض محور X/Y الخاصة بالتحويل؛ التدوير والتكبير والمحاور بقوا لأداة التحويل بس.
 
 ### إصلاح حدود الدلو وفصل الأدوات وقلم التابلت والتايم لاين
 - الدلو بقى يعتبر حدود الكانفا نفسها حاجز للتعبئة، فلو الرسمة مفتوحة من ناحية طرف الورقة والطرف هو اللي بيقفلها، اللون يفضل جوه المنطقة.

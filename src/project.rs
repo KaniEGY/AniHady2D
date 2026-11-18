@@ -400,8 +400,24 @@ pub struct SymbolInstance {
     pub anchor_offset_y: f32,
 }
 
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum FrameMarkerKind {
+    /// Existing projects and ordinary authored keyframes keep the legacy marker.
+    #[default]
+    Legacy,
+    /// A newly inserted empty cel/frame.
+    InsertedEmpty,
+    /// A keyframe/duplicate created from the currently visible previous pose.
+    CopiedPose,
+    /// An explicitly blank keyframe that stops the preceding exposure.
+    Blank,
+}
+
 #[derive(Serialize, Deserialize, Clone, Default, Debug, PartialEq)]
 pub struct FrameData {
+    /// UI-only provenance for timeline markers. Old .stick files deserialize as Legacy.
+    #[serde(default)]
+    pub timeline_marker: FrameMarkerKind,
     #[serde(default)]
     pub strokes: Vec<Stroke>,
     #[serde(default)]
@@ -962,6 +978,22 @@ mod brush_tip_compat_tests {
         assert_eq!(restored.color, [12, 34, 56, 255]);
     }
 
+    #[test]
+    fn old_frame_data_loads_with_legacy_timeline_marker() {
+        let frame: FrameData = serde_json::from_str(
+            r#"{"strokes":[],"media_items":[],"symbol_instances":[],"text_items":[]}"#
+        ).expect("old frame data");
+        assert_eq!(frame.timeline_marker, FrameMarkerKind::Legacy);
+    }
+
+    #[test]
+    fn timeline_marker_round_trips_without_changing_project_schema() {
+        let mut frame = FrameData::default();
+        frame.timeline_marker = FrameMarkerKind::CopiedPose;
+        let json = serde_json::to_string(&frame).unwrap();
+        let restored: FrameData = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored.timeline_marker, FrameMarkerKind::CopiedPose);
+    }
     #[test]
     fn old_media_and_audio_load_without_new_transform_fields() {
         let old_media: MediaItem = serde_json::from_str(
