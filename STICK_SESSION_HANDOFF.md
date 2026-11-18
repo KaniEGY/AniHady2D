@@ -1,5 +1,13 @@
 # Stick Studio — Session Handoff / سجل استكمال المشروع
 
+## 18 November 2026 — Advanced Timeline core (PR pending)
+
+- Feature branch `feature/advanced-timeline-keyframe-edit-20261118`, based on main build 213.
+- `src/advanced_timeline.rs`: atomic group move/copy of authored keyframes with layer/frame bounds, locked-layer and collision validation. The operation does not modify audio and the editor wraps successful mutations in existing Undo snapshots.
+- Timeline Settings now exposes an **Advanced Timeline — التايم لاين المتقدم** selection alongside OLD and NEW. It renders a distinct timecode ruler/exposure tracks, Ctrl/Shift-click multi-keyframe selection, drag move, Alt-drag duplicate, and +1 frame batch buttons.
+- Existing video/image layer cels and sampled waveform audio remain on the same shared timeline, and all three modes read/write the existing project schema. New editor selection state is transient.
+- **Limits:** this first core slice does not yet implement non-destructive audio trim, video thumbnails, multi-cell clipboard paste, exposure edge stretching, advanced snap magnets or panel panning. Manual GUI drag acceptance and Windows CI remain outstanding; do not describe it as feature-complete.
+
 ## 18 November 2026 — imported media, audio timeline and bounded fill controls
 
 - Branch: `feature/media-audio-fill-studio-20261118`. This entry records work in progress until the Windows CI run passes and a merge/release is confirmed.
