@@ -129,3 +129,24 @@ CI can prove that the bridge builds and unit tests pass. CI cannot prove two rea
 - do not auto-install it for all users;
 - keep it optional;
 - keep all legacy online methods visible.
+
+
+## Alternative fallback: Radmin VPN Assistant
+
+A second optional helper is now built on this branch:
+
+`StickRadminAssistant.exe`
+
+This path is intentionally independent from the Iroh bridge. It is for users whose NAT/provider setup still prevents the experimental direct/relay bridge from working reliably.
+
+Radmin VPN is third-party software and is **not bundled** with Stick. Its official site currently describes Radmin VPN as completely free and provides the workflow Create network -> Network name/password -> Join network. The helper only:
+
+- detects the Radmin virtual adapter and its 26.x IPv4 address;
+- shows the exact `<Radmin-IP>:47554` address for Stick Direct Join;
+- checks the host with a single ping when requested;
+- copies the Stick Direct Join address to the Windows clipboard;
+- opens the official Radmin download page when the adapter is absent.
+
+The assistant never disables Windows Firewall, never stores the Radmin network password, and never downloads/redistributes Radmin binaries.
+
+Real acceptance test remains mandatory: two Windows PCs on different Internet connections must join the same Radmin network and then connect in Stick using Direct Join.
