@@ -2297,8 +2297,8 @@ impl StickApp {
                         ui.add_space(18.0);
                         let create=online_action_card(
                             ui,"＋",
-                            tr(lang,"Create Room","إنشاء غرفة"),
-                            tr(lang,"Your PC becomes the host and shares the current project.",
+                            &tr(lang,"Create Room","إنشاء غرفة"),
+                            &tr(lang,"Your PC becomes the host and shares the current project.",
                                 "جهازك يبقى الهوست ويشارك المشروع الحالي."),
                             egui::Color32::from_rgb(43,200,146));
                         if create.clicked() {
@@ -2308,8 +2308,8 @@ impl StickApp {
                         ui.add_space(10.0);
                         let join=online_action_card(
                             ui,"⇲",
-                            tr(lang,"Join Room","انضمام لغرفة"),
-                            tr(lang,"Discover LAN/Tailscale rooms or paste an invitation/address.",
+                            &tr(lang,"Join Room","انضمام لغرفة"),
+                            &tr(lang,"Discover LAN/Tailscale rooms or paste an invitation/address.",
                                 "اكتشف غرف LAN/Tailscale أو الصق دعوة أو عنوان."),
                             egui::Color32::from_rgb(76,180,245));
                         if join.clicked() {
@@ -2339,18 +2339,18 @@ impl StickApp {
                         ui.heading(tr(lang, "Host a room", "إنشاء غرفة جديدة"));
                         ui.add_space(8.0);
                         ui.horizontal_wrapped(|ui|{
-                            online_info_chip(ui,"⌂",tr(lang,"LAN","الشبكة المحلية"),
-                                tr(lang,"Automatic discovery for devices on the same router/network.",
+                            online_info_chip(ui,"⌂",&tr(lang,"LAN","الشبكة المحلية"),
+                                &tr(lang,"Automatic discovery for devices on the same router/network.",
                                     "اكتشاف تلقائي للأجهزة على نفس الراوتر أو الشبكة."),
                                 egui::Color32::from_rgb(72,201,137));
                             let ts_ok=self.online_remote_info.as_ref().is_some_and(|x|x.connected);
                             online_info_chip(ui,"⚡","Tailscale",
-                                tr(lang,"Recommended for friends on different Internet connections; no router port-forwarding.",
+                                &tr(lang,"Recommended for friends on different Internet connections; no router port-forwarding.",
                                     "موصى به للأصحاب على نت مختلف، من غير فتح بورت في الراوتر."),
                                 if ts_ok {egui::Color32::from_rgb(77,215,140)}
                                 else {egui::Color32::from_rgb(120,130,145)});
-                            online_info_chip(ui,"↗",tr(lang,"Direct / Tunnel","مباشر / نفق"),
-                                tr(lang,"Advanced: expose TCP 47554 with a reachable public endpoint, then share host:port.",
+                            online_info_chip(ui,"↗",&tr(lang,"Direct / Tunnel","مباشر / نفق"),
+                                &tr(lang,"Advanced: expose TCP 47554 with a reachable public endpoint, then share host:port.",
                                     "متقدم: وفّر عنوان عام يوصل لـTCP 47554 وشارك host:port."),
                                 egui::Color32::from_rgb(242,182,68));
                         });
@@ -2417,18 +2417,18 @@ impl StickApp {
                     OnlinePage::JoinRoom => {
                         ui.heading(tr(lang,"Join a room","الانضمام لغرفة"));
                         ui.horizontal_wrapped(|ui|{
-                            online_info_chip(ui,"⌂",tr(lang,"LAN Rooms","غرف LAN"),
-                                tr(lang,"Rooms discovered automatically on your local network.",
+                            online_info_chip(ui,"⌂",&tr(lang,"LAN Rooms","غرف LAN"),
+                                &tr(lang,"Rooms discovered automatically on your local network.",
                                     "غرف بتظهر تلقائي على نفس الشبكة المحلية."),
                                 egui::Color32::from_rgb(72,201,137));
                             let ts_ok=self.online_remote_info.as_ref().is_some_and(|x|x.connected);
                             online_info_chip(ui,"⚡","Tailscale",
-                                tr(lang,"Remote private-network rooms discovered from authorized peers.",
+                                &tr(lang,"Remote private-network rooms discovered from authorized peers.",
                                     "غرف بعيدة على شبكة خاصة من الأجهزة المسموح لها."),
                                 if ts_ok {egui::Color32::from_rgb(77,215,140)}
                                 else {egui::Color32::from_rgb(120,130,145)});
-                            online_info_chip(ui,"⇲",tr(lang,"Invite / Direct","دعوة / مباشر"),
-                                tr(lang,"Paste a Stick invitation or reachable host:port.",
+                            online_info_chip(ui,"⇲",&tr(lang,"Invite / Direct","دعوة / مباشر"),
+                                &tr(lang,"Paste a Stick invitation or reachable host:port.",
                                     "الصق رابط دعوة Stick أو عنوان host:port قابل للوصول."),
                                 egui::Color32::from_rgb(76,180,245));
                         });
@@ -7949,7 +7949,7 @@ impl eframe::App for StickApp {
                 };
                 if let Some(action)=canvas_quick_menu::show(
                     ctx,menu,&["／","○","□","▭","△","⬠"],&colors,
-                    selected_shape,self.brush_color,tr(lang,"CUSTOM","مخصص")
+                    selected_shape,self.brush_color,&tr(lang,"CUSTOM","مخصص")
                 ) {
                     match action {
                         canvas_quick_menu::QuickMenuAction::Shape(index)=>{
@@ -8003,7 +8003,7 @@ impl eframe::App for StickApp {
                             &painter,pos,radius,
                             egui::Color32::from_rgb(
                                 self.brush_color[0],self.brush_color[1],self.brush_color[2]),
-                            value,percent,label
+                            value,percent,&label
                         );
                     }
                 }
