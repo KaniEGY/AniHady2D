@@ -17,6 +17,11 @@ pub fn draw_brush_preset_icon(painter: &egui::Painter, rect: egui::Rect, preset:
             KritaBrushPreset::Chalk => egui::Color32::from_rgb(196, 222, 226),
             KritaBrushPreset::Charcoal => egui::Color32::from_rgb(149, 165, 178),
             KritaBrushPreset::SoftPastel => egui::Color32::from_rgb(255, 171, 208),
+            KritaBrushPreset::Fineliner => egui::Color32::from_rgb(131, 230, 250),
+            KritaBrushPreset::SmoothInk => egui::Color32::from_rgb(79, 197, 241),
+            KritaBrushPreset::TaperedPen => egui::Color32::from_rgb(240, 186, 101),
+            KritaBrushPreset::Calligraphy => egui::Color32::from_rgb(232, 144, 226),
+            KritaBrushPreset::SoftSketchPencil => egui::Color32::from_rgb(187, 200, 211),
         }
     };
 
@@ -101,6 +106,39 @@ pub fn draw_brush_preset_icon(painter: &egui::Painter, rect: egui::Rect, preset:
             for i in 0..5 {
                 let x = i as f32 * 3.0 - 6.0;
                 painter.circle_filled(c+egui::vec2(x,5.0-(i%2) as f32*3.0),1.5,col);
+            }
+        }
+        KritaBrushPreset::Fineliner => {
+            painter.line_segment([c+egui::vec2(-7.,7.),c+egui::vec2(7.,-7.)],
+                egui::Stroke::new(1.7,col));
+            painter.circle_filled(c+egui::vec2(7.,-7.),1.8,col);
+        }
+        KritaBrushPreset::SmoothInk => {
+            let pts=(0..20).map(|i| {
+                let t=i as f32/19.;
+                c+egui::vec2(-8.+t*16.,(t*std::f32::consts::TAU).sin()*4.)
+            }).collect();
+            painter.add(egui::Shape::line(pts,egui::Stroke::new(2.6,col)));
+        }
+        KritaBrushPreset::TaperedPen => {
+            painter.add(egui::Shape::convex_polygon(vec![
+                c+egui::vec2(-8.,8.),c+egui::vec2(-3.,-2.),
+                c+egui::vec2(0.,-7.),c+egui::vec2(2.,-2.),
+                c+egui::vec2(8.,-8.),c+egui::vec2(4.,4.)
+            ],col,egui::Stroke::NONE));
+        }
+        KritaBrushPreset::Calligraphy => {
+            painter.add(egui::Shape::convex_polygon(vec![
+                c+egui::vec2(-8.,4.),c+egui::vec2(3.,-8.),
+                c+egui::vec2(7.,-4.),c+egui::vec2(-4.,8.)
+            ],col,egui::Stroke::NONE));
+        }
+        KritaBrushPreset::SoftSketchPencil => {
+            for k in 0..3 {
+                painter.line_segment([
+                    c+egui::vec2(-8.+k as f32,7.),
+                    c+egui::vec2(7.,-8.+k as f32)
+                ],egui::Stroke::new(1.0,col));
             }
         }
     }
@@ -234,7 +272,7 @@ pub fn draw_stroke_pro<F: Fn(egui::Pos2) -> egui::Pos2>(
             RoundMark::Line { width } => width,
         };
         let project_points = || {
-            if stroke.is_vector {
+            if stroke.is_vector || stroke.brush_preset == KritaBrushPreset::Fineliner {
                 let mut path = crate::vector_path::smoothed_path(&stroke.points);
                 if stroke.tip_shape == BrushTipShape::Square {
                     crate::vector_path::extend_square_caps(&mut path, width);
@@ -250,7 +288,8 @@ pub fn draw_stroke_pro<F: Fn(egui::Pos2) -> egui::Pos2>(
             screen_pts.get_or_insert_with(project_points).clone()
         };
         painter.add(egui::Shape::line(points, egui::Stroke::new(width * scale, ink)));
-        if stroke.is_vector && stroke.tip_shape == BrushTipShape::Round {
+        if (stroke.is_vector || stroke.brush_preset == KritaBrushPreset::Fineliner)
+            && stroke.tip_shape == BrushTipShape::Round {
             if let (Some(first), Some(last)) = (stroke.points.first(), stroke.points.last()) {
                 let radius = (width * scale * 0.5).max(0.25);
                 painter.circle_filled(screen(first.x,first.y),radius,ink);

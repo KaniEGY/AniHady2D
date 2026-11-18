@@ -4,6 +4,11 @@
 
 ## English (US)
 
+### Five real brush presets (under review; not yet released)
+- Added functional Fineliner, Smooth Ink, Tapered Pen, Calligraphy and Soft Sketch Pencil presets with distinct pressure/width, stabilization or procedural nib behavior rather than placeholder names.
+- All original presets remain available and existing project format and brush variant ordering are unchanged.
+- **Pending:** Windows CI and hardware/visual QA. Arbitrary per-brush Hardness, Spacing and Pressure Curve controls are not yet shipped.
+
 ### Advanced Timeline keyframe editing foundation (under review; not yet released)
 - An optional third timeline mode keeps the existing OLD/NEW views and audio lanes, with a distinct ruler and exposure visualization.
 - Ctrl/Shift-click selects multiple authored keyframes. Drag moves them within/across unlocked tracks; Alt+drag duplicates them. Editing rejects collisions and out-of-bounds targets atomically, and successful operations use Undo.

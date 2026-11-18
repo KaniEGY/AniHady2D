@@ -17,6 +17,11 @@ pub enum KritaBrushPreset {
     Chalk,
     Charcoal,
     SoftPastel,
+    Fineliner,
+    SmoothInk,
+    TaperedPen,
+    Calligraphy,
+    SoftSketchPencil,
 }
 
 impl Default for KritaBrushPreset {
@@ -26,7 +31,7 @@ impl Default for KritaBrushPreset {
 }
 
 impl KritaBrushPreset {
-    pub const MENU: [(Self, &'static str, &'static str); 9] = [
+    pub const MENU: [(Self, &'static str, &'static str); 14] = [
         (Self::GPenInk, "G-Pen", "حبر"),
         (Self::Watercolor, "Watercolor", "مائية"),
         (Self::ChiselMarker, "Marker", "ماركر"),
@@ -36,6 +41,11 @@ impl KritaBrushPreset {
         (Self::Chalk, "Chalk", "طباشير"),
         (Self::Charcoal, "Charcoal", "فحم"),
         (Self::SoftPastel, "Soft Pastel", "باستيل"),
+        (Self::Fineliner, "Fineliner", "قلم تحديد"),
+        (Self::SmoothInk, "Smooth Ink", "حبر ناعم"),
+        (Self::TaperedPen, "Tapered Pen", "قلم مدبب"),
+        (Self::Calligraphy, "Calligraphy", "خطاط"),
+        (Self::SoftSketchPencil, "Soft Sketch", "سكتش ناعم"),
     ];
 
     pub fn label(&self) -> &'static str {
@@ -49,6 +59,11 @@ impl KritaBrushPreset {
             Self::Chalk => "Chalk (طباشير)",
             Self::Charcoal => "Charcoal (قلم فحم خشن)",
             Self::SoftPastel => "Soft Pastel (باستيل ناعم)",
+            Self::Fineliner => "Fineliner (خط دقيق ثابت السُمك)",
+            Self::SmoothInk => "Smooth Ink (حبر متصل بنهايات مستديرة)",
+            Self::TaperedPen => "Tapered Pen (ضغط يتدرج عند بداية ونهاية الخط)",
+            Self::Calligraphy => "Calligraphy (سن مائل بعرض واتجاه ثابتين)",
+            Self::SoftSketchPencil => "Soft Sketch Pencil (رصاص محبّب وناعم)",
         }
     }
 
@@ -63,6 +78,11 @@ impl KritaBrushPreset {
             Self::Chalk => 0.64,
             Self::Charcoal => 0.82,
             Self::SoftPastel => 0.68,
+            Self::Fineliner => 1.0,
+            Self::SmoothInk => 1.0,
+            Self::TaperedPen => 1.0,
+            Self::Calligraphy => 0.90,
+            Self::SoftSketchPencil => 0.55,
         }
     }
 }
