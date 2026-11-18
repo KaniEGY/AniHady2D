@@ -4,6 +4,11 @@
 
 ## English (US)
 
+### Five real brush presets (under review; not yet released)
+- Added functional Fineliner, Smooth Ink, Tapered Pen, Calligraphy and Soft Sketch Pencil presets with distinct pressure/width, stabilization or procedural nib behavior rather than placeholder names.
+- All original presets remain available and existing project format and brush variant ordering are unchanged.
+- **Pending:** Windows CI and hardware/visual QA. Arbitrary per-brush Hardness, Spacing and Pressure Curve controls are not yet shipped.
+
 ### UI, canvas & brush update (experimental)
 - **Timeline layers:** replaced ambiguous glyph boxes with drawn visibility-eye and open/closed lock icons. Right-click a layer title in either timeline layout to Rename, Duplicate, or Delete (with the existing confirmation and Undo).
 - **Vector ink pen:** non-destructive smoothed rendering keeps editable control points. Choose round or square end caps, opacity, and stabilizer in tool properties; preview and PNG/video raster export use the same smoothed curve.
