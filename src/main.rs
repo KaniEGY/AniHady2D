@@ -864,6 +864,82 @@ fn draw_undo_redo_arrow(painter: &egui::Painter, rect: egui::Rect, is_undo: bool
     }
 }
 
+fn draw_home_icon(painter: &egui::Painter, rect: egui::Rect, hovered: bool) {
+    let c = rect.center();
+    let col = if hovered { egui::Color32::WHITE } else { egui::Color32::from_gray(225) };
+    let stroke = egui::Stroke::new(2.0, col);
+    painter.add(egui::Shape::line(vec![
+        c + egui::vec2(-8.0, -1.0), c + egui::vec2(0.0, -8.0),
+        c + egui::vec2(8.0, -1.0)
+    ], stroke));
+    painter.rect_stroke(
+        egui::Rect::from_min_max(c + egui::vec2(-6.0,-1.0), c + egui::vec2(6.0,8.0)),
+        1.0, stroke);
+    painter.rect_filled(
+        egui::Rect::from_min_max(c + egui::vec2(-1.7,3.0), c + egui::vec2(1.7,8.0)),
+        0.5, col);
+}
+
+fn draw_hamburger_icon(painter: &egui::Painter, rect: egui::Rect, hovered: bool) {
+    let c = rect.center();
+    let col = if hovered { egui::Color32::WHITE } else { egui::Color32::from_gray(210) };
+    let stroke = egui::Stroke::new(2.2, col);
+    for y in [-6.0, 0.0, 6.0] {
+        painter.line_segment([c + egui::vec2(-8.0,y), c + egui::vec2(8.0,y)], stroke);
+    }
+}
+
+fn draw_support_heart_icon(painter: &egui::Painter, rect: egui::Rect, hovered: bool) {
+    let c = rect.center();
+    let gold = if hovered { egui::Color32::from_rgb(255, 226, 88) }
+        else { egui::Color32::from_rgb(255, 206, 53) };
+    let mut pts = Vec::with_capacity(40);
+    for i in 0..40 {
+        let t = (i as f32 / 40.0) * std::f32::consts::TAU;
+        let x = 16.0 * t.sin().powi(3);
+        let y = -(13.0 * t.cos() - 5.0 * (2.0 * t).cos()
+            - 2.0 * (3.0 * t).cos() - (4.0 * t).cos());
+        pts.push(c + egui::vec2(x * 0.43, y * 0.43));
+    }
+    painter.add(egui::Shape::convex_polygon(pts, gold, egui::Stroke::NONE));
+}
+
+fn draw_symmetry_icon(
+    painter: &egui::Painter, rect: egui::Rect, mode: SymmetryMode, active: bool,
+) {
+    let c = rect.center();
+    let accent = if active { egui::Color32::from_rgb(92, 200, 247) }
+        else { egui::Color32::from_gray(185) };
+    let axis = egui::Stroke::new(1.3, egui::Color32::from_gray(120));
+    let shape = egui::Stroke::new(2.0, accent);
+    match mode {
+        SymmetryMode::Off => {
+            painter.line_segment([c+egui::vec2(-7.0,-7.0),c+egui::vec2(7.0,7.0)],
+                egui::Stroke::new(2.1, accent));
+            painter.line_segment([c+egui::vec2(-7.0,7.0),c+egui::vec2(7.0,-7.0)],
+                egui::Stroke::new(2.1, accent));
+        }
+        SymmetryMode::Horizontal => {
+            painter.line_segment([c+egui::vec2(0.0,-10.0),c+egui::vec2(0.0,10.0)],axis);
+            painter.add(egui::Shape::line(vec![
+                c+egui::vec2(-3.0,-7.0),c+egui::vec2(-8.0,-3.0),c+egui::vec2(-5.0,5.0)
+            ],shape));
+            painter.add(egui::Shape::line(vec![
+                c+egui::vec2(3.0,-7.0),c+egui::vec2(8.0,-3.0),c+egui::vec2(5.0,5.0)
+            ],shape));
+        }
+        SymmetryMode::Vertical => {
+            painter.line_segment([c+egui::vec2(-10.0,0.0),c+egui::vec2(10.0,0.0)],axis);
+            painter.add(egui::Shape::line(vec![
+                c+egui::vec2(-7.0,-3.0),c+egui::vec2(-3.0,-8.0),c+egui::vec2(5.0,-5.0)
+            ],shape));
+            painter.add(egui::Shape::line(vec![
+                c+egui::vec2(-7.0,3.0),c+egui::vec2(-3.0,8.0),c+egui::vec2(5.0,5.0)
+            ],shape));
+        }
+    }
+}
+
 fn get_tool_ui_color(tool: ActiveToolUI) -> egui::Color32 {
     match tool {
         ActiveToolUI::SelectNormal | ActiveToolUI::SelectLasso => egui::Color32::from_rgb(56, 189, 248),
@@ -5047,82 +5123,100 @@ impl eframe::App for StickApp {
                 self.workspace_mode = WorkspaceMode::Launcher;
             }
         }
-        // الشريط العلوي
+        // Compact command bar: navigation stays visible while secondary
+        // commands live in one hamburger instead of consuming canvas width.
         if self.config.show_top_bar {
-        egui::TopBottomPanel::top("top_bar").show(ctx, |ui| {
-            egui::menu::bar(ui, |ui| {
-                let (h_rect, h_resp) = ui.allocate_exact_size(egui::vec2(22.0, 20.0), egui::Sense::click());
-                draw_red_heart_icon(ui.painter(), h_rect, h_resp.hovered());
-                if h_resp.clicked() { self.show_credits_dialog = true; }
-                ui.colored_label(egui::Color32::from_rgb(255, 215, 25), "Stick");
-                ui.separator();
-
-                let m_lbl = if self.workspace_mode == WorkspaceMode::DrawingOnly { tr(lang, "Switch to Animation", "التبديل للأنيميشن") } else { tr(lang, "Switch to Drawing", "التبديل للرسم") };
-                if ui.add_enabled(self.online_session.is_none(), egui::Button::new(m_lbl)).clicked() {
-                    self.workspace_mode = if self.workspace_mode == WorkspaceMode::DrawingOnly { WorkspaceMode::AnimationStudio } else { WorkspaceMode::DrawingOnly };
-                }
-                ui.separator();
-                ui.menu_button(tr(lang, "File", "ملف"), |ui| {
-                    if ui.button(tr(lang, "Save (Ctrl+S)", "حفظ (Ctrl+S)")).clicked() { self.trigger_save(); ui.close_menu(); }
-                    if ui.button(tr(lang, "Save As... (Ctrl+Shift+S)", "حفظ باسم...")).clicked() { self.trigger_save_as(); ui.close_menu(); }
-                    if ui.button(tr(lang, "Open (.stick / .ah2d)", "فتح مشروع")).clicked() { self.trigger_open_project(); ui.close_menu(); }
-                    if ui.button(tr(lang, "Recover Project...", "استعادة نسخة احتياطية...")).clicked() { self.show_recovery_dialog = true; ui.close_menu(); }
-                    if ui.button(tr(lang, "Project Details", "تفاصيل إصدار المشروع")).clicked() { self.show_project_details = true; ui.close_menu(); }
-                    ui.separator();
-                    if ui.button(tr(lang, "Import Image...", "استيراد صورة")).clicked() { self.import_image_dialog(); ui.close_menu(); }
-                    if ui.button(tr(lang, "Import SVG...", "استيراد SVG")).clicked() { self.import_svg_dialog(); ui.close_menu(); }
-                    if ui.button(tr(lang, "Import Adobe Animate...", "استيراد Animate")).clicked() { self.import_animate_dialog(); ui.close_menu(); }
-                    if ui.button(tr(lang, "🚀 Export Studio...", "🚀 استوديو التصدير")).clicked() { self.show_export_studio = true; ui.close_menu(); }
-                });
-                let can_u = !self.undo_stack.is_empty();
-                let (ur, uresp) = ui.allocate_exact_size(egui::vec2(26.0, 22.0), egui::Sense::click());
-                draw_undo_redo_arrow(ui.painter(), ur, true, can_u);
-                if uresp.clicked() && can_u { self.undo(); }
-
-                let can_r = !self.redo_stack.is_empty();
-                let (rr, rresp) = ui.allocate_exact_size(egui::vec2(26.0, 22.0), egui::Sense::click());
-                draw_undo_redo_arrow(ui.painter(), rr, false, can_r);
-                if rresp.clicked() && can_r { self.redo(); }
-
-                ui.separator();
-                if ui.button(tr(lang, "? Shortcuts (F1)", "؟ الاختصارات (F1)")).clicked() {
-                    self.show_shortcuts_dialog = true;
-                }
-                ui.separator();
-                if ui.button(tr(lang, "+ Image", "+ صورة")).clicked() { self.import_image_dialog(); }
-                if ui.button("+ SVG").clicked() { self.import_svg_dialog(); }
-                if self.workspace_mode == WorkspaceMode::AnimationStudio {
-                    if ui.button(tr(lang, "+ Video", "+ فيديو")).clicked() { self.import_video_dialog(); }
-                    if ui.button(tr(lang, "+ Audio", "+ صوت")).clicked() { self.import_audio_dialog(); }
-                }
-                if ui.button(egui::RichText::new(tr(lang, "Export Studio", "استوديو التصدير")).color(egui::Color32::from_rgb(56, 189, 248))).clicked() {
-                    self.show_export_studio = true;
-                }
-                if ui.button(tr(lang, "Check for Updates", "تحديث البرنامج")).clicked() { self.check_for_updates(ctx.clone()); }
-                if ui.link(egui::RichText::new(
-                    tr(lang, "Feedback", "ابلغ عن مشكلة"))
-                    .color(egui::Color32::from_rgb(80, 190, 255))).clicked() {
-                    self.show_feedback_dialog = true;
-                }
-
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    let (gr, gresp) = ui.allocate_exact_size(egui::vec2(34.0, 27.0), egui::Sense::click());
-                    draw_gear_icon(ui.painter(), gr, 1.18);
-                    let gresp = gresp.on_hover_text(tr(lang, "Settings • Google sign-in, appearance and shortcuts",
-                        "الإعدادات • تسجيل جوجل والمظهر والاختصارات"));
-                    if gresp.clicked() { self.show_settings_dialog = true; }
-                    if ui.small_button("F10 Fullscreen").clicked() {
-                        self.is_fullscreen = !self.is_fullscreen;
-                        ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(self.is_fullscreen));
+            egui::TopBottomPanel::top("top_bar").show(ctx, |ui| {
+                egui::menu::bar(ui, |ui| {
+                    let (home_rect, home_resp) = ui.allocate_exact_size(
+                        egui::vec2(28.0,24.0),egui::Sense::click());
+                    draw_home_icon(ui.painter(),home_rect,home_resp.hovered());
+                    if home_resp.on_hover_text(tr(lang,"Home","القائمة الرئيسية")).clicked() {
+                        if self.online_session.is_some() {
+                            self.leave_online_session();
+                            self.online_participants.clear();
+                            self.online_enabled=false;
+                            self.online_discovery=None;
+                            self.online_remote_info=None;
+                            self.online_rooms.clear();
+                        }
+                        self.workspace_mode=WorkspaceMode::Launcher;
                     }
-                    if ui.small_button("+15%").clicked() { self.zoom_level = (self.zoom_level * 1.15).clamp(0.1, 6.0); }
-                    ui.label(format!("{:.0}%", self.zoom_level * 100.0));
-                    if ui.small_button("-15%").clicked() { self.zoom_level = (self.zoom_level / 1.15).clamp(0.1, 6.0); }
-                    if ui.small_button("Center (R)").clicked() { self.zoom_level = 0.75; self.pan_offset = egui::Vec2::ZERO; }
+
+                    let can_u=!self.undo_stack.is_empty();
+                    let (ur,uresp)=ui.allocate_exact_size(egui::vec2(28.0,24.0),egui::Sense::click());
+                    draw_undo_redo_arrow(ui.painter(),ur,true,can_u);
+                    if uresp.on_hover_text(tr(lang,"Undo","تراجع")).clicked() && can_u {self.undo();}
+
+                    let can_r=!self.redo_stack.is_empty();
+                    let (rr,rresp)=ui.allocate_exact_size(egui::vec2(28.0,24.0),egui::Sense::click());
+                    draw_undo_redo_arrow(ui.painter(),rr,false,can_r);
+                    if rresp.on_hover_text(tr(lang,"Redo","إعادة")).clicked() && can_r {self.redo();}
+
+                    ui.menu_button(egui::RichText::new("☰").size(19.0),|ui|{
+                        ui.set_min_width(285.0);
+                        ui.strong(tr(lang,"Stick commands","أوامر Stick"));
+                        ui.separator();
+
+                        let switch_label=if self.workspace_mode==WorkspaceMode::DrawingOnly {
+                            tr(lang,"Switch to Animation","التبديل للأنيميشن")
+                        } else {tr(lang,"Switch to Drawing","التبديل للرسم")};
+                        if ui.add_enabled(self.online_session.is_none(),
+                            egui::Button::new(switch_label)).clicked(){
+                            self.workspace_mode=if self.workspace_mode==WorkspaceMode::DrawingOnly {
+                                WorkspaceMode::AnimationStudio
+                            } else {WorkspaceMode::DrawingOnly};
+                            ui.close_menu();
+                        }
+
+                        ui.menu_button(tr(lang,"Project","المشروع"),|ui|{
+                            if ui.button(tr(lang,"Save (Ctrl+S)","حفظ (Ctrl+S)")).clicked(){self.trigger_save();ui.close_menu();}
+                            if ui.button(tr(lang,"Save As...","حفظ باسم...")).clicked(){self.trigger_save_as();ui.close_menu();}
+                            if ui.button(tr(lang,"Open project...","فتح مشروع...")).clicked(){self.trigger_open_project();ui.close_menu();}
+                            if ui.button(tr(lang,"Recover project...","استعادة نسخة احتياطية...")).clicked(){self.show_recovery_dialog=true;ui.close_menu();}
+                            if ui.button(tr(lang,"Project details","تفاصيل المشروع")).clicked(){self.show_project_details=true;ui.close_menu();}
+                        });
+                        ui.menu_button(tr(lang,"Import","استيراد"),|ui|{
+                            if ui.button(tr(lang,"Image...","صورة...")).clicked(){self.import_image_dialog();ui.close_menu();}
+                            if ui.button("SVG...").clicked(){self.import_svg_dialog();ui.close_menu();}
+                            if ui.button(tr(lang,"Adobe Animate...","Animate...")).clicked(){self.import_animate_dialog();ui.close_menu();}
+                            if self.workspace_mode==WorkspaceMode::AnimationStudio {
+                                if ui.button(tr(lang,"Video...","فيديو...")).clicked(){self.import_video_dialog();ui.close_menu();}
+                                if ui.button(tr(lang,"Audio...","صوت...")).clicked(){self.import_audio_dialog();ui.close_menu();}
+                            }
+                        });
+                        if ui.button(tr(lang,"Export Studio","استوديو التصدير")).clicked(){self.show_export_studio=true;ui.close_menu();}
+                        ui.separator();
+                        if ui.button(tr(lang,"Keyboard shortcuts (F1)","الاختصارات (F1)")).clicked(){self.show_shortcuts_dialog=true;ui.close_menu();}
+                        if ui.button(tr(lang,"Settings","الإعدادات")).clicked(){self.show_settings_dialog=true;ui.close_menu();}
+                        if ui.button(tr(lang,"Check for updates","تحديث البرنامج")).clicked(){self.check_for_updates(ctx.clone());ui.close_menu();}
+                        if ui.button(tr(lang,"Feedback / report a problem","إبلاغ عن مشكلة")).clicked(){self.show_feedback_dialog=true;ui.close_menu();}
+                        ui.separator();
+                        ui.menu_button(tr(lang,"View","العرض"),|ui|{
+                            if ui.button(tr(lang,"Zoom in +15%","تكبير +15%")).clicked(){self.zoom_level=(self.zoom_level*1.15).clamp(0.1,6.0);}
+                            if ui.button(tr(lang,"Zoom out -15%","تصغير -15%")).clicked(){self.zoom_level=(self.zoom_level/1.15).clamp(0.1,6.0);}
+                            if ui.button(tr(lang,"Center canvas (R)","توسيط الكانفا (R)")).clicked(){self.zoom_level=0.75;self.pan_offset=egui::Vec2::ZERO;}
+                            if ui.button(tr(lang,"Fullscreen (F10)","ملء الشاشة (F10)")).clicked(){
+                                self.is_fullscreen=!self.is_fullscreen;
+                                ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(self.is_fullscreen));
+                            }
+                        });
+                        if ui.button(tr(lang,"Credits","عن البرنامج")).clicked(){self.show_credits_dialog=true;ui.close_menu();}
+                    });
+
+                    let (heart_rect,heart_resp)=ui.allocate_exact_size(
+                        egui::vec2(30.0,24.0),egui::Sense::click());
+                    draw_support_heart_icon(ui.painter(),heart_rect,heart_resp.hovered());
+                    if heart_resp.on_hover_text(tr(lang,
+                        "Support Stick (optional)","دعم البرنامج (اختياري)")).clicked(){
+                        self.show_support_dialog=true;
+                    }
+
+                    ui.separator();
+                    ui.label(egui::RichText::new(format!("{:.0}%",self.zoom_level*100.0))
+                        .small().color(egui::Color32::from_gray(165)));
                 });
             });
-        });
-
         }
         if !self.config.show_top_bar {
             egui::Area::new(egui::Id::new("restore_workspace_settings"))
@@ -5320,8 +5414,8 @@ impl eframe::App for StickApp {
                             self.render_tool_properties_ui(ui, lang);
             ui.add_space(10.0);
             ui.separator();
-            egui::CollapsingHeader::new(tr(lang, "Canvas Size Mode / Presets", "مقاسات مود • الكانفا"))
-                .default_open(false).show(ui, |ui| {
+            egui::CollapsingHeader::new(tr(lang, "Canvas Size & Presets", "مقاس الكانفا والاختصارات"))
+                .default_open(true).show(ui, |ui| {
                 ui.label(egui::RichText::new(format!("{} × {} px", self.project.width, self.project.height))
                     .strong().color(egui::Color32::from_rgb(130,209,250)));
                 ui.small(tr(lang,
@@ -5415,9 +5509,24 @@ impl eframe::App for StickApp {
             egui::CollapsingHeader::new(tr(lang, "Symmetry Mirroring", "الرسم المتماثل"))
                 .default_open(true).show(ui, |ui| {
             ui.horizontal(|ui| {
-                ui.selectable_value(&mut self.symmetry_mode, SymmetryMode::Off, "Off");
-                ui.selectable_value(&mut self.symmetry_mode, SymmetryMode::Horizontal, "H");
-                ui.selectable_value(&mut self.symmetry_mode, SymmetryMode::Vertical, "V");
+                for (mode, en, ar) in [
+                    (SymmetryMode::Off, "Symmetry off", "إيقاف التماثل"),
+                    (SymmetryMode::Horizontal, "Mirror left / right", "تماثل يمين / شمال"),
+                    (SymmetryMode::Vertical, "Mirror top / bottom", "تماثل فوق / تحت"),
+                ] {
+                    let active = self.symmetry_mode == mode;
+                    let (rect, response) = ui.allocate_exact_size(
+                        egui::vec2(38.0, 32.0), egui::Sense::click());
+                    ui.painter().rect_filled(rect, 5.0, if active {
+                        egui::Color32::from_rgb(29, 105, 151)
+                    } else if response.hovered() {
+                        egui::Color32::from_rgb(59, 62, 70)
+                    } else { egui::Color32::from_rgb(43, 45, 52) });
+                    draw_symmetry_icon(ui.painter(), rect.shrink(4.0), mode, active);
+                    if response.on_hover_text(tr(lang,en,ar)).clicked() {
+                        self.symmetry_mode = mode;
+                    }
+                }
             });
             });
             ui.add_space(6.0);
@@ -7437,7 +7546,7 @@ impl eframe::App for StickApp {
         self.render_guides(ctx,lang);
         // Positioned relative to the full window, not just remaining menu
         // space: the optional-support heart stays in the TOP CENTER.
-        if !self.show_support_dialog && !self.show_settings_dialog {
+        if !self.config.show_top_bar && !self.show_support_dialog && !self.show_settings_dialog {
             egui::Area::new(egui::Id::new("center_gold_support_heart"))
                 .anchor(egui::Align2::CENTER_TOP, egui::vec2(0.0, 5.0))
                 .order(egui::Order::Foreground)
