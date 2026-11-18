@@ -4,6 +4,11 @@
 
 ## English (US)
 
+### Vector geometry refinement (under review; not yet released)
+- Adaptive vector interpolation samples long curved spans more densely while preserving intentional sharp corners, closed-loop seams and the exact editable control nodes.
+- Square-cap extension is safer around duplicate nodes and disabled on closed vector contours. Added deterministic geometry regression tests.
+- **Validation status:** awaiting GitHub Windows CI and hands-on preview/export comparison; not a shipped feature until merged and released.
+
 ### UI, canvas & brush update (experimental)
 - **Timeline layers:** replaced ambiguous glyph boxes with drawn visibility-eye and open/closed lock icons. Right-click a layer title in either timeline layout to Rename, Duplicate, or Delete (with the existing confirmation and Undo).
 - **Vector ink pen:** non-destructive smoothed rendering keeps editable control points. Choose round or square end caps, opacity, and stabilizer in tool properties; preview and PNG/video raster export use the same smoothed curve.
