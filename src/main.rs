@@ -2978,21 +2978,26 @@ impl StickApp {
     }
 
     fn preload_frame_textures(&mut self, ctx: &egui::Context) {
-        let mut paths = Vec::new();
+        // Only retain textures needed on the *current* frame. Decoded video
+        // frames otherwise accumulate unbounded GPU memory while playing.
+        let mut wanted = std::collections::HashSet::new();
         for layer in &self.project.layers {
-            if layer.visible {
-                // Tweens interpolate strokes and symbols. Media paths belong to the held key.
-                let Some(fd) = Self::get_effective_frame_data(layer, self.current_frame) else { continue };
-                for m in &fd.media_items {
-                    if !self.texture_cache.contains_key(&m.path) { paths.push(m.path.clone()); }
-                }
-            }
+            if !layer.visible { continue; }
+            let Some(fd) = Self::get_effective_frame_data(layer,self.current_frame) else { continue };
+            for media in &fd.media_items { wanted.insert(media.path.clone()); }
         }
-        for path in paths {
+        self.texture_cache.retain(|path,_| wanted.contains(path));
+        for path in wanted {
+            if self.texture_cache.contains_key(&path) { continue; }
             if let Ok(img) = image::open(&path) {
-                let rgba = img.to_rgba8();
-                let ci = egui::ColorImage::from_rgba_unmultiplied([rgba.width() as usize, rgba.height() as usize], rgba.as_raw());
-                self.texture_cache.insert(path.clone(), ctx.load_texture(&path, ci, egui::TextureOptions::LINEAR));
+                let reduced = if img.width() > 2048 || img.height() > 2048 {
+                    img.thumbnail(2048,2048)
+                } else { img };
+                let rgba = reduced.to_rgba8();
+                let ci = egui::ColorImage::from_rgba_unmultiplied(
+                    [rgba.width() as usize,rgba.height() as usize],rgba.as_raw());
+                self.texture_cache.insert(path.clone(),
+                    ctx.load_texture(&path,ci,egui::TextureOptions::LINEAR));
             }
         }
     }
