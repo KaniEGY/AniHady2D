@@ -5,6 +5,7 @@
 ## English (US)
 
 ### Bugs fixed
+- **Google sign-in configuration:** official Windows builds now contain Stick Studio's public Google Desktop OAuth Client ID. Legacy empty/invalid saved IDs recover automatically, while valid developer overrides stay intact. Google audience is still in Testing; live browser sign-in and Drive restore require authorized testers and manual validation before broad rollout.
 - **Support popup:** bounded window size and scrollable body, with accessible Close/X and Esc; prevents giant fullscreen-height popup caused by unconstrained RTL layout.
 - **Google OAuth:** older settings with an empty client ID now pick up a public Desktop OAuth ID embedded in newer builds; Sign in is disabled with setup guidance until a valid client ID is present. Real Google sign-in still requires app-owner Google Cloud configuration and testing.
 - **Online:** stroke packets now share the host edit-order gate with structural changes; local TCP integration test checks that bad room passwords are rejected. Internet access still requires LAN reachability or Tailscale, and real two-PC QA is outstanding.
@@ -106,6 +107,7 @@
 - Added an unsaved-work guard to avoid restarting with an unfinished project.
 
 ## العربية (المصري)
+- **تجهيز تسجيل Google:** أضفنا معرّف OAuth العام الخاص بـStick Studio في إصدارات ويندوز، مع إصلاح الإعدادات القديمة الفارغة أو غير الصحيحة. ما زال Google في وضع Testing، ولا نعتبر تسجيل الدخول والنسخ السحابي مختبرين عمليًا قبل تجارب أجهزة ويندوز.
 
 ### المشاكل اللي اتصلحت
 - **نافذة الدعم:** حجم ثابت ونص قابل للتمرير وزر إغلاق ظاهر واختصار Esc، لحل مشكلة النافذة الممتدة خارج الشاشة.
