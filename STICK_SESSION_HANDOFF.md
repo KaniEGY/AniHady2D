@@ -238,3 +238,14 @@
 - New-project action writes a recovery snapshot first when the active project has unsaved changes, then creates a clean one-frame default document without changing Drawing vs Animation workspace.
 - Removed the `Credits / عن البرنامج` menu item.
 - Added a red links/credits heart beside the existing yellow Support heart; red opens the existing YouTube/Instagram credits window, yellow remains support-only.
+
+
+## 18 November 2026 — media/audio/timeline interaction branch
+- Branch: `fix/media-audio-timeline-roundcaps-20261118` from stable main v4.1.0.243.
+- Round-tip G-Pen now receives explicit circular caps.
+- Audio: Delete key + right-click Delete/Duplicate, synchronized multi-track start, scrub all active stream tracks.
+- Media: right-dock tabs Properties / Sizes / Media; image exposure end control; video clip lane draggable on shared timeline; canvas right-click Duplicate/Delete.
+- Timeline: F4 delete-time button/shortcut and keyframe drag in OLD/NEW as well as Advanced.
+- Tools: Bucket symmetry now mirrors fill seeds; optional Vector Direct Select right-click insert/remove nodes.
+- Input isolation: canvas pan now requires pointer over the central canvas.
+- Existing image/video import already created separate layers, so that behavior was retained rather than duplicated.

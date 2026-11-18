@@ -1,6 +1,6 @@
 //! Non-destructive vector interpolation shared by live canvas and raster/video export.
 //! Control points in the project are never changed by render-time smoothing.
-use crate::project::StrokePoint;
+use crate::project::{Stroke, StrokePoint};
 
 const MAX_CONTROL_POINTS: usize = 5_000;
 const MAX_SUBDIVISIONS: usize = 24;
@@ -123,6 +123,84 @@ pub fn smoothed_path(points: &[StrokePoint]) -> Vec<Point> {
     out
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum QuickNodeEdit {
+    Inserted { stroke: usize, point: usize },
+    Removed { stroke: usize, point: usize },
+}
+
+fn segment_projection(a: &StrokePoint, b: &StrokePoint, x: f32, y: f32)
+    -> Option<(f32, f32, f32, f32)>
+{
+    let dx=b.x-a.x;
+    let dy=b.y-a.y;
+    let len2=dx*dx+dy*dy;
+    if !len2.is_finite() || len2<=0.000001 { return None; }
+    let t=(((x-a.x)*dx+(y-a.y)*dy)/len2).clamp(0.0,1.0);
+    let px=a.x+dx*t;
+    let py=a.y+dy*t;
+    Some((px,py,t,(px-x).hypot(py-y)))
+}
+
+/// Right-click vector node helper. Existing nodes win over segment insertion.
+/// Closed contours keep their duplicated closing endpoint intact.
+pub fn quick_edit_node(
+    strokes: &mut [Stroke], x: f32, y: f32, tolerance: f32,
+) -> Option<QuickNodeEdit> {
+    if !x.is_finite() || !y.is_finite() || !tolerance.is_finite() || tolerance<=0.0 {
+        return None;
+    }
+    let mut nearest_node: Option<(usize,usize,f32)> = None;
+    for (si,stroke) in strokes.iter().enumerate().filter(|(_,s)|s.is_vector) {
+        for (pi,p) in stroke.points.iter().enumerate() {
+            let d=(p.x-x).hypot(p.y-y);
+            if d<=tolerance && nearest_node.is_none_or(|(_,_,best)|d<best) {
+                nearest_node=Some((si,pi,d));
+            }
+        }
+    }
+    if let Some((si,pi,_))=nearest_node {
+        let stroke=&mut strokes[si];
+        let closed=stroke.points.len()>3 && stroke.points.first().zip(stroke.points.last())
+            .is_some_and(|(a,b)|(a.x-b.x).hypot(a.y-b.y)<=0.001);
+        if closed {
+            let unique=stroke.points.len().saturating_sub(1);
+            if unique<=3 { return None; }
+            if pi==0 || pi==stroke.points.len()-1 {
+                stroke.points.pop();
+                stroke.points.remove(0);
+            } else {
+                stroke.points.remove(pi);
+                stroke.points.pop();
+            }
+            if let Some(first)=stroke.points.first().cloned() {stroke.points.push(first);}
+        } else {
+            if stroke.points.len()<=2 { return None; }
+            stroke.points.remove(pi);
+        }
+        return Some(QuickNodeEdit::Removed{stroke:si,point:pi});
+    }
+
+    let mut nearest_segment: Option<(usize,usize,f32,f32,f32,f32)> = None;
+    for (si,stroke) in strokes.iter().enumerate().filter(|(_,s)|s.is_vector) {
+        for (segment,pair) in stroke.points.windows(2).enumerate() {
+            let Some((px,py,t,d))=segment_projection(&pair[0],&pair[1],x,y) else {continue};
+            if d<=tolerance && nearest_segment.is_none_or(|(_,_,_,_,_,best)|d<best) {
+                nearest_segment=Some((si,segment,px,py,t,d));
+            }
+        }
+    }
+    let (si,segment,px,py,t,_)=nearest_segment?;
+    let pressure={
+        let a=&strokes[si].points[segment];
+        let b=&strokes[si].points[segment+1];
+        a.pressure+(b.pressure-a.pressure)*t
+    };
+    let point=segment+1;
+    strokes[si].points.insert(point,StrokePoint{x:px,y:py,pressure});
+    Some(QuickNodeEdit::Inserted{stroke:si,point})
+}
+
 /// Extend an open polyline by half its stroke width for square line caps.
 /// Closed paths have no endpoints and must never gain artificial extensions.
 pub fn extend_square_caps(path: &mut [Point], width: f32) {
@@ -155,6 +233,38 @@ pub fn extend_square_caps(path: &mut [Point], width: f32) {
 mod tests {
     use super::*;
     fn p(x: f32, y: f32) -> StrokePoint { StrokePoint { x, y, pressure: 1.0 } }
+
+    fn vector(points:&[(f32,f32)]) -> Stroke {
+        Stroke {
+            points:points.iter().map(|&(x,y)|p(x,y)).collect(),
+            color:[0,0,0,255],fill_color:None,base_width:4.0,is_vector:true,
+            brush_preset:crate::project::KritaBrushPreset::GPenInk,opacity:1.0,
+            brush_texture_id:None,tip_shape:crate::project::BrushTipShape::Round,
+        }
+    }
+
+    #[test]
+    fn quick_node_edit_inserts_on_segment_and_removes_existing_node() {
+        let mut strokes=vec![vector(&[(0.,0.),(100.,0.),(100.,100.)])];
+        let edit=quick_edit_node(&mut strokes,50.,4.,10.).unwrap();
+        assert!(matches!(edit,QuickNodeEdit::Inserted{stroke:0,point:1}));
+        assert!((strokes[0].points[1].x-50.).abs()<0.01);
+        assert!((strokes[0].points[1].y).abs()<0.01);
+        let edit=quick_edit_node(&mut strokes,50.,0.,5.).unwrap();
+        assert!(matches!(edit,QuickNodeEdit::Removed{stroke:0,point:1}));
+        assert_eq!(strokes[0].points.len(),3);
+    }
+
+    #[test]
+    fn quick_node_edit_preserves_closed_contour_closure() {
+        let mut strokes=vec![vector(&[
+            (0.,0.),(100.,0.),(100.,100.),(0.,100.),(0.,0.)
+        ])];
+        assert!(matches!(quick_edit_node(&mut strokes,100.,0.,3.),
+            Some(QuickNodeEdit::Removed{..})));
+        assert_eq!(strokes[0].points.first(),strokes[0].points.last());
+        assert_eq!(strokes[0].points.len(),4);
+    }
 
     #[test]
     fn smooth_path_preserves_ends_and_editable_control_nodes() {
