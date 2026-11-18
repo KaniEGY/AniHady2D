@@ -7744,7 +7744,7 @@ mod tool_discovery_tests {
         app.save_undo_state();
         app.has_unsaved_changes = false;
         app.start_new_project().expect("new project should succeed offline");
-        assert_eq!(app.workspace_mode, WorkspaceMode::DrawingOnly);
+        assert!(app.workspace_mode == WorkspaceMode::DrawingOnly);
         assert_eq!(app.project.total_frames, 1);
         assert_eq!(app.timeline_length, 1);
         assert_eq!(app.current_frame, 1);
