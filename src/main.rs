@@ -713,8 +713,8 @@ fn generate_stick_window_icon() -> egui::IconData {
             let idx = ((y * size + x) * 4) as usize;
             let fx = x as f32 - 32.0;
             let fy = y as f32 - 32.0;
-            let u = (fx + fy) * 0.7071;
-            let v = (-fx + fy) * 0.7071;
+            let u = (fx + fy) * std::f32::consts::FRAC_1_SQRT_2;
+            let v = (-fx + fy) * std::f32::consts::FRAC_1_SQRT_2;
             if u.abs() <= 26.0 && v.abs() <= 5.0 {
                 if u.abs() >= 24.4 || v.abs() >= 3.4 {
                     rgba[idx..idx + 4].copy_from_slice(&[15, 15, 18, 255]);
