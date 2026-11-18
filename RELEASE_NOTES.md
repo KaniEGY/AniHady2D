@@ -4,6 +4,12 @@
 
 ## English (US)
 
+### Canvas appearance and preset sizes (under review; not yet released)
+- General preferences: display-only border visibility/color/width, rounded stage corners, optional shadow, workspace background, live preview and defaults reset.
+- Canvas Size Mode: explicit YouTube Thumbnail, HD and Full HD entries, aspect ratio locking and a confirmation when shrinking could hide existing artwork; preexisting sizes are retained.
+- Local settings and project compatibility are preserved via serde defaults; exported images and videos do not include workspace chrome.
+- **Validation pending:** Windows CI and hands-on GUI/rotation/export checks; not a published release.
+
 ### Vector geometry refinement (under review; not yet released)
 - Adaptive vector interpolation samples long curved spans more densely while preserving intentional sharp corners, closed-loop seams and the exact editable control nodes.
 - Square-cap extension is safer around duplicate nodes and disabled on closed vector contours. Added deterministic geometry regression tests.
