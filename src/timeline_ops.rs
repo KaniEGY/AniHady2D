@@ -355,10 +355,9 @@ mod tests {
         apply_frame_edit(&mut p, 0, 2, FrameAction::Duplicate).unwrap();
         assert_eq!(p.total_frames, 5);
         let copied = &p.layers[0].keyframes[&3];
-        assert_eq!(
-            serde_json::to_value(copied).unwrap(),
-            serde_json::to_value(&content).unwrap()
-        );
+        let mut expected = content.clone();
+        expected.timeline_marker = FrameMarkerKind::CopiedPose;
+        assert_eq!(copied, &expected);
         assert_eq!(p.layers[0].keyframes[&4].label, "next");
         p.layers[0].keyframes.get_mut(&3).unwrap().strokes.clear();
         assert_eq!(p.layers[0].keyframes[&1].strokes.len(), 1);
