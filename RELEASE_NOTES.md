@@ -4,28 +4,34 @@
 
 ## English (US)
 
-### Five real brush presets (under review; not yet released)
+### Work Overhaul integration — experimental features
+- Integrated five independently CI-tested change sets: adaptive vector smoothing, pen pressure de-jittering, canvas appearance/presets, Advanced Timeline keyframe move/copy, and five functional brush presets.
+- Existing OLD/NEW timeline options and saved .stick projects remain supported; new work should be checked with a backup copy first.
+- **Important:** the full multi-network Online/Relay redesign is **not** included in this integration. Host connections may still require LAN or an external accessible tunnel.
+- **Validation:** the combined Windows CI test, Clippy and release build are mandatory before publication. Real stylus input, smoothness comparisons, cross-PC networking, and export-image visual checks remain **unverified**.
+
+### Five real brush presets (experimental)
 - Added functional Fineliner, Smooth Ink, Tapered Pen, Calligraphy and Soft Sketch Pencil presets with distinct pressure/width, stabilization or procedural nib behavior rather than placeholder names.
 - All original presets remain available and existing project format and brush variant ordering are unchanged.
 - **Pending:** Windows CI and hardware/visual QA. Arbitrary per-brush Hardness, Spacing and Pressure Curve controls are not yet shipped.
 
-### Advanced Timeline keyframe editing foundation (under review; not yet released)
+### Advanced Timeline keyframe editing foundation (experimental)
 - An optional third timeline mode keeps the existing OLD/NEW views and audio lanes, with a distinct ruler and exposure visualization.
 - Ctrl/Shift-click selects multiple authored keyframes. Drag moves them within/across unlocked tracks; Alt+drag duplicates them. Editing rejects collisions and out-of-bounds targets atomically, and successful operations use Undo.
 - **Still pending:** Windows CI/manual GUI verification, audio trimming, multi-selection clipboard operations, exposure edge stretching, magnetic snapping and thumbnail caching. This release note is an under-review engineering change, not a shipped claim.
 
-### Pressure stroke quality (under review; not yet released)
+### Pressure stroke quality (experimental)
 - Shared G-Pen outline now de-jitters small accidental movements on straight-ish strokes, resamples long movements by distance and limits hard-corner joins while keeping pressure variation.
 - Renderer geometry is bounded, with no alteration of saved raw project stroke data and no change to the .stick schema.
 - **Validation status:** unit regressions added; Windows CI and physical tablet/preview/export QA still required.
 
-### Canvas appearance and preset sizes (under review; not yet released)
+### Canvas appearance and preset sizes (experimental)
 - General preferences: display-only border visibility/color/width, rounded stage corners, optional shadow, workspace background, live preview and defaults reset.
 - Canvas Size Mode: explicit YouTube Thumbnail, HD and Full HD entries, aspect ratio locking and a confirmation when shrinking could hide existing artwork; preexisting sizes are retained.
 - Local settings and project compatibility are preserved via serde defaults; exported images and videos do not include workspace chrome.
 - **Validation pending:** Windows CI and hands-on GUI/rotation/export checks; not a published release.
 
-### Vector geometry refinement (under review; not yet released)
+### Vector geometry refinement (experimental)
 - Adaptive vector interpolation samples long curved spans more densely while preserving intentional sharp corners, closed-loop seams and the exact editable control nodes.
 - Square-cap extension is safer around duplicate nodes and disabled on closed vector contours. Added deterministic geometry regression tests.
 - **Validation status:** awaiting GitHub Windows CI and hands-on preview/export comparison; not a shipped feature until merged and released.
@@ -152,6 +158,13 @@
 - Added an unsaved-work guard to avoid restarting with an unfinished project.
 
 ## العربية (المصري)
+
+### تحديث Work المجمع — خصائص تجريبية
+- تم تجميع خمس حزم: تحسين نعومة الفيكتور، وتنعيم مسارات الفرش مع الضغط، وتخصيص حدود الكانفا والمقاسات، وتايم لاين متقدم لتحريك ونسخ الكي فريمات، وخمس فرش جديدة.
+- التصميم القديم للتايم لاين وملفات المشاريع القديمة ما زال مدعومًا، لكن يُفضّل اختبار نسخة احتياطية من أي مشروع مهم.
+- **الأونلاين بين شبكتين مختلفتين لم يتم إصلاحه في هذه الدفعة**، وقد يظل محتاج LAN أو وسيلة اتصال خارجي.
+- **التحقق:** مطلوب نجاح اختبارات Rust وClippy وبناء ويندوز للنسخة المجمعة قبل النشر؛ اختبار التابلت وتجارب الواجهة والتصدير والأونلاين الواقعية لم تتم بعد.
+
 - **تحديث واجهة وستيك للرسم:** أيقونات واضحة للعين والقفل في التايم لاين، وقائمة كليك يمين لإعادة تسمية اللير والدبلكيت والحذف، وتحسين الفيكتور بمنحنيات أنعم وأطراف مربعة أو دائرية، ومقاسات جاهزة ومخصصة للكانفا، ودليل أونلاين ومميزات البرنامج بالعربي والإنجليزي مع إغلاق سهل، وفرشتي فحم وباستيل جديدتين. لازم نجرب الأداء والقلم والأونلاين على جهازين فعليين رغم نجاح الاختبارات الآلية. تغيير مقاس الكانفا لا يمط الرسومات القديمة.
 - **تجهيز موقع Stick Studio:** ضفنا صفحات رسمية للبرنامج وسياسة الخصوصية وشروط الاستخدام داخل `docs/`. تفعيل GitHub Pages وتوثيق الدومين للنشر العام على Google خطوات منفصلة، والموقع مش بنعتبره منشور قبل التأكد.
 - **تجهيز تسجيل Google:** أضفنا معرّف OAuth العام الخاص بـStick Studio في إصدارات ويندوز، مع إصلاح الإعدادات القديمة الفارغة أو غير الصحيحة. ما زال Google في وضع Testing، ولا نعتبر تسجيل الدخول والنسخ السحابي مختبرين عمليًا قبل تجارب أجهزة ويندوز.
