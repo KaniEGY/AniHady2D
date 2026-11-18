@@ -64,7 +64,7 @@ fn prepared_points(points: &[StrokePoint], width: f32) -> Vec<StrokePoint> {
         if segment <= 0.001 { continue; }
         // ceil(segment/spacing)-1 < segment/spacing, so the total extra
         // samples cannot exceed the global memory budget.
-        let steps = ((segment / spacing).ceil() as usize).clamp(1, 64);
+        let steps = ((segment / spacing).ceil() as usize).clamp(1, MAX_RENDER_SAMPLES);
         for j in 1..=steps {
             let t = j as f32 / steps as f32;
             if j == steps {
