@@ -57,6 +57,13 @@ pub fn visit_round_marks(stroke: &Stroke, mut paint: impl FnMut(RoundMark, f32))
         } else {
             if !stroke.is_vector && stroke.brush_preset == KritaBrushPreset::TaperedPen {
                 let tapered = taper_pressure_profile(&stroke.points);
+                if has_risky_turn(&tapered) {
+                    // Filled pressure polygons can fold over themselves on hairpins.
+                    // Fall back to pressure dabs only for that risky geometry so the
+                    // tapered beginning/end remain visible instead of producing a black blob.
+                    visit_pressure_dabs(&tapered, width, |dab, _| paint(RoundMark::Dot(dab), flow));
+                    continue;
+                }
                 let outline = crate::stroke_geometry::pressure_outline(&tapered, width);
                 if !outline.is_empty() {
                     paint(RoundMark::Outline(outline), flow);
@@ -65,11 +72,19 @@ pub fn visit_round_marks(stroke: &Stroke, mut paint: impl FnMut(RoundMark, f32))
             }
             if !stroke.is_vector && stroke.brush_preset == KritaBrushPreset::SmoothInk {
                 let smoothed = smooth_ink_points(&stroke.points, width);
-                let outline = crate::stroke_geometry::pressure_outline(&smoothed, width);
-                if !outline.is_empty() {
-                    paint(RoundMark::Outline(outline), flow);
-                    continue;
+                if varying {
+                    if has_risky_turn(&smoothed) {
+                        visit_pressure_dabs(&smoothed, width, |dab, _| paint(RoundMark::Dot(dab), flow));
+                        continue;
+                    }
+                    let outline = crate::stroke_geometry::pressure_outline(&smoothed, width);
+                    if !outline.is_empty() {
+                        paint(RoundMark::Outline(outline), flow);
+                        continue;
+                    }
                 }
+                // Constant-pressure Smooth Ink uses the fast round-joined line path.
+                // Canvas/export renderers substitute this preset's smoothed centerline.
             }
             if varying {
                 let outline = crate::stroke_geometry::pressure_outline(&stroke.points, width);
@@ -89,7 +104,7 @@ pub fn visit_round_marks(stroke: &Stroke, mut paint: impl FnMut(RoundMark, f32))
 }
 
 /// Smooth only shallow accidental deviations, not corners and node landmarks.
-fn smooth_ink_points(points: &[StrokePoint], width: f32) -> Vec<StrokePoint> {
+pub(crate) fn smooth_ink_points(points: &[StrokePoint], width: f32) -> Vec<StrokePoint> {
     let mut result = points.to_vec();
     let tolerance = (width * 0.18).clamp(0.35, 2.2);
     for i in 1..points.len().saturating_sub(1) {
@@ -112,6 +127,19 @@ fn smooth_ink_points(points: &[StrokePoint], width: f32) -> Vec<StrokePoint> {
     result
 }
 
+/// Detect turns likely to make a filled pressure outline self-intersect.
+/// Normal curves keep the single clean polygon; only sharp reversals use dabs.
+fn has_risky_turn(points: &[StrokePoint]) -> bool {
+    points.windows(3).any(|w| {
+        let a=&w[0]; let b=&w[1]; let c=&w[2];
+        let u=(b.x-a.x,b.y-a.y);
+        let v=(c.x-b.x,c.y-b.y);
+        let lu=u.0.hypot(u.1); let lv=v.0.hypot(v.1);
+        if lu <= 0.001 || lv <= 0.001 { return false; }
+        let cos=(u.0*v.0+u.1*v.1)/(lu*lv);
+        cos < -0.10
+    })
+}
 /// Natural tapered nib: reduce width progressively over the first and last
 /// 16% of travel while retaining real input pressure through the middle.
 fn taper_pressure_profile(points: &[StrokePoint]) -> Vec<StrokePoint> {
@@ -353,6 +381,13 @@ mod tests {
         assert_eq!(lines,1);
     }
 
+    #[test]
+    fn risky_hairpins_are_detected_for_safe_brush_fallback() {
+        let hairpin=[point(0.,0.,1.),point(20.,0.,1.),point(2.,2.,1.)];
+        let gentle=[point(0.,0.,1.),point(20.,1.,1.),point(40.,4.,1.)];
+        assert!(has_risky_turn(&hairpin));
+        assert!(!has_risky_turn(&gentle));
+    }
     #[test]
     fn tapered_pen_reduces_end_pressure_and_preserves_midstroke() {
         let points=[point(0.,0.,1.),point(10.,0.,1.),point(20.,0.,1.),point(30.,0.,1.)];
