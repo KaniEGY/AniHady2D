@@ -4,6 +4,11 @@
 
 ## English (US)
 
+### Advanced Timeline keyframe editing foundation (under review; not yet released)
+- An optional third timeline mode keeps the existing OLD/NEW views and audio lanes, with a distinct ruler and exposure visualization.
+- Ctrl/Shift-click selects multiple authored keyframes. Drag moves them within/across unlocked tracks; Alt+drag duplicates them. Editing rejects collisions and out-of-bounds targets atomically, and successful operations use Undo.
+- **Still pending:** Windows CI/manual GUI verification, audio trimming, multi-selection clipboard operations, exposure edge stretching, magnetic snapping and thumbnail caching. This release note is an under-review engineering change, not a shipped claim.
+
 ### Pressure stroke quality (under review; not yet released)
 - Shared G-Pen outline now de-jitters small accidental movements on straight-ish strokes, resamples long movements by distance and limits hard-corner joins while keeping pressure variation.
 - Renderer geometry is bounded, with no alteration of saved raw project stroke data and no change to the .stick schema.
