@@ -18,6 +18,26 @@ pub fn playback_window(track: &AudioTrack, current_frame: usize, fps: u32) -> Op
     (audible_secs > 0.0).then_some(PlaybackWindow { skip_secs, delay_secs, audible_secs })
 }
 
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ScrubPreviewWindow {
+    pub skip_secs: f64,
+    pub duration_secs: f64,
+}
+
+/// Give frame stepping enough audio context for speech/lip-sync without
+/// overlapping the previous step. A short pre-roll preserves consonant onset.
+pub fn scrub_preview_window(relative_frame: usize, fps: u32) -> ScrubPreviewWindow {
+    let fps=fps.max(1) as f64;
+    let target=relative_frame as f64/fps;
+    let pre_roll=(1.5/fps).clamp(0.045,0.080);
+    let duration_secs=(6.0/fps).clamp(0.22,0.34);
+    ScrubPreviewWindow {
+        skip_secs:(target-pre_roll).max(0.0),
+        duration_secs,
+    }
+}
+
 pub fn duplicate_clip(tracks: &mut Vec<AudioTrack>, index: usize, max_frames: usize) -> Option<usize> {
     let original = tracks.get(index)?.clone();
     let duration = original.end_frame.saturating_sub(original.start_frame);
@@ -87,6 +107,15 @@ mod tests {
         assert_eq!(wa.delay_secs,0.0);
         assert!((wb.delay_secs-1.0).abs()<0.0001);
         assert_eq!(wb.skip_secs,0.0);
+    }
+
+    #[test]
+    fn scrub_preview_has_speech_context_and_preroll() {
+        let w=scrub_preview_window(24,24);
+        assert!(w.skip_secs>0.90 && w.skip_secs<1.0);
+        assert!(w.duration_secs>=0.22 && w.duration_secs<=0.34);
+        let first=scrub_preview_window(0,24);
+        assert_eq!(first.skip_secs,0.0);
     }
 
     #[test]
