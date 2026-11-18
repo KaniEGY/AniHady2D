@@ -1075,6 +1075,74 @@ fn apply_stick_theme(ctx: &egui::Context) {
     ctx.set_style(style);
 }
 
+#[derive(Clone, Copy)]
+enum TimelineQuickAction { DuplicateNext, MoveNext, ClearSelection }
+
+fn timeline_quick_action(
+    ui: &mut egui::Ui,
+    action: TimelineQuickAction,
+    enabled: bool,
+    tooltip: String,
+) -> egui::Response {
+    let sense=if enabled { egui::Sense::click() } else { egui::Sense::hover() };
+    let (rect,response)=ui.allocate_exact_size(egui::vec2(30.0,27.0),sense);
+    let painter=ui.painter();
+    let cyan=egui::Color32::from_rgb(67,205,242);
+    let gold=egui::Color32::from_rgb(250,197,67);
+    let fg=if enabled { if response.hovered(){gold}else{cyan} } else {egui::Color32::from_gray(92)};
+    let bg=if response.hovered() && enabled {
+        egui::Color32::from_rgb(24,52,67)
+    } else {egui::Color32::from_rgb(37,41,48)};
+    painter.rect_filled(rect,4.0,bg);
+    painter.rect_stroke(rect,4.0,egui::Stroke::new(1.0,fg));
+    let p=rect.center();
+    match action {
+        TimelineQuickAction::DuplicateNext => {
+            let back=egui::Rect::from_center_size(p+egui::vec2(-3.0,-2.0),egui::vec2(10.0,10.0));
+            let front=egui::Rect::from_center_size(p+egui::vec2(3.0,2.0),egui::vec2(10.0,10.0));
+            painter.rect_stroke(back,1.0,egui::Stroke::new(1.4,fg));
+            painter.rect_stroke(front,1.0,egui::Stroke::new(1.8,fg));
+            painter.line_segment([p+egui::vec2(7.0,0.0),p+egui::vec2(11.0,0.0)],egui::Stroke::new(1.5,fg));
+            painter.line_segment([p+egui::vec2(9.0,-2.0),p+egui::vec2(11.0,0.0)],egui::Stroke::new(1.5,fg));
+            painter.line_segment([p+egui::vec2(9.0,2.0),p+egui::vec2(11.0,0.0)],egui::Stroke::new(1.5,fg));
+        }
+        TimelineQuickAction::MoveNext => {
+            painter.rect_stroke(egui::Rect::from_center_size(p+egui::vec2(-5.0,0.0),egui::vec2(8.0,10.0)),
+                1.0,egui::Stroke::new(1.5,fg));
+            painter.line_segment([p+egui::vec2(0.0,0.0),p+egui::vec2(10.0,0.0)],egui::Stroke::new(2.0,fg));
+            painter.add(egui::Shape::convex_polygon(vec![
+                p+egui::vec2(10.0,0.0),p+egui::vec2(5.0,-4.0),p+egui::vec2(5.0,4.0)
+            ],fg,egui::Stroke::NONE));
+        }
+        TimelineQuickAction::ClearSelection => {
+            painter.circle_stroke(p,7.5,egui::Stroke::new(1.4,fg));
+            painter.line_segment([p+egui::vec2(-5.0,-5.0),p+egui::vec2(5.0,5.0)],egui::Stroke::new(2.0,fg));
+            painter.line_segment([p+egui::vec2(-5.0,5.0),p+egui::vec2(5.0,-5.0)],egui::Stroke::new(2.0,fg));
+        }
+    }
+    response.on_hover_text(tooltip)
+}
+
+fn draw_system_hud_chrome(painter: &egui::Painter, rect: egui::Rect) {
+    let cyan=egui::Color32::from_rgb(0,216,255);
+    let cyan_dim=egui::Color32::from_rgba_unmultiplied(0,216,255,115);
+    let gold=egui::Color32::from_rgb(255,205,63);
+    painter.rect_stroke(rect,5.0,egui::Stroke::new(1.2,cyan_dim));
+    let l=24.0;
+    for (a,b,c) in [
+        (rect.left_top(),egui::vec2(l,0.0),egui::vec2(0.0,l)),
+        (rect.right_top(),egui::vec2(-l,0.0),egui::vec2(0.0,l)),
+        (rect.left_bottom(),egui::vec2(l,0.0),egui::vec2(0.0,-l)),
+        (rect.right_bottom(),egui::vec2(-l,0.0),egui::vec2(0.0,-l)),
+    ] {
+        painter.line_segment([a,a+b],egui::Stroke::new(2.1,cyan));
+        painter.line_segment([a,a+c],egui::Stroke::new(2.1,cyan));
+    }
+    let top=rect.center_top();
+    painter.line_segment([top+egui::vec2(-38.0,0.0),top+egui::vec2(38.0,0.0)],egui::Stroke::new(2.0,gold));
+    painter.circle_filled(top,2.8,gold);
+}
+
 fn draw_red_heart_icon(painter: &egui::Painter, rect: egui::Rect, hovered: bool) {
     let c = rect.center();
     let red = if hovered { egui::Color32::from_rgb(255, 75, 95) } else { egui::Color32::from_rgb(235, 35, 55) };
@@ -6803,6 +6871,9 @@ impl eframe::App for StickApp {
                 let bg = self.config.timeline_bg_color;
                 ui.painter().rect_filled(ui.max_rect(), 0.0,
                     egui::Color32::from_rgb(bg[0],bg[1],bg[2]));
+                if self.config.ui_style_preset==7 {
+                    draw_system_hud_chrome(ui.painter(),ui.max_rect().shrink(2.0));
+                }
                 ui.horizontal_wrapped(|ui| {
                     ui.label(egui::RichText::new(tr(lang, "● ANIMATION TIMELINE", "● الخط الزمني للأنيميشن"))
                         .size(16.0).strong().color(egui::Color32::from_rgb(107, 210, 252)));
@@ -6825,6 +6896,47 @@ impl eframe::App for StickApp {
                         if self.is_playing { self.start_audio_playback(); } else { self.stop_audio_playback(); }
                     }
                     if ui.button("▶").on_hover_text(tr(lang, "Next frame", "الفريم الجاي")).clicked() && self.current_frame < self.timeline_length { self.current_frame += 1; }
+                    ui.separator();
+                    let has_multi=!self.advanced_selected_cels.is_empty();
+                    let active_unlocked=self.project.layers.get(self.active_layer_idx)
+                        .is_some_and(|layer|!layer.locked);
+                    let duplicate_enabled=active_unlocked
+                        && self.current_frame<timeline_ops::MAX_TIMELINE_FRAMES;
+                    let duplicate=timeline_quick_action(ui,TimelineQuickAction::DuplicateNext,
+                        duplicate_enabled,tr(lang,"Copy to next frame","نسخ في الفريم اللي بعده"));
+                    if duplicate.clicked() {
+                        if has_multi {
+                            advanced_relocate_request=Some((
+                                self.advanced_selected_cels.clone(),0,1,
+                                advanced_timeline::RelocateMode::Copy));
+                        } else {
+                            self.insert_next_keyframe(false,now_time);
+                        }
+                    }
+                    let current_is_key=self.project.layers.get(self.active_layer_idx)
+                        .is_some_and(|layer|layer.keyframes.contains_key(&self.current_frame));
+                    let move_enabled=active_unlocked && self.current_frame<self.timeline_length
+                        && (has_multi || current_is_key);
+                    let move_next=timeline_quick_action(ui,TimelineQuickAction::MoveNext,
+                        move_enabled,tr(lang,"Move keyframe forward","حرّك فريم لقدّام"));
+                    if move_next.clicked() {
+                        let selection=if has_multi {
+                            self.advanced_selected_cels.clone()
+                        } else {
+                            vec![advanced_timeline::CelAddress{
+                                layer:self.active_layer_idx,frame:self.current_frame
+                            }]
+                        };
+                        advanced_relocate_request=Some((
+                            selection,0,1,advanced_timeline::RelocateMode::Move));
+                    }
+                    let clear=timeline_quick_action(ui,TimelineQuickAction::ClearSelection,true,
+                        tr(lang,"Clear selection","إلغاء التحديد"));
+                    if clear.clicked() {
+                        self.advanced_selected_cels.clear();
+                        self.clear_cel_selection();
+                    }
+                    ui.separator();
                     ui.toggle_value(&mut self.loop_enabled, tr(lang, "🔁 Loop Range", "🔁 تكرار جزء"));
                     ui.label(egui::RichText::new(format!("Frame {} / {}", self.current_frame, self.timeline_length))
                         .color(egui::Color32::from_rgb(255, 214, 110)).strong());
@@ -6896,21 +7008,9 @@ impl eframe::App for StickApp {
                     ui.horizontal_wrapped(|ui| {
                         ui.label(tr(lang,"NEW MINE • KEYFRAMES","New mine • كي فريمات"));
                         ui.label(format!("{} selected",self.advanced_selected_cels.len()));
-                        if ui.add_enabled(!self.advanced_selected_cels.is_empty(),
-                            egui::Button::new(tr(lang,"Duplicate +1","نسخ في الفريم اللي بعده"))).clicked() {
-                            advanced_relocate_request=Some((
-                                self.advanced_selected_cels.clone(),0,1,
-                                advanced_timeline::RelocateMode::Copy));
-                        }
-                        if ui.add_enabled(!self.advanced_selected_cels.is_empty(),
-                            egui::Button::new(tr(lang,"Move +1","حرّك فريم لقدّام"))).clicked() {
-                            advanced_relocate_request=Some((
-                                self.advanced_selected_cels.clone(),0,1,
-                                advanced_timeline::RelocateMode::Move));
-                        }
-                        if ui.small_button(tr(lang,"Clear selection","إلغاء التحديد")).clicked() {
-                            self.advanced_selected_cels.clear();
-                        }
+                        ui.small(tr(lang,
+                            "The icon actions above work on the current multi-selection.",
+                            "أيقونات الأوامر اللي فوق بتشتغل على التحديد المتعدد الحالي."));
                     });
                     ui.small(tr(lang,
                         "Ctrl/Shift+click keyframes to multi-select. Drag to move; Alt+drag to duplicate. Audio tracks stay aligned.",
@@ -7550,6 +7650,9 @@ impl eframe::App for StickApp {
             let canvas_rect = ui.available_rect_before_wrap();
             let painter = ui.painter_at(canvas_rect);
             painter.rect_filled(canvas_rect, 0.0, self.config.canvas_appearance.workspace_paint());
+            if self.config.ui_style_preset==7 {
+                draw_system_hud_chrome(&painter,canvas_rect.shrink(7.0));
+            }
             let center = canvas_rect.center() + self.pan_offset;
             let scale = self.zoom_level.max(0.1);
             let (stage_w, stage_h) = (self.project.width as f32, self.project.height as f32);
@@ -8080,17 +8183,40 @@ impl eframe::App for StickApp {
                         }
                         ActiveToolUI::SelectNormal | ActiveToolUI::FreeTransform => {
                             if pointer_pressed {
-                                // A dedicated handle above the selection provides free rotation.
+                                // Test the exact painted screen positions, not an approximation in
+                                // stage coordinates. This prevents offset hitboxes after zoom/pan/rotation.
                                 let bounds = self.selected_canvas_bounds();
-                                let rotate_pivot = if self.active_tool_ui == ActiveToolUI::FreeTransform {
-                                    bounds.and_then(|rect| transform_handles::rotation_pivot(rect, stage_pos, scale))
-                                } else { None };
-                                let resize_anchor = if self.active_tool_ui == ActiveToolUI::FreeTransform {
-                                    bounds.and_then(|rect| transform_handles::resize_anchor(rect, stage_pos, scale))
-                                } else { None };
-                                let move_axis = if self.active_tool_ui == ActiveToolUI::FreeTransform {
-                                    bounds.and_then(|rect| transform_handles::translation_axis(rect, stage_pos, scale))
-                                } else { None };
+                                let (rotate_pivot,resize_anchor,move_axis) =
+                                    if self.active_tool_ui == ActiveToolUI::FreeTransform {
+                                        if let Some(rect)=bounds {
+                                            let rotate_handle=to_screen(rect.center_top()
+                                                +egui::vec2(0.0,-transform_handles::ROTATE_OFFSET_PX/scale));
+                                            let stage_handles=[
+                                                rect.left_top(),rect.right_top(),
+                                                rect.left_bottom(),rect.right_bottom()
+                                            ];
+                                            let screen_handles=[
+                                                to_screen(stage_handles[0]),to_screen(stage_handles[1]),
+                                                to_screen(stage_handles[2]),to_screen(stage_handles[3])
+                                            ];
+                                            let anchors=[
+                                                rect.right_bottom(),rect.left_bottom(),
+                                                rect.right_top(),rect.left_top()
+                                            ];
+                                            let resize_anchor=transform_handles::resize_handle_index(
+                                                screen_handles,pos).map(|index|anchors[index]);
+                                            let x_tip=to_screen(rect.center()
+                                                +egui::vec2(transform_handles::TRANSLATE_OFFSET_PX/scale,0.0));
+                                            let y_tip=to_screen(rect.center()
+                                                +egui::vec2(0.0,-transform_handles::TRANSLATE_OFFSET_PX/scale));
+                                            (
+                                                transform_handles::rotation_handle_hit(rotate_handle,pos)
+                                                    .then_some(rect.center()),
+                                                resize_anchor,
+                                                transform_handles::translation_axis_screen(x_tip,y_tip,pos),
+                                            )
+                                        } else {(None,None,None)}
+                                    } else {(None,None,None)};
                                 let reuse_selection = bounds.is_some_and(|rect| rect.contains(stage_pos))
                                     && (!self.selected_stroke_indices.is_empty() || self.selected_text_item_index.is_some()
                                         || self.selected_media_idx.is_some());
@@ -8456,12 +8582,11 @@ impl eframe::App for StickApp {
             }
 
             if let (Some(start), Some(end)) = (self.selection_rect_start, self.selection_rect_current) {
-                let a = to_screen(start);
-                let b = to_screen(end);
-                painter.rect_stroke(
-                    egui::Rect::from_two_pos(a, b), 0.0,
-                    egui::Stroke::new(1.4, egui::Color32::from_rgb(45, 170, 255)),
-                );
+                let r=egui::Rect::from_two_pos(start,end);
+                painter.add(egui::Shape::closed_line(vec![
+                    to_screen(r.left_top()),to_screen(r.right_top()),
+                    to_screen(r.right_bottom()),to_screen(r.left_bottom())
+                ],egui::Stroke::new(1.4,egui::Color32::from_rgb(45,170,255))));
             }
             if self.lasso_points.len() >= 2 {
                 let path: Vec<_> = self.lasso_points.iter().copied().map(&to_screen).collect();
@@ -8474,29 +8599,29 @@ impl eframe::App for StickApp {
                     let frame = self.project.evaluate_layer_at_frame(layer, self.current_frame);
                     if let Some(txt) = frame.text_items.get(idx) {
                         let bounds = selection_tools::text_bounds(txt);
-                        painter.rect_stroke(
-                            egui::Rect::from_two_pos(to_screen(bounds.min), to_screen(bounds.max)),
-                            1.5, egui::Stroke::new(1.4, egui::Color32::from_rgb(45, 170, 255))
-                        );
+                        painter.add(egui::Shape::closed_line(vec![
+                            to_screen(bounds.left_top()),to_screen(bounds.right_top()),
+                            to_screen(bounds.right_bottom()),to_screen(bounds.left_bottom())
+                        ],egui::Stroke::new(1.4,egui::Color32::from_rgb(45,170,255))));
                     }
                 }
             }
             // Persistent visual selection and a draggable scale handle.
             if matches!(self.active_tool_ui, ActiveToolUI::SelectNormal | ActiveToolUI::SelectLasso | ActiveToolUI::FreeTransform) {
                 if let Some(bounds) = self.selected_canvas_bounds() {
-                    let screen_bounds = egui::Rect::from_two_pos(
-                        to_screen(bounds.min), to_screen(bounds.max)
-                    );
-                    painter.rect_stroke(screen_bounds, 0.0, egui::Stroke::new(
-                        1.6, egui::Color32::from_rgb(54, 194, 255)
-                    ));
+                    let screen_corners=[
+                        to_screen(bounds.left_top()),to_screen(bounds.right_top()),
+                        to_screen(bounds.left_bottom()),to_screen(bounds.right_bottom())
+                    ];
+                    painter.add(egui::Shape::closed_line(vec![
+                        screen_corners[0],screen_corners[1],screen_corners[3],screen_corners[2]
+                    ],egui::Stroke::new(1.6,egui::Color32::from_rgb(54,194,255))));
                     if self.active_tool_ui == ActiveToolUI::FreeTransform {
-                        // Transform gizmos never leak into normal Selection/Lasso.
                         let origin=to_screen(bounds.center());
                         for (end,col,label) in [
-                            (bounds.center()+egui::vec2(52.0/scale,0.0),
+                            (bounds.center()+egui::vec2(transform_handles::TRANSLATE_OFFSET_PX/scale,0.0),
                                 egui::Color32::from_rgb(244,78,86),"X"),
-                            (bounds.center()+egui::vec2(0.0,-52.0/scale),
+                            (bounds.center()+egui::vec2(0.0,-transform_handles::TRANSLATE_OFFSET_PX/scale),
                                 egui::Color32::from_rgb(60,192,244),"Y")
                         ] {
                             let tip=to_screen(end);
@@ -8505,22 +8630,20 @@ impl eframe::App for StickApp {
                             painter.text(tip,egui::Align2::CENTER_CENTER,label,
                                 egui::FontId::proportional(11.0),egui::Color32::BLACK);
                         }
-                        let top = to_screen(bounds.center_top());
-                        let handle = to_screen(bounds.center_top()
-                            + egui::vec2(0.0, -transform_handles::ROTATE_OFFSET_PX / scale));
-                        painter.line_segment([top, handle], egui::Stroke::new(1.5, egui::Color32::from_rgb(54, 194, 255)));
-                        painter.circle_filled(handle, 12.5, egui::Color32::from_rgb(19, 31, 42));
-                        painter.circle_stroke(handle, 12.5, egui::Stroke::new(2.0, egui::Color32::from_rgb(54, 194, 255)));
-                        painter.text(handle, egui::Align2::CENTER_CENTER, "↻",
-                            egui::FontId::proportional(16.0), egui::Color32::WHITE);
-                        for corner in [screen_bounds.left_top(), screen_bounds.right_top(),
-                                       screen_bounds.left_bottom(), screen_bounds.right_bottom()] {
-                            let handle = egui::Rect::from_center_size(corner,
-                                egui::vec2(transform_handles::RESIZE_VISUAL_PX, transform_handles::RESIZE_VISUAL_PX));
-                            painter.rect_filled(handle, 1.0, egui::Color32::WHITE);
-                            painter.rect_stroke(handle, 1.0, egui::Stroke::new(
-                                1.5, egui::Color32::from_rgb(54, 194, 255)
-                            ));
+                        let top=to_screen(bounds.center_top());
+                        let handle=to_screen(bounds.center_top()
+                            +egui::vec2(0.0,-transform_handles::ROTATE_OFFSET_PX/scale));
+                        painter.line_segment([top,handle],egui::Stroke::new(1.5,egui::Color32::from_rgb(54,194,255)));
+                        painter.circle_filled(handle,12.5,egui::Color32::from_rgb(19,31,42));
+                        painter.circle_stroke(handle,12.5,egui::Stroke::new(2.0,egui::Color32::from_rgb(54,194,255)));
+                        painter.text(handle,egui::Align2::CENTER_CENTER,"↻",
+                            egui::FontId::proportional(16.0),egui::Color32::WHITE);
+                        for corner in screen_corners {
+                            let handle=egui::Rect::from_center_size(corner,
+                                egui::vec2(transform_handles::RESIZE_VISUAL_PX,transform_handles::RESIZE_VISUAL_PX));
+                            painter.rect_filled(handle,1.0,egui::Color32::WHITE);
+                            painter.rect_stroke(handle,1.0,egui::Stroke::new(
+                                1.5,egui::Color32::from_rgb(54,194,255)));
                         }
                     }
                 }
