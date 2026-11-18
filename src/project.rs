@@ -338,6 +338,12 @@ pub struct MediaItem {
     pub width: f32,
     #[serde(default = "default_media_dim")]
     pub height: f32,
+    #[serde(default)]
+    pub rotation_deg: f32,
+    #[serde(default)]
+    pub flip_h: bool,
+    #[serde(default)]
+    pub flip_v: bool,
 }
 
 fn default_media_dim() -> f32 {
@@ -435,7 +441,13 @@ pub struct AudioTrack {
     pub sync_mode: AudioSyncMode,
     #[serde(default)]
     pub waveform_peaks: Vec<f32>,
+    #[serde(default = "default_audio_gain")]
+    pub gain: f32,
+    #[serde(default)]
+    pub muted: bool,
 }
+
+fn default_audio_gain() -> f32 { 1.0 }
 
 fn default_one() -> usize {
     1
