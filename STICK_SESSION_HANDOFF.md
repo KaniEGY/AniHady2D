@@ -1,5 +1,14 @@
 # Stick Studio — Session Handoff / سجل استكمال المشروع
 
+## 18 November 2026 — screen-recording QA, smooth audio dragging and invite joins
+- Source screen recording: silent MP4, 1920x1080, 60fps, approximately 9m47s. See `VIDEO_QA_2026-11-18.md` for timestamped observations, fixed issues and remaining QA.
+- PR #46 on `fix/video-qa-audio-scrub-invites-20261118` captures audio clip from initial pointer press, disables timeline's drag-to-scroll conflict, saves a single Undo state per actual audio move, and implements continuous ruler mouse-held frame scrubbing.
+- Unrotated paper now clips artwork/ghost preview at stage bounds; egui rectangular clipping isn't a full solution for rotated paper.
+- New `src/online_invite.rs` makes password-free copy/paste `stick://join` invitations with strict address/code/mode validation. A connected host can supply reachable LAN, private overlay or public IPv4/DNS endpoint. DNS resolution occurs in background online worker; optional ZeroTier setup is documented alongside Tailscale.
+- **Do not claim the invite links globally discover rooms or cross CGNAT:** there is no deployed internet relay, no TLS in direct Stick TCP and no actual two-PC external test. Password never goes inside the invitation.
+- The customer-visible fill settings use Stick-specific wording, with no mention of unrelated products. Internal historic Rust enum naming is left alone for compatibility.
+- Require Windows CI test, Clippy, release build and release asset verification before publishing; successful CI is not manual brush/GUI or multi-PC acceptance.
+
 ## 18 November 2026 — Work overhaul integrated review
 - PRs #40 (vector geometry), #41 (canvas appearance/sizes), #42 (pressure stroke smoothing), #43 (Advanced Timeline), #44 (five new brush presets) were merged in sequence into `integration/work-overhaul-20261118` using preserved source changes and explicitly resolved shared documentation / main.rs differences.
 - The build 213 released main was unchanged while staging. After one combined Windows cargo test/Clippy/release build and review, merge the integration PR to main and require the main push release workflow to succeed. Verify `Stick.exe`, `version.txt` and `SHA256SUMS.txt`.
@@ -134,14 +143,14 @@
 - User explicitly requests publication of EVERY tested update through GitHub Releases and Stick updater. Do not hold working builds or replace full versions with repair-only files. Preserve historical releases for rollback and never publish a known failing build.
 - Online beta PR #20 merged to main at commit 5afb33b2b2ece1e5ccb44e100dde2395608198fb, following latest-HEAD passing Windows CI. Confirm main publication run separately.
 - Next branch: feature/release-rollback-layers-20261117
-- src/updater.rs: query GitHub Releases, sort by published_at, verify official asset URLs, SHA-256 digest and sizes, offer up to 5 older builds. Reuse existing safe staged installer. Regression tests added.
-- src/main.rs: settings Previous Versions tab with immediate predecessor, 5 older releases, dates, confirmation and unsaved work guard; improved resizable right Layers dock with search, sampled actual thumbnail preview, per-layer metadata, double-click rename and guide action.
+- src/updater.rs: query GitHub Releases, sort by published_at, verify official asset URLs, SHA-256 digest and sizes, offer the immediate previous release plus up to 10 older builds. Reuse existing safe staged installer. Regression tests added.
+- src/main.rs: settings Previous Versions tab with immediate predecessor, 10 older releases, dates, confirmation and unsaved work guard; improved resizable right Layers dock with search, sampled actual thumbnail preview, per-layer metadata, double-click rename and guide action.
 - RELEASE_NOTES.md bilingual update. No GPL Krita source code imported.
 - QA: latest PR Windows cargo test and release build must be green before merge; Windows manual rollback, export, reopening older projects and live layer dock validation remain unverified. Online beta is NOT secure/encrypted Internet collaboration, only limited LAN/direct-IP stroke synchronization.
 
 ## 17 Nov 2026 — New online/bucket/perspective UI sprint
 - Branch: feature/online-bucket-perspective-ui-20261117, based on main babfb56cc54f3da2c4dc09cf728ab9ef1873fcc7.
-- Fixed rollback duplicated immediate prior release; parse 6 candidates, previous first + 5 older in list.
+- Fixed rollback duplicated immediate prior release; parse 11 candidates, previous first + 10 older in list.
 - Added project-independent non-destructive perspective guide overlays, configurable stage-aware square, lines and one-point perspective; timeline height config with manual slider and drag-memory; adjustable persistent properties/layers split and collapsible Colors/Symmetry sections.
 - Rebuilt bucket fallback with bounded wall mask, flood-region trace to vector fill for split freehand contours; tests for closed vs open.
 - Online protocol v2: local room code 8 digits, room roster with colored names and self-reported local levels, hosts currently open project, directed UDP broadcast. No worldwide rendezvous, automatic Google OAuth or universal concurrent operation syncing.

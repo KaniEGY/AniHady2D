@@ -15,6 +15,20 @@ While viewing the same frame, you see each artist's name and roster color beside
 
 **Important:** An eight-digit Stick room code resolves only among rooms **actually discovered** on the LAN or accessible tailnet peers. It is not a worldwide invite service. Use the host's Tailscale address when discovery fails.
 
+## New: paste a Stick invitation link (optional)
+
+1. Create a room as host, then open **🔗 Invite link** in the online status bar.
+2. Choose an address the guest can actually reach: LAN IPv4, a private-network IPv4 (Tailscale or ZeroTier), or your publicly reachable IPv4/DNS name with the needed TCP port. Leave the field blank for the default LAN address.
+3. Copy the `stick://join?address=...&code=...&mode=...` text and send it to your friend. **The room password is never included**; share it separately if the room uses one.
+4. The guest opens **Online → Join Room → Join via invitation**, pastes the text, provides the room password if required, and clicks **Join invitation**.
+5. LAN discovery and manual direct joining are unchanged. Invitations only make addressing and joining easier; they **do not** create a central public room directory, traverse NAT, or encrypt the connection.
+
+### Alternative overlay: ZeroTier
+
+As an alternative to Tailscale, both people can explicitly connect to the same authorized [ZeroTier](https://www.zerotier.com/download/) private network, then join using the host's assigned IPv4. This requires separate ZeroTier setup and consent on both devices. The existing Stick host TCP protocol and port 47554 remain the same.
+
+**Internet direct TCP caution:** Opening the host's port to the public internet increases exposure and Stick does not add end-to-end encrypted transport. Prefer an authorized private overlay for now. Public relay-based joins would require an independently deployed and audited backend; no such service is included in this release.
+
 ## Same home / LAN
 
 - Host creates a room; friend selects it from the LAN discovery list or uses host's **LAN IPv4:47554**.

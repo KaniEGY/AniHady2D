@@ -11,7 +11,7 @@ use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::hash::{BuildHasher, Hasher};
 use std::io::{self, Read, Write};
-use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpListener, TcpStream, UdpSocket};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpListener, TcpStream, ToSocketAddrs, UdpSocket};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, Mutex, OnceLock};
 use std::thread;
@@ -460,8 +460,12 @@ impl OnlineSession {
 
     fn join_room_internal(address: String, password: String, nickname: String,
         level: u32, mode: OnlineMode, is_handoff: bool) -> Result<Self, String> {
-        let address = if address.contains(':') { address } else { format!("{}:{}", address, TCP_PORT) };
-        let addr: SocketAddr = address.parse().map_err(|_| "Enter a valid IPv4 address and port, such as 192.168.1.5:47554".to_string())?;
+        let address = crate::online_invite::validate_endpoint(&address)
+            .map_err(|reason| reason.to_string())?;
+        let address = if address.starts_with('[') {
+            if address.ends_with(']') { format!("{}:{}", address, TCP_PORT) } else { address }
+        } else if address.contains(':') { address } else { format!("{}:{}", address, TCP_PORT) };
+        // Resolve DNS inside the connection worker, never block egui's event loop.
         let guest_password = password.clone();
         let (event_tx, event_rx) = mpsc::channel();
         let (out_tx, out_rx) = mpsc::channel();
@@ -469,19 +473,34 @@ impl OnlineSession {
         let running_worker = running.clone();
         let cursor_wake = CursorWake::default();
         let worker_wake = cursor_wake.clone();
+        let address_for_worker=address.clone();
         thread::spawn(move || {
             let result = (|| -> Result<(), String> {
+                let addrs: Vec<SocketAddr> = address_for_worker.to_socket_addrs()
+                    .map_err(|_| format!("Cannot resolve host address: {address_for_worker}"))?
+                    .take(8).collect();
+                if addrs.is_empty() { return Err("No IP addresses found for this host".into()); }
                 let mut retry_count = 0;
                 let mut stream = loop {
-                    match TcpStream::connect_timeout(&addr,
-                        if is_handoff { Duration::from_millis(500) } else { Duration::from_secs(5) }) {
-                        Ok(stream) => break stream,
-                        Err(_) if is_handoff && retry_count < 25 => {
-                            retry_count += 1;
-                            thread::sleep(Duration::from_millis(220));
+                    let mut connected = None;
+                    let mut last_error = None;
+                    for addr in &addrs {
+                        match TcpStream::connect_timeout(addr, if is_handoff {
+                            Duration::from_millis(500)
+                        } else { Duration::from_secs(3) }) {
+                            Ok(stream) => { connected = Some(stream); break; }
+                            Err(error) => last_error = Some(error),
                         }
-                        Err(e) => return Err(format!("Connection failed: {}. Verify that the new host can accept TCP 47554 (LAN/Tailscale/firewall).", e)),
                     }
+                    if let Some(stream) = connected { break stream; }
+                    if is_handoff && retry_count < 25 {
+                        retry_count += 1;
+                        thread::sleep(Duration::from_millis(220));
+                        continue;
+                    }
+                    return Err(format!(
+                        "Connection failed: {}. Check host TCP 47554, firewall and network reachability. A room code or invite does not bypass NAT.",
+                        last_error.map(|e| e.to_string()).unwrap_or_else(|| "no route".into())));
                 };
                 // All connection attempts use the intended address, never
                 // a public proxy or an untrusted third-party room directory.

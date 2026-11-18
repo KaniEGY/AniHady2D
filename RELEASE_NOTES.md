@@ -4,6 +4,14 @@
 
 ## English (US)
 
+### Video QA improvements (experimental)
+- Audio dragging now captures the pointer on press and computes movement from the original press position, so 1-frame slow drags do not depend on egui's drag threshold; it keeps one Undo snapshot per real clip move and avoids timeline drag-scrolling conflicts.
+- The frame-number ruler supports holding the mouse button and moving across frames to scrub continuously.
+- For unrotated paper, canvas drawing and onion ghosts are clipped to the paper bounds without changing project files or raster exports.
+- Room hosts can copy password-free invitation links. Guests can paste a link to join a reachable LAN/private-network/public TCP host. Optional ZeroTier joins are explained alongside existing LAN/Tailscale.
+- **Limitations:** invitations are not a global room relay or NAT bypass; an external host needs reachability. Stick's direct TCP traffic is not end-to-end encrypted. Real cross-network and stylus tests remain outstanding.
+- Source: silent 9m47s screen recording and current code audit. Some brush/shape visual artifacts require separate controlled reproduction.
+
 ### Work Overhaul integration — experimental features
 - Integrated five independently CI-tested change sets: adaptive vector smoothing, pen pressure de-jittering, canvas appearance/presets, Advanced Timeline keyframe move/copy, and five functional brush presets.
 - Existing OLD/NEW timeline options and saved .stick projects remain supported; new work should be checked with a backup copy first.
@@ -60,12 +68,12 @@
 - **Workspace:** user-controlled toolbar, properties dock, tool list and timeline visibility; enhanced layer rows; refreshed timeline controls and layout.
 - **Text:** multiline text editor with joined-Arabic preview; local-font-based text rendering in exported images/video.
 - **Persistence:** profile/settings saved under the Windows user profile, with read compatibility for prior executable-adjacent JSON files; new stroke tip field defaults to a round brush in older projects.
-- **Known boundaries:** bucket fill operates on recognized closed stroke contours (now with improved near-closure tolerance), not arbitrary raster flood fill. Imported artwork/text still needs further parity tests for every transform. No Krita GPL code is copied into Stick.
+- **Known boundaries:** bucket fill operates on recognized closed stroke contours (now with improved near-closure tolerance), not arbitrary raster flood fill. Imported artwork/text still needs further parity tests for every transform. No third-party drawing software GPL code is copied into Stick.
 
 ### What's new
 - **Editable imports:** imported images and video-frame layers can be selected and transformed on the canvas. Right-side properties offer position, size, rotation, horizontal/vertical flips, with matching raster export rendering. Video layer transforms follow its decoded frames.
 - **Audio in timeline:** visible green waveform lanes below animation cels; drag audio strips to change start time. Right panel exposes mute, gain, clip timing and scrub mode. Timed clips mix during playback; very long audio waveform data is currently a limited preview.
-- **Bucket options:** Precision, Dilate/Contract, and boundary Thickness adjust Stick's bounded contour solver, inspired by Blender Grease Pencil behavior; these are not the same implementation as Blender's fill.
+- **Bucket options:** Precision, Dilate/Contract, and boundary Thickness adjust Stick's bounded contour solver, inspired by external animation software Grease Pencil behavior; these are not the same implementation as external animation software's fill.
 - **Video memory safety:** the editor no longer caches every decoded movie frame on the GPU, and preview textures are bounded. Source files remain referenced by path; save copies of external media.
 
 - DryBrush and Chalk add pressure-sensitive bristles and grain to the brush picker. Their patterns follow the saved stroke in the editor and raster exports.
@@ -93,9 +101,9 @@
 - **Exit hang:** no synchronous audio-drain on application close. Unsaved documents get Save & Exit / Exit without saving / Cancel.
 - **Brush stability:** G-Pen now draws a continuous pressure-aware outline as one translucent geometry rather than a stack of dark, overlapping circles. PNG/video export uses the same outline where possible. Freehand strokes no longer receive destructive fourfold Catmull-Rom oversampling at release.
 - **Vector nodes:** vector pen no longer multiplies stored nodes eightfold; configurable node reduction and right-click advanced options, Shift selection and box selection of multiple nodes with combined dragging.
-- **Sculpt / Finger:** new drag-to-deform tool with adjustable radius and strength, using local point sampling and smooth falloff. New Blender-like X/Y translation arrows appear on selected content, alongside existing scale and rotate handles.
+- **Sculpt / Finger:** new drag-to-deform tool with adjustable radius and strength, using local point sampling and smooth falloff. New external animation software-like X/Y translation arrows appear on selected content, alongside existing scale and rotate handles.
 - **Cursor customization:** Personalization includes brush cursor size, tool icon size and optional circular halo (off by default).
-- **Limitations:** Multi-node edit is an MVP, not full Blender Bezier-handle or Grease Pencil parity. Two-computer remote connectivity depends on Tailscale permissions and still requires physical UI QA.  
+- **Limitations:** Multi-node edit is an MVP, not full external animation software Bezier-handle or Grease Pencil parity. Two-computer remote connectivity depends on Tailscale permissions and still requires physical UI QA.  
 - **Tools reliability sprint (all 13 toolbar tools reviewed):** Bucket now fills enclosed complex/concave freehand loops with proper tessellation, grows color beneath visible outlines to avoid white halos, supports small ink-edge clicks, and exposes adjustable gap closure and optional all-visible-layer reference. Redrawing the same region changes its color on top of older fills.
 - **Erasers:** complete eraser detects long stroke segments even without nearby vertices; partial eraser clips lines at exact intersection points and both erasers sweep over fast pointer paths.
 - **Selection & Eyedropper:** precise geometry hit tests replace overly broad bounding boxes; eyedropper picks actual fill/line colors from the frontmost visible layer.
@@ -112,9 +120,9 @@
 - Online LAN preview: host the current project, find rooms on the local network, share a copyable 8-digit room code, enter code on LAN or direct IP, and see unique-color participants with names and self-reported levels in the right Layers dock. This is NOT an Internet-wide room directory or verified Google account system. Document-level edits now synchronize in protocol v3, subject to simultaneous-edit conflicts and real-PC QA.
 - Perspective settings: non-destructive overlay square grid, parallel lines, or single-point perspective with adjustable spacing, color, line thickness, opacity and vanishing point.
 - Persisted timeline panel height and adjustable dock separator (drag between Properties and Layers). Colors and Symmetry inspectors collapse to free space.
-- Rollback list now shows the immediate previous release separately from FIVE older releases without duplicating it.
-- **Version Backup / النسخة الاحتياطية:** open Settings → Previous Versions to return to the preceding official release or choose from the five latest eligible older GitHub builds, each showing its publication date. All downloads use the existing SHA-256-verified installer flow and require confirmation; unsaved projects block restart.
-- **Layers dock refresh:** wider resizable Krita-inspired sidebar with live stroke thumbnails, quick layer-name search, colored selection, stroke/frame metadata, guide-layer context action, and existing visibility, lock, rename, duplicate, delete, move, opacity controls. No Krita GPL code imported.
+- Rollback list now shows the immediate previous release separately from TEN older releases without duplicating it.
+- **Version Backup / النسخة الاحتياطية:** open Settings → Previous Versions to return to the preceding official release or choose from the ten latest eligible older GitHub builds, each showing its publication date. All downloads use the existing SHA-256-verified installer flow and require confirmation; unsaved projects block restart.
+- **Layers dock refresh:** wider resizable third-party drawing software-inspired sidebar with live stroke thumbnails, quick layer-name search, colored selection, stroke/frame metadata, guide-layer context action, and existing visibility, lock, rename, duplicate, delete, move, opacity controls. No third-party drawing software GPL code imported.
 - **Stick Online beta:** third option under Drawing and Animation. LAN-hosted rooms, optional password, participant limit, LAN discovery and manual direct IPv4 connection. Room-wide project edits, including layers and timeline, now flow through the host; Internet-wide discovery is not implemented. This preview is not end-to-end encrypted.
 - Art System: anime-style bilingual artist profile with editable display name, local avatar image and a level/rank progress bar. Progress formulas are not displayed.
 - Customizable workspace, cursor-anchored smooth zoom, transform rotation handle, draggable lasso selections, right-click tool choices and more versatile brush-tip geometry.
@@ -159,6 +167,12 @@
 
 ## العربية (المصري)
 
+### تحسينات فيديو الجلتشات (تجريبية)
+- تم ضبط سحب الصوت من أول ضغطة وحفظ Undo واحد عند تحريكه، ومنع سحب مساحة التايم لاين من مقاطعة سحب المسار.
+- الضغط والسحب فوق أرقام الفريمات يتيح التنقل المتصل، والرسومات خارج الورقة غير المدارة تتقص بصريًا في المعاينة.
+- روابط دعوة جديدة من الهوست لا تتضمن كلمات سر؛ وZeroTier كاختيار إضافي مع استمرار LAN وTailscale.
+- **ملاحظة:** الدعوة ليست سيرفر عالميًا ولا تتجاوز حجب الراوتر. اتصال TCP المباشر غير مشفّر طرف لطرف، وتجربة جهازين ما زالت مطلوبة.
+
 ### تحديث Work المجمع — خصائص تجريبية
 - تم تجميع خمس حزم: تحسين نعومة الفيكتور، وتنعيم مسارات الفرش مع الضغط، وتخصيص حدود الكانفا والمقاسات، وتايم لاين متقدم لتحريك ونسخ الكي فريمات، وخمس فرش جديدة.
 - التصميم القديم للتايم لاين وملفات المشاريع القديمة ما زال مدعومًا، لكن يُفضّل اختبار نسخة احتياطية من أي مشروع مهم.
@@ -172,7 +186,7 @@
 ### المشاكل اللي اتصلحت
 - **الصور والفيديو:** بقى ممكن تحديد الصور وفريمات الفيديو، تحريكها وتدويرها وتغيير مقاسها وقلبها من أدوات التحديد والخصائص، والتحويل يظهر كمان في التصدير.
 - **الصوت:** مسارات صوت بموجات واضحة تحت الفريمات، والسحب لتغيير البداية، والتحكم في التوقيت ومستوى الصوت والكتم من خصائص اليمين.
-- **الدلو:** Precision وDilate/Contract وThickness بضوابط آمنة على خوارزمية التعبئة الخاصة بـStick؛ مستوحاة من بلندر وليست نفس الكود.
+- **الدلو:** Precision وDilate/Contract وThickness بضوابط آمنة على خوارزمية التعبئة الخاصة بـStick؛ مستوحاة من برامج أنيميشن أخرى وليست نفس الكود.
 - **الأداء:** تخفيف استهلاك ذاكرة كارت الشاشة بعدم تخزين كل فريمات الفيديو المفتوحة كمجموعة خامات دائمة. ملفات الوسائط الخارجية لازم تفضل موجودة.
 
 - القطّارة بتختار من الطبقة الظاهرة في الأمام وبتفرّق بين لون حدود الشكل وتعبئته. الممحاة الجزئية بتمسح نقطة الفرشة لما تلمس حافتها.
@@ -190,7 +204,7 @@
 - **الواجهة:** إخفاء وإظهار الجنبين والشريط العلوي والتايم لاين من التخصيص، وتجديد صفوف الطبقات وشكل الخط الزمني.
 - **النصوص:** محرر نص متعدد الأسطر مع معاينة عربية متصلة، ورسم النصوص في التصدير باستخدام خط محلي من Windows.
 - **التوافق:** حفظ الإعدادات والبروفايل في مجلد المستخدم القابل للكتابة مع استيراد الملفات القديمة، وفرش المشاريع القديمة تفضل دائرية تلقائيًا.
-- **القيود الحالية:** الدلو بيلون المسارات المقفولة اللي بيتعرف عليها، ولسه مش Flood Fill كامل على أي سطح Raster. لم يتم نسخ أكواد Krita الخاضعة لترخيص GPL.
+- **القيود الحالية:** الدلو بيلون المسارات المقفولة اللي بيتعرف عليها، ولسه مش Flood Fill كامل على أي سطح Raster. لم يتم نسخ أكواد third-party drawing software الخاضعة لترخيص GPL.
 
 ### إيه الجديد؟
 - فرشتا DryBrush وChalk بتضيفا أثر شعيرات وحبيبات بيتغيّر مع ضغط القلم، وبيظهر بنفس النمط بعد الحفظ وفي تصدير الصور.
@@ -219,7 +233,7 @@
 - **الفيكتور:** عدد نقاط أقل في الرسم الجديد، تحكم في نسبة تقليلها من كلك يمين، وتحديد Shift أو مربع تحديد لنقل نقاط متعددة.
 - **أداة النحت / الصباع:** حركة مرنة لجزء من الخط بالحجم والقوة اللي تختارهم؛ وأسهم X/Y جديدة لتحريك العنصر المحدد أفقيًا أو رأسيًا زي واجهات 3D.
 - **التخصيص:** تكبير/تصغير مؤشر الفرشة وأيقونة الأداة بجوار الماوس، وإمكانية إخفاء أو إظهار الدائرة المحيطة (مقفولة افتراضيًا).
-- **ملاحظة:** ما زال مطلوب اختبار عملي على جهازين Windows، والفيكتور مش نسخة كاملة من Bézier/Grease Pencil في Blender.
+- **ملاحظة:** ما زال مطلوب اختبار عملي على جهازين Windows، والفيكتور مش نسخة كاملة من Bézier/Grease Pencil في external animation software.
 - **تحديث تطوير أدوات الرسم:** راجعنا الأدوات الـ13؛ أصلحنا الدلو مع الحلقات والخطوط المتقاطعة والأشكال المقعّرة، وخفّفنا الفراغات البيضا بين التلوين وحدود الخط. اتضاف قفل فجوات قابل للتعديل وخيار استخدام حدود كل الليرات الظاهرة.
 - **الممحاة الكاملة والجزئية:** بقوا بيحسبوا تقاطع الممحاة مع الخط نفسه وبيمسحوا أثناء الحركة السريعة، حتى لو مفيش نقاط خط تحت المؤشر بالضبط.
 - **التحديد والقطارة:** الضغط على الخطوط بقى أدق، والقطارة بتجيب ألوان الخط أو التعبئة من أعلى لاير ظاهر.
@@ -236,9 +250,9 @@
 - أونلاين تجريبي على نفس الشبكة: الهوست بيشارك المشروع الحالي، وكود غرفة من 8 أرقام سهل النسخ، والانضمام بالكود محليًا أو IP، وقائمة بأسماء المشاركين ومستوياتهم اللي بيبلغوا بيها وألوانهم. ده مش دليل غرف عالمي، ولا تسجيل دخول Google معتمد؛ مزامنة الأدوات غير الرسم الجديد لسه مش كاملة.
 - خانة المنظور: شبكة مربعات أو خطوط متساوية أو منظور بنقطة تلاشي، مع التحكم في المسافة واللون والشفافية والسمك ومكان نقطة التلاشي. الخطوط مساعدة ومش بتدخل في التصدير.
 - التايم لاين يقدر يتمدد ويتحفظ ارتفاعه، وقسم الخصائص والليرز في اليمين بينهم فاصل قابل للسحب، وقسم الألوان والتماثل قابل للفتح والقفل.
-- رجوع النسخ الاحتياطية بقى يعرض النسخة السابقة منفصلة عن خمس نسخ أقدم منها، من غير تكرار.
-- **النسخة الاحتياطية:** خانة جديدة في ترس الإعدادات، تقدر ترجع منها لآخر إصدار أقدم أو تختار من 5 إصدارات قديمة متاحة بتاريخ نشر كل واحد. البرنامج بيتأكد من سلامة ملف EXE ببصمة SHA-256 وبيطلب تأكيد، ومش بيقفل لو في شغل لسه متحفظش.
-- **لوحة الليرز:** مساحة أوسع قابلة للتمدد شبه برامج الرسم الاحترافية، ومعاينة فعلية صغيرة من خطوط كل لير، وبحث بالاسم، ومعلومات عن عدد الفريمات والخطوط، وخيارات للكليك يمين، بالإضافة لأزرار القفل والإظهار والنسخ والترتيب والشفافية. الكود مكتوب لـStick من غير نقل كود Krita.
+- رجوع النسخ الاحتياطية بقى يعرض النسخة السابقة منفصلة عن عشر نسخ أقدم منها، من غير تكرار.
+- **النسخة الاحتياطية:** خانة جديدة في ترس الإعدادات، تقدر ترجع منها لآخر إصدار أقدم أو تختار من 10 إصدارات قديمة متاحة بتاريخ نشر كل واحد. البرنامج بيتأكد من سلامة ملف EXE ببصمة SHA-256 وبيطلب تأكيد، ومش بيقفل لو في شغل لسه متحفظش.
+- **لوحة الليرز:** مساحة أوسع قابلة للتمدد شبه برامج الرسم الاحترافية، ومعاينة فعلية صغيرة من خطوط كل لير، وبحث بالاسم، ومعلومات عن عدد الفريمات والخطوط، وخيارات للكليك يمين، بالإضافة لأزرار القفل والإظهار والنسخ والترتيب والشفافية. الكود مكتوب لـStick من غير نقل كود third-party drawing software.
 - **أونلاين تجريبي:** اختيار جديد في شاشة البداية للرسم أو الأنيميشن سوا، مع غرف محلية وكلمة سر اختيارية وحد أقصى للأعضاء، وإظهار الغرف على نفس الشبكة أو الدخول بعنوان IP. مزامنة الخطوط الجديدة متاحة؛ التايم لاين والليرز مش متزامنين بالكامل، ومفيش دليل عالمي بالغرف أو تشفير كامل لسه.
 - نظام الفنان (Art System) الجديد: شكل أنمي مع اسم تقدر تعدّله، وصورة شخصية من جهازك، وشريط المستوى والرتبة. تفاصيل احتساب التقدم مش ظاهرة.
 - تخصيص مساحة الرسم، زووم ناحية الماوس، سهم تدوير حر للتحديد، تحريك التحديد الحر، وقائمة كليك يمين للأدوات، وست أشكال لرأس الفرشة.
@@ -286,15 +300,15 @@
 ## Known limits / حدود النسخة التجريبية
 
 - Bucket fill currently supports **closed vector shapes**. A genuine raster flood-fill brush-painted region is still being designed: https://github.com/KaniEGY/Stick/issues/15
-- Krita/Blender brush asset importing isn't shipping in this update; source formats/licenses and engine work are tracked here: https://github.com/KaniEGY/Stick/issues/14
+- external drawing programs brush asset importing isn't shipping in this update; source formats/licenses and engine work are tracked here: https://github.com/KaniEGY/Stick/issues/14
 - This public build is for testing. Save backups of important projects and report problems via GitHub Issues.
 
 - **مهم:** البوكت دلوقتي بيملأ الأشكال الفيكتور المقفولة بس. تلوين أي مساحة مرسومة بالفرشة محتاج محرك Raster مستقل.
-- فرش Krita وBlender الأصلية لسه ما اتضافتش. هنستورد اللي ترخيصه يسمح بعد ما نجهز محرك فرش حقيقي ومتوافق.
+- فرش third-party drawing software وexternal animation software الأصلية لسه ما اتضافتش. هنستورد اللي ترخيصه يسمح بعد ما نجهز محرك فرش حقيقي ومتوافق.
 
 ### Technical limitations / حدود مهمة
 - Bucket fill supports **closed drawn contours**, not full multi-layer pixel flood fill with tolerance; that is planned in Issue #15.
 - The 100 level-up sounds are **lightweight synthesized patterns**, not bundled third-party sound files.
 - The 1,000 level-up lines are 40 independently authored openings combined with 25 endings in each language.
-- This release does not copy GPL code or artwork from Krita or Blender; full brush-engine integration remains Issue #14.
+- This release does not copy GPL code or artwork from third-party drawing software or external animation software; full brush-engine integration remains Issue #14.
 - رتب وترقيات Hunter دي للمتعة والتشجيع بس؛ مالهاش تأثير على ملفات الرسم أو جودة التصدير.

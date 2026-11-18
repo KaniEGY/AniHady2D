@@ -29,6 +29,7 @@ mod cursor_sync;
 mod cloud_sync;
 mod project_sync;
 mod remote_access;
+mod online_invite;
 mod transform_handles;
 mod media_transform;
 mod audio_timeline;
@@ -1019,7 +1020,7 @@ fn draw_gear_icon(painter: &egui::Painter, rect: egui::Rect, scale: f32) {
     }
 }
 
-fn draw_anicraft_timeline_cell(painter: &egui::Painter, rect: egui::Rect, is_keyframe: bool, has_content: bool, tween_mode: TweenMode) {
+fn draw_stick_timeline_cell(painter: &egui::Painter, rect: egui::Rect, is_keyframe: bool, has_content: bool, tween_mode: TweenMode) {
     let c = rect.center();
     match tween_mode {
         TweenMode::Classic => {
@@ -1120,6 +1121,8 @@ struct StickApp {
     online_password: String,
     online_capacity: usize,
     online_address: String,
+    online_invite_input: String,
+    online_share_address: String,
     online_code_input: String,
     online_participants: Vec<Participant>,
     online_rooms: Vec<RoomListing>,
@@ -1155,6 +1158,9 @@ struct StickApp {
     editing_symbol_name: Option<String>,
     selected_audio_idx: Option<usize>,
     audio_drag_origin: Option<(usize,usize)>,
+    audio_drag_pointer_x: Option<f32>,
+    audio_drag_undo_captured: bool,
+    timeline_scrub_active: bool,
     active_tool_ui: ActiveToolUI,
     active_krita_brush: KritaBrushPreset,
     brush_opacity: f32,
@@ -1281,6 +1287,8 @@ impl StickApp {
             online_password: String::new(),
             online_capacity: 4,
             online_address: String::new(),
+            online_invite_input: String::new(),
+            online_share_address: String::new(),
             online_code_input: String::new(),
             online_participants: Vec::new(),
             online_rooms: Vec::new(),
@@ -1316,6 +1324,9 @@ impl StickApp {
             editing_symbol_name: None,
             selected_audio_idx: None,
             audio_drag_origin: None,
+            audio_drag_pointer_x: None,
+            audio_drag_undo_captured: false,
+            timeline_scrub_active: false,
             active_tool_ui: ActiveToolUI::Brush,
             active_krita_brush: KritaBrushPreset::GPenInk,
             brush_opacity: 1.0,
@@ -1911,12 +1922,54 @@ impl StickApp {
                         }
                         ui.add_space(12.0);
                         ui.separator();
+                        ui.group(|ui| {
+                            ui.strong(tr(lang,"Join via invitation","الدخول برابط دعوة"));
+                            ui.small(tr(lang,
+                                "Paste your friend's Stick invite. No room password is stored in the link.",
+                                "الصق رابط دعوة صاحبك. الرابط لا يحتوي على كلمة سر الغرفة."));
+                            ui.add(egui::TextEdit::singleline(&mut self.online_invite_input)
+                                .desired_width(390.0)
+                                .hint_text("stick://join?address=...&code=...&mode=drawing"));
+                            ui.add(egui::TextEdit::singleline(&mut self.online_password)
+                                .password(true).desired_width(250.0)
+                                .hint_text(tr(lang,"Room password if required","كلمة سر الغرفة لو موجودة")));
+                            if ui.add_enabled(self.online_session.is_none(),
+                                egui::Button::new(tr(lang,"Join invitation","الدخول بالدعوة"))).clicked() {
+                                match online_invite::parse_invite(&self.online_invite_input) {
+                                    Ok(invite) => {
+                                        self.online_address=invite.address;
+                                        self.online_code_input=invite.code;
+                                        self.online_mode=if invite.animation {
+                                            OnlineMode::Animation
+                                        } else {OnlineMode::Drawing};
+                                        let nickname=self.user_profile.username.trim().to_owned();
+                                        let level=self.user_profile.get_level_progress().0;
+                                        match OnlineSession::join_room(self.online_address.clone(),
+                                            self.online_password.clone(),
+                                            if nickname.is_empty() {"Artist".into()} else {nickname},
+                                            level,self.online_mode) {
+                                            Ok(session) => {
+                                                self.online_session=Some(session);
+                                                self.online_message=tr(lang,
+                                                    "Connecting using invite...","جاري الاتصال برابط الدعوة...").into();
+                                            }
+                                            Err(error)=>self.online_message=error,
+                                        }
+                                    }
+                                    Err(reason)=>self.online_message=reason.into(),
+                                }
+                            }
+                            ui.small(tr(lang,
+                                "An invitation requires a reachable host. LAN, authorized private networks or public IPv4 with port forwarding are supported; this is not a global relay.",
+                                "لازم عنوان الهوست يكون قابل للوصول. LAN أو شبكة خاصة مسموحة أو IP عام مع فتح البورت؛ الدعوة مش سيرفر وسيط عالمي."));
+                        });
+                        ui.add_space(10.0);
                         ui.strong(tr(lang,"Join directly","الدخول المباشر"));
                         ui.small(tr(lang,
                             "Enter the host's 100.x.x.x:47554 (Tailscale) or LAN IP. A room code alone isn't a global invite.",
                             "حط عنوان الهوست 100.x.x.x:47554 من Tailscale، أو عنوانه على نفس الشبكة."));
                         ui.add(egui::TextEdit::singleline(&mut self.online_address)
-                            .desired_width(325.0).hint_text("100.74.20.10:47554"));
+                            .desired_width(325.0).hint_text("192.168.1.5:47554 / host.example.com:47554"));
                         ui.add(egui::TextEdit::singleline(&mut self.online_password).password(true)
                             .desired_width(325.0).hint_text(tr(lang,
                                 "Password (only if required)","كلمة السر (لو موجودة)")));
@@ -1963,6 +2016,14 @@ impl StickApp {
                                 }
                             });
                             ui.hyperlink_to("Tailscale", "https://tailscale.com/download");
+                            ui.separator();
+                            ui.strong(tr(lang,
+                                "Alternative private network: ZeroTier",
+                                "شبكة خاصة بديلة: ZeroTier"));
+                            ui.small(tr(lang,
+                                "If both PCs join the same authorized ZeroTier network, enter the host's assigned IPv4 in Direct Join or in an invite. This is optional and LAN/Tailscale still work.",
+                                "لو الجهازين على نفس شبكة ZeroTier المصرح بيها، استخدم IPv4 الخاص بالهوست في الدخول المباشر أو رابط الدعوة. LAN وTailscale مستمرين."));
+                            ui.hyperlink_to("ZeroTier","https://www.zerotier.com/download/");
                             ui.small(tr(lang,
                                 "The host must keep Stick open; both devices must be permitted to reach each other. TCP 47554 must be allowed in the host firewall. Do not disable the firewall.",
                                 "لازم صاحب الغرفة يسيب Stick شغال، والأجهزة تكون مسموح لها تتواصل. اسمح لـStick ببورت TCP 47554 في جدار حماية الهوست، من غير تعطيل الحماية."));
@@ -3077,16 +3138,16 @@ impl StickApp {
                             "٣. على نفس الشبكة، أصحابك يقدروا يدخلوا من قائمة الغرف أو العنوان. كود الـ٨ أرقام مش دليل بحث عالمي عن الغرف."));
                         ui.add_space(6.0);
                         ui.label(tr(lang,
-                            "4. For friends on different networks, use an authorized Tailscale connection and enter the host's 100.x address (TCP port 47554).",
-                            "٤. لو على شبكات مختلفة، استخدموا Tailscale المسموح بين الأجهزة، واكتبوا عنوان الهوست 100.x (بورت TCP 47554)."));
+                            "4. NEW: While hosting, use Invite link to copy a safe connection link (no password). Friends can paste it in Join Room. LAN and existing Tailscale joins still work.",
+                            "٤. جديد: من غرفة الهوست انسخ رابط الدعوة بدون كلمة السر، وصاحبك يلصقه في الدخول. LAN وTailscale لسه شغالين."));
                         ui.add_space(6.0);
                         ui.label(tr(lang,
-                            "5. Keep the host PC running. The host can manage participants, shared tool colors and resync the project.",
-                            "٥. لازم جهاز الهوست يفضل شغال. الهوست يقدر يدير الأعضاء وألوانهم ويزامن المشروع."));
+                            "5. On different networks, ZeroTier is an optional alternative to Tailscale when both PCs join the same trusted virtual network. Direct public IPv4/DNS requires a reachable TCP port 47554.",
+                            "٥. على شبكات مختلفة ينفع ZeroTier بدل Tailscale لو الجهازين متصلين بنفس الشبكة الخاصة. الدخول المباشر عبر IP عام أو DNS محتاج وصول لبورت TCP 47554."));
                         ui.add_space(6.0);
                         ui.label(tr(lang,
-                            "6. Use matching Stick versions. Cursor sync and drawing protocol v5 require compatible peers.",
-                            "٦. لازم كل الأجهزة تستخدم نسخ متوافقة من Stick؛ تحريك المؤشر والرسم محتاجين بروتوكول v5."));
+                            "6. Keep the host open and use matching Stick versions. A room code or invitation is not a global rendezvous or NAT traversal relay.",
+                            "٦. خليك فاتح الهوست واستخدموا نسخ Stick متوافقة. كود الغرفة أو رابط الدعوة مش سيرفر بحث عالمي ومش بيتجاوز حجب الراوتر."));
                         ui.add_space(8.0);
                         ui.colored_label(egui::Color32::from_rgb(255,204,105),tr(lang,
                             "Security: direct LAN traffic is not end-to-end encrypted by Stick. Do not disable your firewall. Allow TCP 47554 and UDP 47553 only as appropriate.",
@@ -3390,7 +3451,7 @@ impl StickApp {
                 ui.add(egui::Slider::new(&mut self.bucket_gap_close, 0.0..=12.0)
                     .text(tr(lang, "Close small gaps", "قفل الفجوات الصغيرة")));
                 ui.separator();
-                ui.strong(tr(lang, "Blender-inspired fill controls", "خصائص تعبئة مستوحاة من بلندر"));
+                ui.strong(tr(lang, "Advanced fill controls", "إعدادات التعبئة المتقدمة"));
                 ui.add(egui::Slider::new(&mut self.bucket_precision, 0.5..=2.5)
                     .text(tr(lang, "Precision", "الدقة")));
                 ui.add(egui::Slider::new(&mut self.bucket_dilate_contract, -12.0..=12.0)
@@ -4365,7 +4426,7 @@ impl eframe::App for StickApp {
                                         });
                                         ui.add_space(10.0);
                                         ui.label(egui::RichText::new(tr(lang,
-                                            "Five versions before the previous release", "آخر 5 نسخ قبل النسخة السابقة")).strong());
+                                            "Ten versions before the previous release", "آخر 10 نسخ قبل النسخة السابقة")).strong());
                                         egui::ScrollArea::vertical().max_height(205.0).show(ui, |ui| {
                                             for (index, release) in releases.iter().skip(1).enumerate() {
                                                 ui.horizontal(|ui| {
@@ -4772,6 +4833,30 @@ impl eframe::App for StickApp {
                             tr(lang, "Copy room code", "نسخ كود الغرفة")).clicked() {
                             ui.output_mut(|out| out.copied_text = code.clone());
                         }
+                        ui.menu_button(tr(lang,"🔗 Invite link","🔗 رابط الدعوة"),|ui| {
+                            ui.set_min_width(365.0);
+                            ui.strong(tr(lang,"Share an invitation without your room password",
+                                "شارك دعوة الغرفة من غير كلمة السر"));
+                            ui.add(egui::TextEdit::singleline(&mut self.online_share_address)
+                                .desired_width(340.0)
+                                .hint_text(format!("{} (LAN)",address)));
+                            ui.small(tr(lang,
+                                "Use a reachable LAN address, ZeroTier/Tailscale IPv4 or public IPv4/DNS. For Internet direct connections, TCP 47554 must be reachable.",
+                                "اكتب عنوان LAN أو عنوان ZeroTier/Tailscale أو IP عام/DNS. للاتصال من الإنترنت لازم TCP 47554 يكون مفتوح وقابل للوصول."));
+                            let target=if self.online_share_address.trim().is_empty(){
+                                address.as_str()
+                            } else {self.online_share_address.trim()};
+                            match online_invite::make_invite(target,&code,
+                                self.online_mode==OnlineMode::Animation) {
+                                Ok(invite)=>{
+                                    if ui.button(tr(lang,"Copy invitation","نسخ الدعوة")).clicked(){
+                                        ui.output_mut(|out|out.copied_text=invite);
+                                        ui.close_menu();
+                                    }
+                                }
+                                Err(reason)=>{ui.colored_label(egui::Color32::YELLOW,reason);}
+                            }
+                        });
                         ui.menu_button(tr(lang, "Host controls", "إدارة الغرفة"), |ui| {
                             ui.set_min_width(300.0);
                             ui.label(egui::RichText::new(tr(lang,
@@ -5556,6 +5641,12 @@ impl eframe::App for StickApp {
         let mut audio_move_request: Option<(usize, usize)> = None;
         let mut audio_drag_started = false;
         let mut timeline_seek = None;
+        if !pointer_down {
+            self.audio_drag_origin=None;
+            self.audio_drag_pointer_x=None;
+            self.audio_drag_undo_captured=false;
+            self.timeline_scrub_active=false;
+        }
         let mut timeline_visibility_toggle: Option<usize> = None;
         let mut timeline_lock_toggle: Option<usize> = None;
         let mut timeline_layer_rename: Option<usize> = None;
@@ -5698,7 +5789,8 @@ impl eframe::App for StickApp {
                         "Ctrl أو Shift مع الضغط لتحديد أكتر من كي فريم. اسحب للنقل، وAlt مع السحب للنسخ. الصوت مش بيتحرك."));
                 }
                 let can_delete_global = self.timeline_length > 1 && self.project.layers.iter().all(|layer| !layer.locked);
-                egui::ScrollArea::both().id_salt("timeline_frame_scroller").show(ui, |ui| {
+                egui::ScrollArea::both().id_salt("timeline_frame_scroller")
+                    .drag_to_scroll(false).show(ui, |ui| {
                     ui.horizontal(|ui| {
                         ui.allocate_ui(egui::vec2(label_w, header_h), |ui| {
                             ui.strong(egui::RichText::new(
@@ -5732,7 +5824,11 @@ impl eframe::App for StickApp {
                                         egui::FontId::proportional(11.0), egui::Color32::WHITE);
                                 }
                             }
-                            if resp.clicked() || (pointer_down && resp.hovered()) {
+                            if pointer_pressed && pointer_pos.is_some_and(|pos| r.contains(pos)) {
+                                self.timeline_scrub_active=true;
+                            }
+                            if resp.clicked() || (self.timeline_scrub_active && pointer_down
+                                && pointer_pos.is_some_and(|pos| r.contains(pos))) {
                                 timeline_seek = Some((self.active_layer_idx, f));
                             }
                         }
@@ -5827,7 +5923,7 @@ impl eframe::App for StickApp {
                                         egui::Stroke::new(2.0, egui::Color32::from_rgb(255, 202, 65))
                                     );
                                 }
-                                if !is_b { draw_anicraft_timeline_cell(ui.painter(), cr, is_kf, has_d, tw); }
+                                if !is_b { draw_stick_timeline_cell(ui.painter(), cr, is_kf, has_d, tw); }
                                 }
                                 if cresp.clicked() {
                                     timeline_seek = Some((l_idx, f));
@@ -5968,23 +6064,34 @@ impl eframe::App for StickApp {
                                         egui::pos2(x,clip.center().y+height*0.5)
                                     ],egui::Stroke::new(2.0,palette));
                                 }
-                                if resp.drag_started() && resp.interact_pointer_pos()
-                                    .is_some_and(|pos| clip.contains(pos)) {
+                                // Capture the initial pointer press, before egui's
+                                // drag threshold. Otherwise a short audio clip can
+                                // slip out from under the pointer before drag_started().
+                                if pointer_pressed && pointer_pos.is_some_and(|pos|clip.contains(pos)) {
                                     self.audio_drag_origin=Some((audio_index,track.start_frame));
-                                    audio_drag_started=true;
+                                    self.audio_drag_pointer_x=pointer_pos.map(|pos|pos.x);
+                                    self.audio_drag_undo_captured=false;
                                     self.selected_audio_idx=Some(audio_index);
+                                    self.config.show_right_dock=true;
                                 }
-                                if resp.dragged() {
+                                if pointer_down {
                                     if let Some((drag_index,origin))=self.audio_drag_origin {
                                         if drag_index==audio_index {
-                                            let shift=(resp.drag_delta().x/cell_w).round() as i64;
-                                            let start=(origin as i64+shift)
-                                                .clamp(1,timeline_ops::MAX_TIMELINE_FRAMES as i64) as usize;
-                                            audio_move_request=Some((audio_index,start));
+                                            if let (Some(pos),Some(press_x))=(pointer_pos,self.audio_drag_pointer_x) {
+                                                let start=audio_timeline::drag_target_frame(
+                                                    origin,pos.x-press_x,cell_w,
+                                                    timeline_ops::MAX_TIMELINE_FRAMES).unwrap_or(origin);
+                                                if start != track.start_frame {
+                                                    audio_move_request=Some((audio_index,start));
+                                                    if !self.audio_drag_undo_captured {
+                                                        audio_drag_started=true;
+                                                        self.audio_drag_undo_captured=true;
+                                                    }
+                                                }
+                                            }
                                         }
                                     }
                                 }
-                                if resp.drag_stopped() { self.audio_drag_origin=None; }
                                 if resp.clicked() && resp.interact_pointer_pos()
                                     .is_some_and(|pos|clip.contains(pos)) {
                                     self.selected_audio_idx=Some(audio_index);
@@ -6836,6 +6943,15 @@ impl eframe::App for StickApp {
 
             self.last_pointer_pos = if pointer_down { pointer_pos } else { None };
 
+            // Keep artwork, ghosts and media inside the paper bounds when the
+            // view is axis-aligned. This is a display-only clip and never
+            // modifies stored strokes or exports. When the paper is rotated,
+            // egui's rectangular scissor cannot accurately clip its polygon.
+            let paper_clip = if self.canvas_rotation_deg.abs() < 0.001 {
+                stage_rect.intersect(canvas_rect)
+            } else { canvas_rect };
+            let paper_painter=painter.with_clip_rect(paper_clip);
+
             // Real Onion Skin preview: faint past/future drawings behind
             // the current frame. Only active in Animation workspace. No
             // changes to saved data and never exported as actual artwork.
@@ -6861,7 +6977,7 @@ impl eframe::App for StickApp {
                         let ghost_data = self.project.evaluate_layer_at_frame(layer, ghost.frame);
                         for stroke in &ghost_data.strokes {
                             draw_stroke_pro(
-                                &painter, stroke, Some(tint), layer_opacity,
+                                &paper_painter, stroke, Some(tint), layer_opacity,
                                 scale, 0.0, 0.0, &to_screen,
                             );
                         }
@@ -6872,7 +6988,7 @@ impl eframe::App for StickApp {
                                     // More complex transforms will be unified with the
                                     // shared compositor in a later milestone.
                                     draw_stroke_pro(
-                                        &painter, stroke, Some(tint), layer_opacity,
+                                        &paper_painter, stroke, Some(tint), layer_opacity,
                                         scale, instance.x, instance.y, &to_screen,
                                     );
                                 }
@@ -6899,14 +7015,14 @@ impl eframe::App for StickApp {
                                     pos: to_screen(egui::pos2(x,y)), uv, color: tint });
                             }
                             mesh.indices.extend_from_slice(&[0, 1, 2, 0, 2, 3]);
-                            painter.add(egui::Shape::mesh(mesh));
+                            paper_painter.add(egui::Shape::mesh(mesh));
                         }
                     }
-                    for s in &fd.strokes { draw_stroke_pro(&painter, s, None, l_op, scale, 0.0, 0.0, &to_screen); }
+                    for s in &fd.strokes { draw_stroke_pro(&paper_painter, s, None, l_op, scale, 0.0, 0.0, &to_screen); }
                     for txt in &fd.text_items {
                         let tint = egui::Color32::from_rgba_unmultiplied(txt.color[0], txt.color[1],
                             txt.color[2], (txt.color[3] as f32 * l_op) as u8);
-                        let galley = painter.layout_no_wrap(
+                        let galley = paper_painter.layout_no_wrap(
                             fix_ar(&txt.content),
                             egui::FontId::proportional(txt.font_size * scale),
                             tint,
@@ -6914,7 +7030,7 @@ impl eframe::App for StickApp {
                         let text_shape = egui::epaint::TextShape::new(
                             to_screen(egui::pos2(txt.x, txt.y)), galley, tint,
                         ).with_angle(self.canvas_rotation_deg.to_radians());
-                        painter.add(egui::Shape::Text(text_shape));
+                        paper_painter.add(egui::Shape::Text(text_shape));
                     }
                 }
             }
@@ -7049,14 +7165,14 @@ impl eframe::App for StickApp {
                     }
                 }
             }
-            if let Some(stroke) = &self.current_stroke { draw_stroke_pro(&painter, stroke, None, 1.0, scale, 0.0, 0.0, &to_screen); }
+            if let Some(stroke) = &self.current_stroke { draw_stroke_pro(&paper_painter, stroke, None, 1.0, scale, 0.0, 0.0, &to_screen); }
             if let (Some(p0), Some(p1)) = (self.shape_drag_start, self.shape_drag_current) {
                 let mut shape = build_geometric_stroke(self.selected_shape_kind, p0, p1, self.brush_color, self.brush_size);
                 shape.opacity = self.brush_opacity;
                 if self.shape_fill_enabled && self.selected_shape_kind != GeometricShapeKind::StraightLine {
                     shape.fill_color = Some(self.brush_color);
                 }
-                draw_stroke_pro(&painter, &shape, None, 1.0, scale, 0.0, 0.0, &to_screen);
+                draw_stroke_pro(&paper_painter, &shape, None, 1.0, scale, 0.0, 0.0, &to_screen);
             }
             // Display chrome only, intentionally excluded from all exports.
             canvas_appearance::draw_chrome(&painter,stage_w,stage_h,scale,
