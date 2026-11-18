@@ -4585,6 +4585,8 @@ impl eframe::App for StickApp {
                     captured_key = Some(key.name().to_string());
                 }
             }
+            if captured_key.is_none() && i.modifiers.alt { captured_key = Some("Alt".to_string()); }
+            if captured_key.is_none() && i.modifiers.ctrl { captured_key = Some("Ctrl".to_string()); }
             if captured_key.is_none() && i.modifiers.shift { captured_key = Some("Shift".to_string()); }
             let z_in = (i.modifiers.ctrl && i.key_down(egui::Key::ArrowUp)) || (!i.modifiers.ctrl && !i.modifiers.alt && i.key_down(egui::Key::W));
             let z_out = (i.modifiers.ctrl && i.key_down(egui::Key::ArrowDown)) || (!i.modifiers.ctrl && !i.modifiers.alt && i.key_down(egui::Key::S));
@@ -4677,6 +4679,9 @@ impl eframe::App for StickApp {
                 10 => self.config.tool_text = k_name,
                 11 => self.config.tool_shape = k_name,
                 12 => self.config.tool_hand = k_name,
+                100 => self.config.quick_color_key = k_name,
+                101 => self.config.size_gesture_key = k_name,
+                102 => self.config.opacity_gesture_key = k_name,
                 _ => {}
             }
             self.config.save();
