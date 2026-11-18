@@ -196,8 +196,31 @@ pub fn apply_shape_fill(strokes: &mut [Stroke], x: f32, y: f32, color: [u8; 4]) 
 /// back to a vector polygon. The resulting fill stays BELOW the linework.
 /// This is an independently implemented adaptation of the general method
 /// described in AniCraft's permissively licensed paint-bucket documentation.
+/// Blender-inspired controls adapted to Stick's bounded vector-region solver.
+/// Precision changes the raster sampling resolution, Thickness expands the
+/// temporary boundary mask and Dilate/Contract adjusts color under the ink.
+#[derive(Clone, Copy, Debug)]
+pub struct FillOptions {
+    pub precision: f32,
+    pub dilate_contract: f32,
+    pub boundary_thickness: f32,
+}
+
+impl Default for FillOptions {
+    fn default() -> Self {
+        Self { precision: 1.0, dilate_contract: 0.0, boundary_thickness: 0.0 }
+    }
+}
+
 pub fn flood_fill_polygon(
     strokes: &[Stroke], point: (f32, f32), canvas: (f32, f32), gap: f32,
+) -> Option<Vec<StrokePoint>> {
+    flood_fill_polygon_with_options(strokes, point, canvas, gap, FillOptions::default())
+}
+
+pub fn flood_fill_polygon_with_options(
+    strokes: &[Stroke], point: (f32, f32), canvas: (f32, f32), gap: f32,
+    options: FillOptions,
 ) -> Option<Vec<StrokePoint>> {
     use std::collections::{HashMap, VecDeque};
     let (cw, ch) = canvas;
@@ -206,7 +229,9 @@ pub fn flood_fill_polygon(
         || !sx.is_finite() || !sy.is_finite() || sx < 0.0 || sy < 0.0
         || sx >= cw || sy >= ch || strokes.is_empty() { return None; }
     // Limit memory and the number of points independently from canvas size.
-    let cell = (cw.max(ch) / 1200.0).max(0.5);
+    let precision = if options.precision.is_finite() { options.precision.clamp(0.5, 2.5) } else { 1.0 };
+    let min_cell = ((cw * ch) / 1_800_000.0).sqrt().max(0.5);
+    let cell = ((cw.max(ch) / 1200.0) / precision).max(min_cell);
     let w = (cw / cell).ceil() as usize + 4;
     let h = (ch / cell).ceil() as usize + 4;
     if w.checked_mul(h)? > 2_000_000 { return None; }
@@ -223,7 +248,8 @@ pub fn flood_fill_polygon(
         if stroke.color[3] == 0 { continue; }
         segment_budget = segment_budget.saturating_add(stroke.points.len());
         if segment_budget > 250_000 { return None; }
-        let r = ((stroke.base_width.abs() * 0.5 + gap.clamp(0.0, 14.0)) / cell)
+        let thickness = if options.boundary_thickness.is_finite() { options.boundary_thickness.clamp(0.0, 20.0) } else { 0.0 };
+        let r = ((stroke.base_width.abs() * 0.5 + gap.clamp(0.0, 14.0) + thickness * 0.5) / cell)
             .clamp(1.15, 9.0);
         let r2 = r * r;
         for pair in stroke.points.windows(2) {
@@ -314,8 +340,9 @@ pub fn flood_fill_polygon(
     // leaves a white hairline between the color and the visible brush.
     // Grow the selected component INTO wall cells only, never into another
     // transparent component: a center divider therefore remains a barrier.
-    let grow_steps = ((gap.clamp(0.0, 14.0) + 1.5) / cell).ceil()
-        .clamp(1.0, 20.0) as usize;
+    let dilate = if options.dilate_contract.is_finite() { options.dilate_contract.clamp(-12.0, 12.0) } else { 0.0 };
+    let grow_steps = ((gap.clamp(0.0, 14.0) + 1.5 + dilate.max(0.0)) / cell).ceil()
+        .clamp(1.0, 32.0) as usize;
     let mut covered = visited.clone();
     let mut boundary = VecDeque::<(usize, usize)>::new();
     for index in 0..size {
@@ -340,6 +367,27 @@ pub fn flood_fill_polygon(
                 covered[next] = true;
                 boundary.push_back((next, distance + 1));
             }
+        }
+    }
+
+    // Negative Dilate/Contract intentionally pulls the fill in from *every*
+    // boundary, with a bounded four-connected erosion of the temporary mask.
+    // Avoid changing the source outlines or the saved project schema.
+    if dilate < -0.01 {
+        let steps = ((-dilate) / cell).ceil().clamp(0.0, 24.0) as usize;
+        for _ in 0..steps {
+            let mut clear = Vec::new();
+            for y in 2..h.saturating_sub(2) {
+                for x in 2..w.saturating_sub(2) {
+                    let i = y * w + x;
+                    if covered[i] && (!covered[i - 1] || !covered[i + 1]
+                        || !covered[i - w] || !covered[i + w]) {
+                        clear.push(i);
+                    }
+                }
+            }
+            if clear.is_empty() { break; }
+            for index in clear { covered[index] = false; }
         }
     }
 
@@ -561,6 +609,20 @@ mod tests {
             "filling should not leave a white halo just inside the outline");
         assert!(!contour_contains(&filled,17.0,70.0),
             "color must not escape outside the contour");
+    }
+
+    #[test]
+    fn adjustable_fill_controls_preserve_enclosed_region_and_do_not_leak() {
+        let contour = shape(&[(20.,20.),(120.,20.),(120.,120.),(20.,120.),(20.,20.)]);
+        for precision in [0.5, 1.0, 2.5] {
+            let points = flood_fill_polygon_with_options(
+                &[contour.clone()], (72.,72.), (160.,160.), 2.0,
+                FillOptions { precision, dilate_contract: -2.0, boundary_thickness: 2.0 }
+            ).expect("bounded fill remains valid");
+            let fill = polygon_fill_stroke(points,[10,120,220,255]);
+            assert!(contour_contains(&fill,72.,72.));
+            assert!(!contour_contains(&fill,8.,72.));
+        }
     }
 
     #[test]
