@@ -4828,6 +4828,30 @@ impl eframe::App for StickApp {
                             tr(lang, "Copy room code", "نسخ كود الغرفة")).clicked() {
                             ui.output_mut(|out| out.copied_text = code.clone());
                         }
+                        ui.menu_button(tr(lang,"🔗 Invite link","🔗 رابط الدعوة"),|ui| {
+                            ui.set_min_width(365.0);
+                            ui.strong(tr(lang,"Share an invitation without your room password",
+                                "شارك دعوة الغرفة من غير كلمة السر"));
+                            ui.add(egui::TextEdit::singleline(&mut self.online_share_address)
+                                .desired_width(340.0)
+                                .hint_text(format!("{} (LAN)",address)));
+                            ui.small(tr(lang,
+                                "Use a reachable LAN address, ZeroTier/Tailscale IPv4 or public IPv4/DNS. For Internet direct connections, TCP 47554 must be reachable.",
+                                "اكتب عنوان LAN أو عنوان ZeroTier/Tailscale أو IP عام/DNS. للاتصال من الإنترنت لازم TCP 47554 يكون مفتوح وقابل للوصول."));
+                            let target=if self.online_share_address.trim().is_empty(){
+                                address.as_str()
+                            } else {self.online_share_address.trim()};
+                            match online_invite::make_invite(target,&code,
+                                self.online_mode==OnlineMode::Animation) {
+                                Ok(invite)=>{
+                                    if ui.button(tr(lang,"Copy invitation","نسخ الدعوة")).clicked(){
+                                        ui.output_mut(|out|out.copied_text=invite);
+                                        ui.close_menu();
+                                    }
+                                }
+                                Err(reason)=>{ui.colored_label(egui::Color32::YELLOW,reason);}
+                            }
+                        });
                         ui.menu_button(tr(lang, "Host controls", "إدارة الغرفة"), |ui| {
                             ui.set_min_width(300.0);
                             ui.label(egui::RichText::new(tr(lang,
