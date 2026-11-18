@@ -28,6 +28,8 @@ mod cloud_sync;
 mod project_sync;
 mod remote_access;
 mod transform_handles;
+mod media_transform;
+mod audio_timeline;
 
 use arabic_reshaper::arabic_reshape;
 use brushes::{draw_brush_preset_icon, draw_stroke_pro};
@@ -1140,6 +1142,7 @@ struct StickApp {
     active_layer_idx: usize,
     editing_symbol_name: Option<String>,
     selected_audio_idx: Option<usize>,
+    audio_drag_origin: Option<(usize,usize)>,
     active_tool_ui: ActiveToolUI,
     active_krita_brush: KritaBrushPreset,
     brush_opacity: f32,
@@ -1172,6 +1175,7 @@ struct StickApp {
     transform_axis: Option<char>,
     lasso_dragging_selection: bool,
     selected_text_item_index: Option<usize>,
+    selected_media_idx: Option<usize>,
     selection_rect_start: Option<egui::Pos2>,
     selection_rect_current: Option<egui::Pos2>,
     lasso_points: Vec<egui::Pos2>,
@@ -1294,6 +1298,7 @@ impl StickApp {
             active_layer_idx: 0,
             editing_symbol_name: None,
             selected_audio_idx: None,
+            audio_drag_origin: None,
             active_tool_ui: ActiveToolUI::Brush,
             active_krita_brush: KritaBrushPreset::GPenInk,
             brush_opacity: 1.0,
@@ -1326,6 +1331,7 @@ impl StickApp {
             transform_axis: None,
             lasso_dragging_selection: false,
             selected_text_item_index: None,
+            selected_media_idx: None,
             selection_rect_start: None,
             selection_rect_current: None,
             lasso_points: Vec::new(),
@@ -2108,6 +2114,7 @@ impl StickApp {
         self.transform_rotate_pivot = None;
         self.transform_axis = None;
         self.selected_text_item_index = None;
+        self.selected_media_idx = None;
         self.selection_rect_start = None;
         self.selection_rect_current = None;
         self.lasso_points.clear();
@@ -2218,6 +2225,15 @@ impl StickApp {
                 min = min.min(bounds.min);
                 max = max.max(bounds.max);
                 found = true;
+            }
+        }
+        if let Some(index) = self.selected_media_idx {
+            if let Some(media) = frame.media_items.get(index) {
+                for (x,y) in media_transform::corners(media) {
+                    min = min.min(egui::pos2(x,y));
+                    max = max.max(egui::pos2(x,y));
+                    found = true;
+                }
             }
         }
         if found { Some(egui::Rect::from_min_max(min, max).expand(2.0)) }
@@ -2621,10 +2637,21 @@ impl StickApp {
             let img_name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
             let mut kf = HashMap::new();
             let mut fd = FrameData::default();
-            fd.media_items.push(MediaItem { path: path.to_string_lossy().to_string(), media_type: MediaType::Image, x: 100.0, y: 50.0, width: 400.0, height: 300.0 });
+            let (ow, oh) = image::image_dimensions(&path).unwrap_or((400,300));
+            let ratio = (self.project.width as f32 * 0.8 / ow.max(1) as f32)
+                .min(self.project.height as f32 * 0.8 / oh.max(1) as f32).min(1.0);
+            let (width,height) = (ow as f32 * ratio, oh as f32 * ratio);
+            fd.media_items.push(MediaItem {
+                path: path.to_string_lossy().to_string(), media_type: MediaType::Image,
+                x: (self.project.width as f32-width)*0.5,
+                y: (self.project.height as f32-height)*0.5,
+                width, height, rotation_deg: 0.0, flip_h: false, flip_v: false });
             kf.insert(self.current_frame, fd);
             self.project.layers.insert(0, Layer { name: format!("Img_{}", img_name), visible: true, locked: false, is_guide: false, xp_first_paint_rewarded: false, opacity: 1.0, keyframes: kf });
             self.active_layer_idx = 0;
+            self.clear_cel_selection();
+            self.selected_media_idx = Some(0);
+            self.active_tool_ui = ActiveToolUI::FreeTransform;
             self.has_unsaved_changes = true;
             self.play_sfx(SfxType::NewFrame);
         }
@@ -2666,11 +2693,14 @@ impl StickApp {
                 let mut kf = HashMap::new();
                 for (i, f_path) in frames.iter().enumerate() {
                     let mut fd = FrameData::default();
-                    fd.media_items.push(MediaItem { path: f_path.to_string_lossy().to_string(), media_type: MediaType::VideoFrame, x: 0.0, y: 0.0, width: self.project.width as f32, height: self.project.height as f32 });
+                    fd.media_items.push(MediaItem { path: f_path.to_string_lossy().to_string(), media_type: MediaType::VideoFrame, x: 0.0, y: 0.0, width: self.project.width as f32, height: self.project.height as f32, rotation_deg: 0.0, flip_h: false, flip_v: false });
                     kf.insert(self.current_frame + i, fd);
                 }
                 self.project.layers.insert(0, Layer { name: "Video_Layer".to_string(), visible: true, locked: false, is_guide: false, xp_first_paint_rewarded: false, opacity: 1.0, keyframes: kf });
                 self.active_layer_idx = 0;
+                self.clear_cel_selection();
+                self.selected_media_idx = Some(0);
+                self.active_tool_ui = ActiveToolUI::FreeTransform;
                 self.has_unsaved_changes = true;
                 self.play_sfx(SfxType::NewFrame);
             }
@@ -6359,13 +6389,12 @@ impl eframe::App for StickApp {
                         if let Some(tex) = self.texture_cache.get(&m.path) {
                             let mut mesh = egui::Mesh::with_texture(tex.id());
                             let tint = egui::Color32::from_white_alpha((255.0 * l_op) as u8);
-                            for (pt, uv) in [
-                                (egui::pos2(m.x, m.y), egui::pos2(0.0, 0.0)),
-                                (egui::pos2(m.x + m.width, m.y), egui::pos2(1.0, 0.0)),
-                                (egui::pos2(m.x + m.width, m.y + m.height), egui::pos2(1.0, 1.0)),
-                                (egui::pos2(m.x, m.y + m.height), egui::pos2(0.0, 1.0)),
-                            ] {
-                                mesh.vertices.push(egui::epaint::Vertex { pos: to_screen(pt), uv, color: tint });
+                            let (u0,u1) = if m.flip_h { (1.0,0.0) } else { (0.0,1.0) };
+                            let (v0,v1) = if m.flip_v { (1.0,0.0) } else { (0.0,1.0) };
+                            let uvs = [egui::pos2(u0,v0),egui::pos2(u1,v0),egui::pos2(u1,v1),egui::pos2(u0,v1)];
+                            for ((x,y), uv) in media_transform::corners(m).into_iter().zip(uvs) {
+                                mesh.vertices.push(egui::epaint::Vertex {
+                                    pos: to_screen(egui::pos2(x,y)), uv, color: tint });
                             }
                             mesh.indices.extend_from_slice(&[0, 1, 2, 0, 2, 3]);
                             painter.add(egui::Shape::mesh(mesh));
