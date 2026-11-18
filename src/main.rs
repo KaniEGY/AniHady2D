@@ -42,7 +42,7 @@ use exporter::{ImageExportFormat, VideoExportFormat};
 use profile::UserProfile;
 use collab::{OnlineMode, OnlineEvent, OnlineSession, RoomListing, Participant};
 use project::{
-    AniProject, AudioSyncMode, AudioTrack, EasingCurve, FrameData, KritaBrushPreset, Layer, MediaItem, MediaType,
+    AniProject, AudioSyncMode, AudioTrack, EasingCurve, FrameData, FrameMarkerKind, KritaBrushPreset, Layer, MediaItem, MediaType,
     BrushTipShape, Stroke, StrokePoint, Symbol, SymbolInstance, TextItem, TweenMode, PROJECT_SCHEMA_VERSION,
 };
 // Game UI sounds are generated as samples without shipping external audio assets.
@@ -134,6 +134,7 @@ enum SfxType {
     ExportSuccess,
     ExitFarewell,
     LevelUpFanfare(u8),
+    ArtistSystemLightning,
     ToolSelect(u8),
 }
 
@@ -150,6 +151,7 @@ fn game_ui_samples(sfx: SfxType) -> Vec<f32> {
         SfxType::ExportSuccess => 0.340,
         SfxType::ExitFarewell => 0.190,
         SfxType::LevelUpFanfare(_) => 0.520,
+        SfxType::ArtistSystemLightning => 0.780,
         SfxType::ToolSelect(_) => 0.090,
     };
     let rate = 44_100.0f32;
@@ -175,6 +177,7 @@ fn game_ui_samples(sfx: SfxType) -> Vec<f32> {
                 let band = 420. + (variation/10) as f32*24.;
                 (band,band*1.8,0.18,0.03)
             }
+            SfxType::ArtistSystemLightning => (1850., 135., 0.24, 0.58),
             SfxType::ToolSelect(index) => {
                 let base = 535. + (index as f32)*26.;
                 (base,base*1.21,0.095,0.05)
@@ -188,6 +191,10 @@ fn game_ui_samples(sfx: SfxType) -> Vec<f32> {
             let note = (progress*4.0).floor() as usize;
             let arpeggio = [1.0,1.25,1.5,2.0][note.min(3)];
             tone = (phase*arpeggio).sin()*0.8 + (phase*arpeggio*2.0).sin()*0.18;
+        }
+        if matches!(sfx, SfxType::ArtistSystemLightning) {
+            let snap = ((t * 31.0).sin().abs().powf(7.0) * 0.9 + 0.15).clamp(0.0, 1.0);
+            tone = tone * 0.30 + (phase * 3.7).sin() * 0.17 * snap;
         }
         seed ^= seed<<13;
         seed ^= seed>>17;
@@ -444,6 +451,8 @@ struct AppConfig {
     recent_projects: Vec<String>,
     #[serde(default = "default_true_val")]
     sound_effects_enabled: bool,
+    #[serde(default = "default_true_val")]
+    artist_project_intro_enabled: bool,
     #[serde(default)]
     show_grid: bool,
     #[serde(default)]
@@ -632,6 +641,7 @@ impl Default for AppConfig {
             last_seen_patch_version: String::new(),
             recent_projects: Vec::new(),
             sound_effects_enabled: true,
+            artist_project_intro_enabled: true,
             show_grid: false,
             canvas_appearance: canvas_appearance::CanvasAppearance::default(),
             canvas_aspect_lock: false,
@@ -1089,14 +1099,20 @@ fn draw_tool_ui_icon(painter: &egui::Painter, rect: egui::Rect, tool: ActiveTool
             painter.circle_filled(p(10.,10.),2.1,pale);
         }
         ActiveToolUI::FreeTransform => {
-            painter.rect_stroke(egui::Rect::from_center_size(c,egui::vec2(14.,14.)),0.,
-                egui::Stroke::new(1.6,primary));
-            for (x,y) in [(-8.,-8.),(8.,-8.),(-8.,8.),(8.,8.)] {
-                let r=egui::Rect::from_center_size(p(x,y),egui::vec2(5.,5.));
-                painter.rect_filled(r,0.,primary);
-                painter.rect_stroke(r,0.,egui::Stroke::new(0.8,pale));
+            // Compact transform gizmo: visually distinct from Selection.
+            let q = |x:f32,y:f32| c + egui::vec2(x*icon_scale*0.72,y*icon_scale*0.72);
+            painter.circle_filled(c, 2.4*icon_scale*0.72, primary);
+            for (a,b) in [(q(-8.,0.),q(8.,0.)),(q(0.,-8.),q(0.,8.))] {
+                painter.line_segment([a,b],egui::Stroke::new(2.0,primary));
             }
-            painter.circle_stroke(p(0.,-11.),2.1,egui::Stroke::new(1.7,primary));
+            for pts in [
+                vec![q(8.,0.),q(4.5,-3.),q(4.5,3.)],
+                vec![q(-8.,0.),q(-4.5,-3.),q(-4.5,3.)],
+                vec![q(0.,-8.),q(-3.,-4.5),q(3.,-4.5)],
+                vec![q(0.,8.),q(-3.,4.5),q(3.,4.5)],
+            ] { painter.add(egui::Shape::convex_polygon(pts,primary,egui::Stroke::NONE)); }
+            painter.rect_stroke(egui::Rect::from_center_size(c,egui::vec2(18.,18.)*icon_scale*0.72),1.5,
+                egui::Stroke::new(0.8,pale));
         }
         ActiveToolUI::VectorDirectSelect => {
             let verts=[p(-8.,-9.),p(-5.,9.),p(8.,0.)];
@@ -1206,7 +1222,47 @@ fn draw_gear_icon(painter: &egui::Painter, rect: egui::Rect, scale: f32) {
     }
 }
 
-fn draw_stick_timeline_cell(painter: &egui::Painter, rect: egui::Rect, is_keyframe: bool, has_content: bool, tween_mode: TweenMode) {
+fn draw_artist_system_icon(painter: &egui::Painter, rect: egui::Rect) {
+    let c = rect.center();
+    let cyan = egui::Color32::from_rgb(67, 220, 255);
+    let gold = egui::Color32::from_rgb(255, 213, 93);
+    painter.circle_stroke(c, rect.width().min(rect.height()) * 0.40, egui::Stroke::new(2.0, cyan));
+    let r = rect.width().min(rect.height()) * 0.46;
+    painter.add(egui::Shape::closed_line(vec![
+        c + egui::vec2(0.0,-r), c + egui::vec2(r,0.0),
+        c + egui::vec2(0.0,r), c + egui::vec2(-r,0.0)
+    ], egui::Stroke::new(1.4, gold)));
+    painter.add(egui::Shape::convex_polygon(vec![
+        c + egui::vec2(2.0,-11.0), c + egui::vec2(-6.0,1.0),
+        c + egui::vec2(-1.0,1.0), c + egui::vec2(-4.0,11.0),
+        c + egui::vec2(8.0,-3.0), c + egui::vec2(2.0,-3.0)
+    ], gold, egui::Stroke::new(0.8, cyan)));
+}
+
+fn draw_artist_lightning_fx(ctx: &egui::Context, rect: egui::Rect, time: f64) {
+    let painter = ctx.layer_painter(egui::LayerId::new(
+        egui::Order::Foreground, egui::Id::new("artist_system_lightning_fx")));
+    let pulse = (0.55 + 0.45 * (time as f32 * 8.0).sin().abs()).clamp(0.0,1.0);
+    let cyan = egui::Color32::from_rgba_unmultiplied(53, 221, 255, (150.0 + 90.0*pulse) as u8);
+    painter.rect_stroke(rect.expand(4.0), 9.0, egui::Stroke::new(1.5 + pulse, cyan));
+    painter.rect_stroke(rect.expand(9.0), 11.0, egui::Stroke::new(0.8,
+        egui::Color32::from_rgba_unmultiplied(46, 153, 255, (70.0*pulse) as u8)));
+    let jitter = (time as f32 * 17.0).sin() * 7.0;
+    let bolts = [
+        vec![rect.left_top()+egui::vec2(72.0,-7.0), rect.left_top()+egui::vec2(105.0+jitter,4.0),
+             rect.left_top()+egui::vec2(132.0,-11.0), rect.left_top()+egui::vec2(170.0+jitter*0.4,2.0)],
+        vec![rect.right_top()+egui::vec2(-178.0,2.0), rect.right_top()+egui::vec2(-145.0+jitter,-10.0),
+             rect.right_top()+egui::vec2(-110.0,4.0), rect.right_top()+egui::vec2(-76.0+jitter*0.3,-7.0)],
+        vec![rect.left_bottom()+egui::vec2(115.0,6.0), rect.left_bottom()+egui::vec2(148.0-jitter, -5.0),
+             rect.left_bottom()+egui::vec2(185.0,8.0), rect.left_bottom()+egui::vec2(224.0-jitter*0.5,-3.0)],
+        vec![rect.right_bottom()+egui::vec2(-210.0,-3.0), rect.right_bottom()+egui::vec2(-173.0+jitter,8.0),
+             rect.right_bottom()+egui::vec2(-135.0,-6.0), rect.right_bottom()+egui::vec2(-95.0+jitter*0.4,6.0)],
+    ];
+    for bolt in bolts {
+        painter.add(egui::Shape::line(bolt, egui::Stroke::new(1.8 + pulse*1.2, cyan)));
+    }
+}
+fn draw_stick_timeline_cell(painter: &egui::Painter, rect: egui::Rect, is_keyframe: bool, has_content: bool, tween_mode: TweenMode, marker: FrameMarkerKind) {
     let c = rect.center();
     match tween_mode {
         TweenMode::Classic => {
@@ -1220,11 +1276,13 @@ fn draw_stick_timeline_cell(painter: &egui::Painter, rect: egui::Rect, is_keyfra
         TweenMode::None => {}
     }
     if is_keyframe {
-        if has_content {
-            painter.circle_filled(c, 4.5, egui::Color32::from_rgb(15, 15, 20));
-            painter.circle_stroke(c, 4.8, egui::Stroke::new(1.1, egui::Color32::WHITE));
-        } else {
-            painter.circle_stroke(c, 4.4, egui::Stroke::new(1.3, egui::Color32::from_gray(225)));
+        if !timeline_styles::draw_action_marker(painter, c, 5.0, marker, has_content) {
+            if has_content {
+                painter.circle_filled(c, 4.5, egui::Color32::from_rgb(15, 15, 20));
+                painter.circle_stroke(c, 4.8, egui::Stroke::new(1.1, egui::Color32::WHITE));
+            } else {
+                painter.circle_stroke(c, 4.4, egui::Stroke::new(1.3, egui::Color32::from_gray(225)));
+            }
         }
     } else if has_content && tween_mode == TweenMode::None {
         painter.line_segment([egui::pos2(rect.left() + 2.0, c.y), egui::pos2(rect.right() - 2.0, c.y)], egui::Stroke::new(1.0, egui::Color32::from_gray(130)));
@@ -1420,6 +1478,8 @@ struct StickApp {
     frames_drawn_counter: u64,
     level_up_banner_timer: f64,
     level_up_custom_msg: String,
+    artist_intro_timer: f64,
+    artist_intro_pending: bool,
     has_unsaved_changes: bool,
     show_exit_dialog: bool,
     show_symbol_dialog: bool,
@@ -1602,6 +1662,8 @@ impl StickApp {
             frames_drawn_counter: 0,
             level_up_banner_timer: 0.0,
             level_up_custom_msg: String::new(),
+            artist_intro_timer: 0.0,
+            artist_intro_pending: false,
             has_unsaved_changes: false,
             show_exit_dialog: false,
             show_symbol_dialog: false,
@@ -2461,9 +2523,10 @@ impl StickApp {
     fn ensure_editable_keyframe(&mut self) {
         if let Some(layer) = self.project.layers.get_mut(self.active_layer_idx) {
             if !layer.keyframes.contains_key(&self.current_frame) {
-                let inherited = Self::get_effective_keyframe_index(layer, self.current_frame)
+                let mut inherited = Self::get_effective_keyframe_index(layer, self.current_frame)
                     .and_then(|k| layer.keyframes.get(&k).cloned())
                     .unwrap_or_default();
+                inherited.timeline_marker = FrameMarkerKind::Legacy;
                 layer.keyframes.insert(self.current_frame, inherited);
             }
         }
@@ -3094,6 +3157,8 @@ impl StickApp {
         project.total_frames = 1;
         self.replace_document(project);
         self.has_unsaved_changes = false;
+        self.artist_intro_pending = self.config.artist_project_intro_enabled;
+        if !self.config.artist_project_intro_enabled { self.artist_intro_timer = 0.0; }
         self.status_message = "New project created".to_string();
         Ok(())
     }
@@ -4034,6 +4099,68 @@ impl eframe::App for StickApp {
             self.trigger_audio_stream_scrub();
         }
 
+        if self.artist_intro_pending {
+            self.artist_intro_pending = false;
+            if self.config.artist_project_intro_enabled {
+                self.artist_intro_timer = now_time + 8.0;
+                self.play_sfx(SfxType::ArtistSystemLightning);
+            }
+        }
+        if self.config.artist_project_intro_enabled && now_time < self.artist_intro_timer {
+            let (lvl, cxp, rxp) = self.user_profile.get_level_progress();
+            let rank = self.user_profile.get_hunter_rank();
+            let progress = (cxp as f32 / rxp.max(1) as f32).clamp(0.0,1.0);
+            let fx_rect = egui::Rect::from_center_size(
+                ctx.screen_rect().center() + egui::vec2(0.0,-18.0), egui::vec2(650.0,330.0));
+            egui::Window::new("ARTIST_SYSTEM_PROJECT_INTRO")
+                .title_bar(false).collapsible(false).resizable(false).movable(false)
+                .anchor(egui::Align2::CENTER_CENTER, [0.0,-18.0])
+                .min_width(620.0)
+                .frame(egui::Frame::none()
+                    .fill(egui::Color32::from_rgb(5, 22, 43))
+                    .stroke(egui::Stroke::new(2.4, egui::Color32::from_rgb(46, 219, 255)))
+                    .rounding(8.0).inner_margin(24.0))
+                .show(ctx, |ui| {
+                    ui.set_min_width(600.0);
+                    ui.horizontal(|ui| {
+                        let (ir,_) = ui.allocate_exact_size(egui::vec2(44.0,44.0),egui::Sense::hover());
+                        draw_artist_system_icon(ui.painter(),ir);
+                        ui.heading(egui::RichText::new(tr(lang,
+                            "[ ARTIST SYSTEM ]", "[ نظام الفنان • ARTIST SYSTEM ]"))
+                            .size(24.0).color(egui::Color32::from_rgb(104,232,255)));
+                    });
+                    ui.separator();
+                    ui.horizontal(|ui| {
+                        ui.vertical(|ui| {
+                            ui.label(egui::RichText::new(format!("LEVEL {}  •  {}-Rank",lvl,rank))
+                                .size(29.0).strong().color(egui::Color32::from_rgb(255,215,91)));
+                            ui.label(egui::RichText::new(tr(lang,"Create. Practice. Evolve.","ارسم. اتدرّب. اتطوّر."))
+                                .size(17.0).color(egui::Color32::WHITE));
+                            ui.add_space(12.0);
+                            ui.label(egui::RichText::new(&self.user_profile.username)
+                                .size(18.0).strong().color(egui::Color32::from_rgb(190,227,255)));
+                        });
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if let Some(avatar)=&self.artist_avatar {
+                                ui.image((avatar.id(),egui::vec2(108.0,108.0)));
+                            } else {
+                                let (ar,_) = ui.allocate_exact_size(egui::vec2(108.0,108.0),egui::Sense::hover());
+                                ui.painter().circle_filled(ar.center(),52.0,egui::Color32::from_rgb(12,45,74));
+                                draw_artist_system_icon(ui.painter(),ar.shrink(24.0));
+                            }
+                        });
+                    });
+                    ui.add_space(14.0);
+                    ui.add(egui::ProgressBar::new(progress).desired_width(590.0)
+                        .text(format!("{} / {} XP",cxp,rxp)));
+                    ui.label(egui::RichText::new(tr(lang,
+                        "Every masterpiece begins with one frame.",
+                        "كل لوحة عظيمة بتبدأ بخط واحد."))
+                        .size(15.0).color(egui::Color32::from_rgb(226,236,247)));
+                });
+            draw_artist_lightning_fx(ctx, fx_rect, now_time);
+            ctx.request_repaint_after(Duration::from_millis(16));
+        }
         if now_time < self.level_up_banner_timer {
             let (lvl, _, _) = self.user_profile.get_level_progress();
             let rank = self.user_profile.get_hunter_rank();
@@ -4626,7 +4753,7 @@ impl eframe::App for StickApp {
                 .default_pos(egui::pos2(54.0, 54.0)).show(ctx, |ui| {
                 ui.horizontal_wrapped(|ui| {
                     ui.selectable_value(&mut self.settings_tab, 0, tr(lang, "General", "عام"));
-                    ui.selectable_value(&mut self.settings_tab, 1, tr(lang, "Art System", "نظام الفنان"));
+                    ui.selectable_value(&mut self.settings_tab, 1, tr(lang, "⚡ Art System", "⚡ نظام الفنان"));
                     ui.selectable_value(&mut self.settings_tab, 2, tr(lang, "Shortcuts", "اختصارات"));
                     ui.selectable_value(&mut self.settings_tab, 3, tr(lang, "Colors & Timeline", "ألوان وتايم لاين"));
                     ui.selectable_value(&mut self.settings_tab, 4, tr(lang, "Personalization", "التخصيص"));
@@ -4650,6 +4777,18 @@ impl eframe::App for StickApp {
                             tr(lang, "Enable Tool & Level-Up Sound Effects", "شغّل أو اقفل أصوات الأدوات والمستويات")).changed() {
                             self.config.save();
                         }
+                        if ui.checkbox(&mut self.config.artist_project_intro_enabled,
+                            tr(lang, "Show Artist System intro on every new project",
+                                "اظهر نافذة نظام الفنان 8 ثواني مع كل مشروع جديد")).changed() {
+                            if !self.config.artist_project_intro_enabled {
+                                self.artist_intro_pending = false;
+                                self.artist_intro_timer = 0.0;
+                            }
+                            self.config.save();
+                        }
+                        ui.small(tr(lang,
+                            "The intro uses animated electric effects; global sound effects control its lightning sound.",
+                            "النافذة فيها مؤثرات برق متحركة؛ زر الأصوات العام بيتحكم في صوت البرق."));
                         if ui.checkbox(&mut self.config.show_grid,
                             tr(lang, "Show Grid", "إظهار شبكة الرسم")).changed() {
                             self.config.save();
@@ -4722,18 +4861,27 @@ impl eframe::App for StickApp {
                         let (lvl, cxp, rxp) = self.user_profile.get_level_progress();
                         let rank = self.user_profile.get_hunter_rank();
                         egui::Frame::none()
-                            .fill(egui::Color32::from_rgb(17, 23, 40))
-                            .rounding(12.0)
-                            .inner_margin(14.0)
+                            .fill(egui::Color32::from_rgb(7, 24, 45))
+                            .stroke(egui::Stroke::new(2.0, egui::Color32::from_rgb(43, 216, 255)))
+                            .rounding(8.0)
+                            .inner_margin(18.0)
                             .show(ui, |ui| {
+                                ui.horizontal(|ui| {
+                                    let (icon_rect, _) = ui.allocate_exact_size(egui::vec2(36.0,36.0), egui::Sense::hover());
+                                    draw_artist_system_icon(ui.painter(), icon_rect);
+                                    ui.label(egui::RichText::new(tr(lang, "[ ARTIST SYSTEM ]", "[ نظام الفنان • ARTIST SYSTEM ]"))
+                                        .size(18.0).strong().color(egui::Color32::from_rgb(91, 225, 255)));
+                                });
+                                ui.separator();
                                 ui.horizontal(|ui| {
                                     if let Some(avatar) = &self.artist_avatar {
                                         ui.image((avatar.id(), egui::vec2(84.0, 84.0)));
                                     } else {
                                         let (rect, _) = ui.allocate_exact_size(egui::vec2(84.0,84.0), egui::Sense::hover());
                                         ui.painter().circle_filled(rect.center(), 41.0,
-                                            egui::Color32::from_rgb(59, 75, 112));
-                                        ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, "✦",
+                                            egui::Color32::from_rgb(12, 45, 74));
+                                        draw_artist_system_icon(ui.painter(), rect.shrink(15.0));
+                                        ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, "",
                                             egui::FontId::proportional(37.0), egui::Color32::from_rgb(139, 204, 255));
                                     }
                                     ui.vertical(|ui| {
@@ -6693,6 +6841,7 @@ impl eframe::App for StickApp {
                                 let key = layer.keyframes.get(&f);
                                 if key.is_some() { exposure = key; }
                                 let is_kf = !is_b && key.is_some();
+                                let marker = key.map(|fd| fd.timeline_marker).unwrap_or(FrameMarkerKind::Legacy);
                                 let eff = if is_b { None } else { exposure };
                                 let has_d = eff.map_or(false, |fd| !fd.strokes.is_empty()
                                     || !fd.media_items.is_empty() || !fd.text_items.is_empty()
@@ -6714,7 +6863,7 @@ impl eframe::App for StickApp {
                                 };
                                 if advanced {
                                     advanced_timeline::render_exposure_cell(ui.painter(),cr,is_kf,
-                                        has_d && !is_b,tw,self.current_frame==f,
+                                        has_d && !is_b,marker,tw,self.current_frame==f,
                                         self.advanced_selected_cels.contains(
                                             &advanced_timeline::CelAddress{layer:l_idx,frame:f}),
                                         layer.locked || is_b);
@@ -6722,7 +6871,7 @@ impl eframe::App for StickApp {
                                     // Continuous exposure strips and diamonds replace the
                                     // boxed legacy frame grid. Editing actions below stay shared.
                                     timeline_styles::draw_cell(ui.painter(), cr, is_kf,
-                                        has_d && !is_b, tw,
+                                        has_d && !is_b, marker, tw,
                                         self.active_layer_idx == l_idx,
                                         layer.locked || is_b,
                                         self.current_frame == f);
@@ -6735,7 +6884,7 @@ impl eframe::App for StickApp {
                                         egui::Stroke::new(2.0, egui::Color32::from_rgb(255, 202, 65))
                                     );
                                 }
-                                if !is_b { draw_stick_timeline_cell(ui.painter(), cr, is_kf, has_d, tw); }
+                                if !is_b { draw_stick_timeline_cell(ui.painter(), cr, is_kf, has_d, tw, marker); }
                                 }
                                 if cresp.clicked() {
                                     timeline_seek = Some((l_idx, f));
@@ -7771,8 +7920,9 @@ impl eframe::App for StickApp {
                                 let resize_anchor = if self.active_tool_ui == ActiveToolUI::FreeTransform {
                                     bounds.and_then(|rect| transform_handles::resize_anchor(rect, stage_pos, scale))
                                 } else { None };
-                                let move_axis = bounds.and_then(|rect|
-                                    transform_handles::translation_axis(rect, stage_pos, scale));
+                                let move_axis = if self.active_tool_ui == ActiveToolUI::FreeTransform {
+                                    bounds.and_then(|rect| transform_handles::translation_axis(rect, stage_pos, scale))
+                                } else { None };
                                 let reuse_selection = bounds.is_some_and(|rect| rect.contains(stage_pos))
                                     && (!self.selected_stroke_indices.is_empty() || self.selected_text_item_index.is_some()
                                         || self.selected_media_idx.is_some());
@@ -8172,23 +8322,21 @@ impl eframe::App for StickApp {
                     painter.rect_stroke(screen_bounds, 0.0, egui::Stroke::new(
                         1.6, egui::Color32::from_rgb(54, 194, 255)
                     ));
-                    // Two axis arrows remain visible after selecting artwork.
-                    // Drag red for X only, cyan for Y only; corner squares and
-                    // rotation remain available through Free Transform.
-                    let origin=to_screen(bounds.center());
-                    for (end,col,label) in [
-                        (bounds.center()+egui::vec2(52.0/scale,0.0),
-                            egui::Color32::from_rgb(244,78,86),"X"),
-                        (bounds.center()+egui::vec2(0.0,-52.0/scale),
-                            egui::Color32::from_rgb(60,192,244),"Y")
-                    ] {
-                        let tip=to_screen(end);
-                        painter.line_segment([origin,tip],egui::Stroke::new(3.0,col));
-                        painter.circle_filled(tip,10.0,col);
-                        painter.text(tip,egui::Align2::CENTER_CENTER,label,
-                            egui::FontId::proportional(11.0),egui::Color32::BLACK);
-                    }
                     if self.active_tool_ui == ActiveToolUI::FreeTransform {
+                        // Transform gizmos never leak into normal Selection/Lasso.
+                        let origin=to_screen(bounds.center());
+                        for (end,col,label) in [
+                            (bounds.center()+egui::vec2(52.0/scale,0.0),
+                                egui::Color32::from_rgb(244,78,86),"X"),
+                            (bounds.center()+egui::vec2(0.0,-52.0/scale),
+                                egui::Color32::from_rgb(60,192,244),"Y")
+                        ] {
+                            let tip=to_screen(end);
+                            painter.line_segment([origin,tip],egui::Stroke::new(3.0,col));
+                            painter.circle_filled(tip,10.0,col);
+                            painter.text(tip,egui::Align2::CENTER_CENTER,label,
+                                egui::FontId::proportional(11.0),egui::Color32::BLACK);
+                        }
                         let top = to_screen(bounds.center_top());
                         let handle = to_screen(bounds.center_top()
                             + egui::vec2(0.0, -transform_handles::ROTATE_OFFSET_PX / scale));
