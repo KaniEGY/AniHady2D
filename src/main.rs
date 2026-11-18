@@ -3521,88 +3521,162 @@ impl StickApp {
     }
 
     fn render_tool_properties_ui(&mut self, ui: &mut egui::Ui, lang: AppLang) {
-        if let Some(index) = self.selected_media_idx {
-            let source = self.project.layers.get(self.active_layer_idx).and_then(|layer|
-                self.project.evaluate_layer_at_frame(layer, self.current_frame)
-                    .media_items.get(index).cloned());
-            if let Some(previous) = source {
-                let mut item = previous.clone();
-                ui.strong(tr(lang,"Selected Image / Video Transform","تحويل الصورة / الفيديو المحدد"));
-                ui.small(if item.media_type == MediaType::VideoFrame {
-                    tr(lang,"Edits apply to every decoded frame in this video layer.",
-                        "التعديلات دي بتتطبق على كل فريمات الفيديو في اللير.")
-                } else {
-                    tr(lang,"Select and drag the image on canvas. Use the blue handles to resize or rotate.",
-                        "اسحب الصورة على اللوحة، واستخدم مقابض التحديد للتكبير والدوران.")
-                });
-                ui.horizontal(|ui| {
-                    ui.label("X"); ui.add(egui::DragValue::new(&mut item.x).speed(1.0));
-                    ui.label("Y"); ui.add(egui::DragValue::new(&mut item.y).speed(1.0));
-                });
-                ui.horizontal(|ui| {
-                    ui.label(tr(lang,"Width","العرض"));
-                    ui.add(egui::DragValue::new(&mut item.width).range(4.0..=8192.0).speed(1.0));
-                    ui.label(tr(lang,"Height","الارتفاع"));
-                    ui.add(egui::DragValue::new(&mut item.height).range(4.0..=8192.0).speed(1.0));
-                });
-                ui.add(egui::Slider::new(&mut item.rotation_deg,-180.0..=180.0)
-                    .text(tr(lang,"Rotation (degrees)","الدوران (درجة)")));
-                ui.horizontal(|ui| {
-                    if ui.button(tr(lang,"Flip H","عكس أفقي")).clicked() { item.flip_h=!item.flip_h; }
-                    if ui.button(tr(lang,"Flip V","عكس رأسي")).clicked() { item.flip_v=!item.flip_v; }
-                    if ui.button(tr(lang,"Reset","إعادة الضبط")).clicked() {
-                        item.rotation_deg=0.0; item.flip_h=false; item.flip_v=false;
+        if self.right_panel_tab == 2 {
+            if let Some(index) = self.selected_media_idx {
+                let source = self.project.layers.get(self.active_layer_idx).and_then(|layer|
+                    self.project.evaluate_layer_at_frame(layer, self.current_frame)
+                        .media_items.get(index).cloned());
+                if let Some(previous) = source {
+                    let mut item = previous.clone();
+                    ui.strong(if item.media_type == MediaType::VideoFrame {
+                        tr(lang,"Video properties","خصائص الفيديو")
+                    } else {tr(lang,"Image properties","خصائص الصورة")});
+                    ui.small(if item.media_type == MediaType::VideoFrame {
+                        tr(lang,"Edits apply to every decoded frame in this video layer.",
+                            "التعديلات دي بتتطبق على كل فريمات الفيديو في اللير.")
+                    } else {
+                        tr(lang,"The imported image lives on its own layer and can be held for a chosen frame range.",
+                            "الصورة المستوردة موجودة في لير مستقل وتقدر تمد ظهورها لحد الفريم اللي تختاره.")
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label("X"); ui.add(egui::DragValue::new(&mut item.x).speed(1.0));
+                        ui.label("Y"); ui.add(egui::DragValue::new(&mut item.y).speed(1.0));
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label(tr(lang,"Width","العرض"));
+                        ui.add(egui::DragValue::new(&mut item.width).range(4.0..=8192.0).speed(1.0));
+                        ui.label(tr(lang,"Height","الارتفاع"));
+                        ui.add(egui::DragValue::new(&mut item.height).range(4.0..=8192.0).speed(1.0));
+                    });
+                    ui.add(egui::Slider::new(&mut item.rotation_deg,-180.0..=180.0)
+                        .text(tr(lang,"Rotation (degrees)","الدوران (درجة)")));
+                    ui.horizontal(|ui| {
+                        if ui.button(tr(lang,"Flip H","عكس أفقي")).clicked() { item.flip_h=!item.flip_h; }
+                        if ui.button(tr(lang,"Flip V","عكس رأسي")).clicked() { item.flip_v=!item.flip_v; }
+                        if ui.button(tr(lang,"Reset","إعادة الضبط")).clicked() {
+                            item.rotation_deg=0.0; item.flip_h=false; item.flip_v=false;
+                        }
+                    });
+                    if item != previous && !self.is_active_layer_locked() {
+                        self.save_undo_state();
+                        self.ensure_editable_keyframe();
+                        if let Some(layer) = self.project.layers.get_mut(self.active_layer_idx) {
+                            if let Some(data) = layer.keyframes.get_mut(&self.current_frame) {
+                                if let Some(slot) = data.media_items.get_mut(index) { *slot = item.clone(); }
+                            }
+                        }
+                        self.propagate_video_media();
+                        self.has_unsaved_changes=true;
                     }
-                });
-                if item != previous && !self.is_active_layer_locked() {
-                    self.save_undo_state();
-                    self.ensure_editable_keyframe();
-                    if let Some(layer) = self.project.layers.get_mut(self.active_layer_idx) {
-                        if let Some(data) = layer.keyframes.get_mut(&self.current_frame) {
-                            if let Some(slot) = data.media_items.get_mut(index) { *slot = item; }
+
+                    if item.media_type == MediaType::Image {
+                        if let Some((start,end))=self.project.layers.get(self.active_layer_idx)
+                            .and_then(|layer|Self::image_layer_range(layer,self.timeline_length)) {
+                            ui.separator();
+                            ui.label(format!("{}: {}",tr(lang,"Start frame","بداية الصورة"),start));
+                            let mut next_end=end;
+                            if ui.add(egui::DragValue::new(&mut next_end)
+                                .range(start..=timeline_ops::MAX_TIMELINE_FRAMES)
+                                .prefix(format!("{}: ",tr(lang,"Visible through frame","تظهر لحد فريم"))))
+                                .changed() {
+                                self.save_undo_state();
+                                self.timeline_length=self.timeline_length.max(next_end);
+                                self.project.total_frames=self.timeline_length;
+                                if let Some(layer)=self.project.layers.get_mut(self.active_layer_idx) {
+                                    let _=Self::set_image_layer_end(layer,next_end,self.timeline_length);
+                                }
+                                self.has_unsaved_changes=true;
+                            }
+                        }
+                    } else if let Some((start,end))=self.project.layers.get(self.active_layer_idx)
+                        .and_then(Self::video_layer_range) {
+                        ui.separator();
+                        let mut next_start=start;
+                        ui.label(format!("{}: {} → {}",tr(lang,"Video range","مدة الفيديو"),start,end));
+                        if ui.add(egui::DragValue::new(&mut next_start)
+                            .range(1..=timeline_ops::MAX_TIMELINE_FRAMES)
+                            .prefix(format!("{}: ",tr(lang,"Start frame","بداية الفيديو")))).changed() {
+                            self.save_undo_state();
+                            if let Some(layer)=self.project.layers.get_mut(self.active_layer_idx) {
+                                if Self::move_video_layer(layer,next_start,timeline_ops::MAX_TIMELINE_FRAMES) {
+                                    if let Some((_,new_end))=Self::video_layer_range(layer) {
+                                        self.timeline_length=self.timeline_length.max(new_end);
+                                        self.project.total_frames=self.timeline_length;
+                                    }
+                                    self.current_frame=next_start;
+                                    self.has_unsaved_changes=true;
+                                } else {self.undo_stack.pop();}
+                            }
                         }
                     }
-                    self.propagate_video_media();
-                    self.has_unsaved_changes=true;
-                }
-                ui.separator();
-            }
-        }
-        if let Some(index) = self.selected_audio_idx {
-            if let Some(previous) = self.project.audio_tracks.get(index).cloned() {
-                let mut item=previous.clone();
-                ui.strong(tr(lang,"Audio track properties","خصائص لير الصوت"));
-                ui.add(egui::TextEdit::singleline(&mut item.name));
-                ui.horizontal(|ui| {
-                    ui.label(tr(lang,"Start frame","بداية الصوت"));
-                    let mut start=item.start_frame;
-                    if ui.add(egui::DragValue::new(&mut start).range(1..=timeline_ops::MAX_TIMELINE_FRAMES)).changed() {
-                        audio_timeline::move_clip(&mut item,start,timeline_ops::MAX_TIMELINE_FRAMES);
+                    ui.separator();
+                    let mut duplicate=false;
+                    let mut delete=false;
+                    ui.horizontal(|ui| {
+                        duplicate=ui.button(tr(lang,"Duplicate","دبلكيت")).clicked();
+                        delete=ui.button(tr(lang,"Delete","حذف")).clicked();
+                    });
+                    if duplicate {
+                        let _=self.duplicate_media_item_or_layer(self.active_layer_idx,index);
+                    } else if delete {
+                        let _=self.delete_media_item_or_layer(self.active_layer_idx,index);
                     }
-                });
-                ui.horizontal(|ui| {
-                    ui.label(tr(lang,"End frame","نهاية الصوت"));
-                    ui.add(egui::DragValue::new(&mut item.end_frame)
-                        .range(item.start_frame..=timeline_ops::MAX_TIMELINE_FRAMES));
-                });
-                ui.add(egui::Slider::new(&mut item.gain,0.0..=2.0)
-                    .text(tr(lang,"Volume","مستوى الصوت")));
-                ui.checkbox(&mut item.muted,tr(lang,"Mute","كتم"));
-                ui.horizontal(|ui| {
-                    ui.selectable_value(&mut item.sync_mode, AudioSyncMode::Stream,
-                        tr(lang,"Scrub preview","معاينة عند التحريك"));
-                    ui.selectable_value(&mut item.sync_mode, AudioSyncMode::Normal,
-                        tr(lang,"Playback only","تشغيل فقط"));
-                });
-                ui.small(tr(lang,"Drag the colored audio lane beneath the frame tracks to change its start time.",
-                    "اسحب المسار الصوتي الملون تحت الفريمات لتحريك توقيته."));
-                if item != previous {
-                    self.save_undo_state();
-                    self.project.audio_tracks[index]=item;
-                    self.has_unsaved_changes=true;
+                    return;
                 }
-                ui.separator();
             }
+            if let Some(index) = self.selected_audio_idx {
+                if let Some(previous) = self.project.audio_tracks.get(index).cloned() {
+                    let mut item=previous.clone();
+                    ui.strong(tr(lang,"Audio track properties","خصائص الصوت"));
+                    ui.add(egui::TextEdit::singleline(&mut item.name));
+                    ui.horizontal(|ui| {
+                        ui.label(tr(lang,"Start frame","بداية الصوت"));
+                        let mut start=item.start_frame;
+                        if ui.add(egui::DragValue::new(&mut start)
+                            .range(1..=timeline_ops::MAX_TIMELINE_FRAMES)).changed() {
+                            audio_timeline::move_clip(&mut item,start,timeline_ops::MAX_TIMELINE_FRAMES);
+                        }
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label(tr(lang,"End frame","نهاية الصوت"));
+                        ui.add(egui::DragValue::new(&mut item.end_frame)
+                            .range(item.start_frame..=timeline_ops::MAX_TIMELINE_FRAMES));
+                    });
+                    ui.add(egui::Slider::new(&mut item.gain,0.0..=2.0)
+                        .text(tr(lang,"Volume","مستوى الصوت")));
+                    ui.checkbox(&mut item.muted,tr(lang,"Mute","كتم"));
+                    ui.horizontal(|ui| {
+                        ui.selectable_value(&mut item.sync_mode, AudioSyncMode::Stream,
+                            tr(lang,"Scrub preview","معاينة عند التحريك"));
+                        ui.selectable_value(&mut item.sync_mode, AudioSyncMode::Normal,
+                            tr(lang,"Playback only","تشغيل فقط"));
+                    });
+                    ui.small(tr(lang,
+                        "Drag the audio lane beneath the frames. Right-click it for Duplicate/Delete.",
+                        "اسحب مسار الصوت تحت الفريمات، وكلك يمين عليه للدبلكيت أو الحذف."));
+                    if item != previous {
+                        self.save_undo_state();
+                        self.project.audio_tracks[index]=item;
+                        self.has_unsaved_changes=true;
+                    }
+                    ui.separator();
+                    let mut duplicate=false;
+                    let mut delete=false;
+                    ui.horizontal(|ui| {
+                        duplicate=ui.button(tr(lang,"Duplicate","دبلكيت")).clicked();
+                        delete=ui.button(tr(lang,"Delete","حذف")).clicked();
+                    });
+                    if duplicate {
+                        let _=self.duplicate_audio_track(index);
+                    } else if delete {
+                        let _=self.delete_audio_track(index);
+                    }
+                    return;
+                }
+            }
+            ui.label(tr(lang,"Select an image, video or audio clip to edit it here.",
+                "حدد صورة أو فيديو أو صوت عشان خصائصه تظهر هنا."));
+            return;
         }
         match self.active_tool_ui {
             ActiveToolUI::SelectNormal | ActiveToolUI::SelectLasso | ActiveToolUI::FreeTransform | ActiveToolUI::VectorDirectSelect => {
