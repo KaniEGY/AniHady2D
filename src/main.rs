@@ -20,6 +20,7 @@ mod canvas_sizes;
 mod vector_path;
 mod timeline_ops;
 mod timeline_styles;
+mod advanced_timeline;
 mod profile;
 mod project;
 mod collab;
@@ -1149,6 +1150,7 @@ struct StickApp {
     selected_shape_kind: GeometricShapeKind,
     shape_fill_enabled: bool,
     pending_delete_layer: Option<usize>,
+    advanced_selected_cels: Vec<advanced_timeline::CelAddress>,
     layer_rename_index: Option<usize>,
     layer_rename_buffer: String,
     layer_filter: String,
@@ -1308,6 +1310,7 @@ impl StickApp {
             selected_shape_kind: GeometricShapeKind::StraightLine,
             shape_fill_enabled: false,
             pending_delete_layer: None,
+            advanced_selected_cels: Vec::new(),
             layer_rename_index: None,
             layer_rename_buffer: String::new(),
             layer_filter: String::new(),
@@ -2111,6 +2114,7 @@ impl StickApp {
 
     fn clear_cel_selection(&mut self) {
         self.selected_stroke_indices.clear();
+        self.advanced_selected_cels.clear();
         self.selected_vector_node = None;
         self.selected_vector_nodes.clear();
         self.vector_marquee_start = None;
@@ -5423,6 +5427,7 @@ impl eframe::App for StickApp {
         }
 
         let mut frame_menu_action: Option<(usize, usize, timeline_ops::FrameAction)> = None;
+        let mut advanced_relocate_request: Option<(Vec<advanced_timeline::CelAddress>,i32,i32,advanced_timeline::RelocateMode)> = None;
         let mut audio_move_request: Option<(usize, usize)> = None;
         let mut audio_drag_started = false;
         let mut timeline_seek = None;
@@ -5513,7 +5518,7 @@ impl eframe::App for StickApp {
                 ui.separator();
                 ui.horizontal(|ui| {
                     ui.label(tr(lang, "Timeline zoom", "تكبير التايم لاين"));
-                    if self.config.timeline_style == 1 {
+                    if self.config.timeline_style != 0 {
                         if ui.add(egui::Slider::new(&mut self.config.timeline_new_cell_width,
                             28.0..=110.0).show_value(false)).changed() { self.config.save(); }
                     } else {
@@ -5532,7 +5537,8 @@ impl eframe::App for StickApp {
                         self.has_unsaved_changes = true;
                     }
                 });
-                let modern = self.config.timeline_style == 1;
+                let modern = self.config.timeline_style != 0;
+                let advanced = self.config.timeline_style == 2;
                 let cell_w = if modern {
                     self.config.timeline_new_cell_width.clamp(28.0, 110.0)
                 } else { self.timeline_cell_width };
@@ -5542,6 +5548,30 @@ impl eframe::App for StickApp {
                     self.config.timeline_new_row_height.clamp(36.0, 76.0)
                 } else { 34.0 };
                 let cols = self.timeline_length.max(30);
+                if advanced {
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label(tr(lang,"ADVANCED • KEYFRAMES","المتقدم • كي فريمات"));
+                        ui.label(format!("{} selected",self.advanced_selected_cels.len()));
+                        if ui.add_enabled(!self.advanced_selected_cels.is_empty(),
+                            egui::Button::new(tr(lang,"Duplicate +1","نسخ في الفريم اللي بعده"))).clicked() {
+                            advanced_relocate_request=Some((
+                                self.advanced_selected_cels.clone(),0,1,
+                                advanced_timeline::RelocateMode::Copy));
+                        }
+                        if ui.add_enabled(!self.advanced_selected_cels.is_empty(),
+                            egui::Button::new(tr(lang,"Move +1","حرّك فريم لقدّام"))).clicked() {
+                            advanced_relocate_request=Some((
+                                self.advanced_selected_cels.clone(),0,1,
+                                advanced_timeline::RelocateMode::Move));
+                        }
+                        if ui.small_button(tr(lang,"Clear selection","إلغاء التحديد")).clicked() {
+                            self.advanced_selected_cels.clear();
+                        }
+                    });
+                    ui.small(tr(lang,
+                        "Ctrl/Shift+click keyframes to multi-select. Drag to move; Alt+drag to duplicate. Audio tracks stay aligned.",
+                        "Ctrl أو Shift مع الضغط لتحديد أكتر من كي فريم. اسحب للنقل، وAlt مع السحب للنسخ. الصوت مش بيتحرك."));
+                }
                 let can_delete_global = self.timeline_length > 1 && self.project.layers.iter().all(|layer| !layer.locked);
                 egui::ScrollArea::both().id_salt("timeline_frame_scroller").show(ui, |ui| {
                     ui.horizontal(|ui| {
@@ -5555,7 +5585,10 @@ impl eframe::App for StickApp {
                             let is_c = self.current_frame == f;
                             let (r, resp) = ui.allocate_exact_size(
                                 egui::vec2(cell_w, header_h), egui::Sense::click_and_drag());
-                            if modern {
+                            if advanced {
+                                advanced_timeline::render_ruler_cell(ui.painter(),r,f,
+                                    self.project.fps,is_c,self.config.timeline_show_timecodes);
+                            } else if modern {
                                 timeline_styles::draw_header(ui.painter(), r, f, self.project.fps,
                                     is_c, self.loop_enabled
                                         && f >= self.loop_start_frame && f <= self.loop_end_frame,
@@ -5632,7 +5665,8 @@ impl eframe::App for StickApp {
                                     || !fd.media_items.is_empty() || !fd.text_items.is_empty()
                                     || !fd.symbol_instances.is_empty());
                                 let tw = eff.map(|fd| fd.tween_mode).unwrap_or(TweenMode::None);
-                                let (cr, cresp) = ui.allocate_exact_size(egui::vec2(cell_w, row_h), egui::Sense::click());
+                                let (cr, cresp) = ui.allocate_exact_size(egui::vec2(cell_w, row_h),
+                                    if advanced {egui::Sense::click_and_drag()} else {egui::Sense::click()});
                                 let cell = self.config.timeline_cell_color;
                                 let accent = self.config.ui_accent_color;
                                 let bg = if self.active_layer_idx == l_idx && self.current_frame == f {
@@ -5645,7 +5679,13 @@ impl eframe::App for StickApp {
                                 } else {
                                     egui::Color32::from_rgb(cell[0], cell[1], cell[2])
                                 };
-                                if modern {
+                                if advanced {
+                                    advanced_timeline::render_exposure_cell(ui.painter(),cr,is_kf,
+                                        has_d && !is_b,tw,self.current_frame==f,
+                                        self.advanced_selected_cels.contains(
+                                            &advanced_timeline::CelAddress{layer:l_idx,frame:f}),
+                                        layer.locked || is_b);
+                                } else if modern {
                                     // Continuous exposure strips and diamonds replace the
                                     // boxed legacy frame grid. Editing actions below stay shared.
                                     timeline_styles::draw_cell(ui.painter(), cr, is_kf,
@@ -5666,6 +5706,33 @@ impl eframe::App for StickApp {
                                 }
                                 if cresp.clicked() {
                                     timeline_seek = Some((l_idx, f));
+                                    if advanced && is_kf {
+                                        let cell=advanced_timeline::CelAddress{layer:l_idx,frame:f};
+                                        let extend=ui.input(|input|input.modifiers.shift||input.modifiers.ctrl);
+                                        if extend {
+                                            if let Some(index)=self.advanced_selected_cels
+                                                .iter().position(|&k|k==cell) {
+                                                self.advanced_selected_cels.remove(index);
+                                            } else {self.advanced_selected_cels.push(cell);}
+                                        } else {self.advanced_selected_cels=vec![cell];}
+                                    } else if advanced && !ui.input(|input|input.modifiers.shift||input.modifiers.ctrl) {
+                                        self.advanced_selected_cels.clear();
+                                    }
+                                }
+                                if advanced && is_kf && !layer.locked && cresp.drag_stopped() {
+                                    let drag=cresp.drag_delta();
+                                    let dx=(drag.x/cell_w).round() as i32;
+                                    let dy=(drag.y/row_h).round() as i32;
+                                    if dx!=0 || dy!=0 {
+                                        let cell=advanced_timeline::CelAddress{layer:l_idx,frame:f};
+                                        let selection=if self.advanced_selected_cels.contains(&cell) {
+                                            self.advanced_selected_cels.clone()
+                                        } else {vec![cell]};
+                                        let mode=if ui.input(|input|input.modifiers.alt) {
+                                            advanced_timeline::RelocateMode::Copy
+                                        } else {advanced_timeline::RelocateMode::Move};
+                                        advanced_relocate_request=Some((selection,dy,dx,mode));
+                                    }
                                 }
                                 let is_locked = layer.locked;
                                 cresp.context_menu(|ui| {
@@ -5875,21 +5942,27 @@ impl eframe::App for StickApp {
                 .show(ctx, |ui| {
                     ui.heading(tr(lang, "Timeline style", "شكل التايم لاين"));
                     let mut changed = false;
-                    ui.horizontal(|ui| {
+                    ui.horizontal_wrapped(|ui| {
                         changed |= ui.selectable_value(&mut self.config.timeline_style, 0,
                             "OLD Timeline").changed();
                         changed |= ui.selectable_value(&mut self.config.timeline_style, 1,
                             "NEW Timeline").changed();
+                        changed |= ui.selectable_value(&mut self.config.timeline_style, 2,
+                            tr(lang,"Advanced Timeline","التايم لاين المتقدم")).changed();
                     });
                     ui.small(if self.config.timeline_style == 0 {
                         tr(lang, "Legacy Stick frame grid: unchanged.",
                             "OLD: نفس شبكة الفريمات الحالية بدون أي تغيير.")
+                    } else if self.config.timeline_style == 2 {
+                        tr(lang,
+                            "ADVANCED: multi-select and drag-edit keyframes on independent layer tracks; audio waveform lanes are retained.",
+                            "المتقدم: تحديد ونقل ونسخ مجموعة كي فريمات بين مسارات الليرز، مع الاحتفاظ بموجات الصوت.")
                     } else {
                         tr(lang,
                             "NEW: exposure-sheet tracks, keyframe diamonds and a time ruler. Both layouts edit the same project.",
                             "NEW: صفوف أوضح، كي فريمات ملوّنة ومسطرة توقيت. الشكلين بيعدلوا نفس المشروع.")
                     });
-                    if self.config.timeline_style == 1 {
+                    if self.config.timeline_style != 0 {
                         changed |= ui.add(egui::Slider::new(
                             &mut self.config.timeline_new_row_height, 36.0..=76.0)
                             .text(tr(lang, "Track row height", "ارتفاع صف اللير"))).changed();
@@ -5933,7 +6006,7 @@ impl eframe::App for StickApp {
                     }
                     ui.separator();
                     ui.label(tr(lang, "Timeline cell width", "عرض الفريم في التايم لاين"));
-                    if self.config.timeline_style == 1 {
+                    if self.config.timeline_style != 0 {
                         if ui.add(egui::Slider::new(&mut self.config.timeline_new_cell_width,
                             28.0..=110.0)).changed() { self.config.save(); }
                     } else {
@@ -5945,6 +6018,23 @@ impl eframe::App for StickApp {
             self.show_timeline_settings = open;
         }
 
+        if let Some((selected,layer_delta,frame_delta,mode))=advanced_relocate_request {
+            // Rejected drags must not create an Undo snapshot.
+            let mut next=self.project.clone();
+            match advanced_timeline::relocate_keyframes(
+                &mut next,&selected,layer_delta,frame_delta,mode) {
+                Ok(destination) => {
+                    self.save_undo_state();
+                    self.project=next;
+                    self.advanced_selected_cels=destination;
+                    self.has_unsaved_changes=true;
+                    self.status_message=tr(lang,
+                        "Advanced timeline: keyframes updated.",
+                        "التايم لاين المتقدم: تم تعديل الكي فريمات.").to_string();
+                }
+                Err(reason) => {self.status_message=reason.to_string();}
+            }
+        }
         if let Some((layer_index, frame_index, action)) = frame_menu_action {
             match action {
                 timeline_ops::FrameAction::Copy => self.copy_frame(layer_index, frame_index),
