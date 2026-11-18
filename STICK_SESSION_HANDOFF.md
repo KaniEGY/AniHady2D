@@ -249,3 +249,10 @@
 - Tools: Bucket symmetry now mirrors fill seeds; optional Vector Direct Select right-click insert/remove nodes.
 - Input isolation: canvas pan now requires pointer over the central canvas.
 - Existing image/video import already created separate layers, so that behavior was retained rather than duplicated.
+
+
+## 18 November 2026 — integrated interface presets
+- Branch: feat/interface-style-presets-integrated-20261118, created directly from the PR #50 merged main.
+- Adds Current Stick, Cartoon, Serious, Cute Pink, Animate Style, Krita Style and Blender Style under the Interface menu.
+- Presets persist in AppConfig and alter Stick-owned palette, density, icon scale, timeline style and dock proportions.
+- This branch is intentionally retested after the media/audio/timeline overhaul rather than merging the older standalone interface branch directly.
