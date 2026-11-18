@@ -13,6 +13,8 @@ const AREA: usize = SIZE * SIZE;
 pub enum TextureBrush {
     Dry,
     Chalk,
+    Charcoal,
+    Pastel,
 }
 
 impl TextureBrush {
@@ -23,12 +25,14 @@ impl TextureBrush {
         match stroke.brush_preset {
             KritaBrushPreset::DryBrush => Some(Self::Dry),
             KritaBrushPreset::Chalk => Some(Self::Chalk),
+            KritaBrushPreset::Charcoal => Some(Self::Charcoal),
+            KritaBrushPreset::SoftPastel => Some(Self::Pastel),
             _ => None,
         }
     }
 
     fn mask(self, tip: BrushTipShape) -> &'static [u8; AREA] {
-        static MASKS: [OnceLock<[u8; AREA]>; 12] = [const { OnceLock::new() }; 12];
+        static MASKS: [OnceLock<[u8; AREA]>; 24] = [const { OnceLock::new() }; 24];
         MASKS[self as usize * 6 + tip as usize].get_or_init(|| self.make_mask(tip))
     }
 
@@ -83,6 +87,16 @@ impl TextureBrush {
                         0.18 + 0.58 * grain
                     }
                 }
+                Self::Charcoal => {
+                    let scratch = noise((x * 17 + y * 9 + 40_003) as u32);
+                    if scratch < 0.28 || grain < 0.13 { 0.0 }
+                    else { (0.28 + 0.72 * grain) * (0.65 + 0.35 * scratch) }
+                }
+                Self::Pastel => {
+                    let soft = (1.0 - u.hypot(v) * 0.38).clamp(0.20, 1.0);
+                    if grain < 0.17 { 0.0 }
+                    else { (0.34 + 0.48 * grain) * soft }
+                }
             };
             // Keep taps visible even when the tip is smaller than a pixel.
             let ink = if u.abs() < 0.07 && v.abs() < 0.07 {
@@ -105,7 +119,7 @@ impl TextureBrush {
             let pressure = (2.0 * dab.radius / stroke.base_width).clamp(0.0, 1.0);
             let variation = noise(ordinal.wrapping_add(3201));
             // Bristles follow the hand. Chalk rolls slightly about the center.
-            let (sin, cos) = if self == Self::Chalk {
+            let (sin, cos) = if matches!(self, Self::Chalk | Self::Charcoal | Self::Pastel) {
                 ((variation - 0.5) * 0.8).sin_cos()
             } else {
                 (0.0, 1.0)

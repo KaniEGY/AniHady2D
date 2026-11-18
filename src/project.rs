@@ -15,6 +15,8 @@ pub enum KritaBrushPreset {
     SketchPencil,
     DryBrush,
     Chalk,
+    Charcoal,
+    SoftPastel,
 }
 
 impl Default for KritaBrushPreset {
@@ -24,7 +26,7 @@ impl Default for KritaBrushPreset {
 }
 
 impl KritaBrushPreset {
-    pub const MENU: [(Self, &'static str, &'static str); 7] = [
+    pub const MENU: [(Self, &'static str, &'static str); 9] = [
         (Self::GPenInk, "G-Pen", "حبر"),
         (Self::Watercolor, "Watercolor", "مائية"),
         (Self::ChiselMarker, "Marker", "ماركر"),
@@ -32,6 +34,8 @@ impl KritaBrushPreset {
         (Self::SketchPencil, "Pencil", "رصاص"),
         (Self::DryBrush, "DryBrush", "جافة"),
         (Self::Chalk, "Chalk", "طباشير"),
+        (Self::Charcoal, "Charcoal", "فحم"),
+        (Self::SoftPastel, "Soft Pastel", "باستيل"),
     ];
 
     pub fn label(&self) -> &'static str {
@@ -43,6 +47,8 @@ impl KritaBrushPreset {
             KritaBrushPreset::SketchPencil => "Pencil (قلم رصاص سكتش)",
             Self::DryBrush => "DryBrush (فرشاة جافة)",
             Self::Chalk => "Chalk (طباشير)",
+            Self::Charcoal => "Charcoal (قلم فحم خشن)",
+            Self::SoftPastel => "Soft Pastel (باستيل ناعم)",
         }
     }
 
@@ -55,6 +61,8 @@ impl KritaBrushPreset {
             KritaBrushPreset::SketchPencil => 0.75,
             Self::DryBrush => 0.84,
             Self::Chalk => 0.64,
+            Self::Charcoal => 0.82,
+            Self::SoftPastel => 0.68,
         }
     }
 }
