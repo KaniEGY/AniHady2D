@@ -7108,11 +7108,6 @@ impl eframe::App for StickApp {
                             else if pointer_down { self.shape_drag_current = Some(stage_pos); }
                         }
                         ActiveToolUI::Bucket if pointer_pressed => {
-                            // Existing exact vector-contour fill takes priority. If the
-                            // region is drawn using many brush strokes or intersections,
-                            // use a bounded raster wall mask + traced vector region.
-                            // Optionally fill an active color layer using the combined
-                            // visible outlines, as in modern 2D painting workflows.
                             let reference_strokes: Vec<Stroke> = if self.bucket_reference_all_layers {
                                 self.project.layers.iter()
                                     .filter(|layer| layer.visible && !layer.is_guide)
@@ -7125,46 +7120,63 @@ impl eframe::App for StickApp {
                                         self.project.evaluate_layer_at_frame(layer, self.current_frame).strokes)
                                     .unwrap_or_default()
                             };
-                            let fallback = fill_tools::flood_fill_polygon_with_options(
-                                &reference_strokes, (stage_pos.x, stage_pos.y),
-                                (self.project.width as f32, self.project.height as f32),
-                                self.bucket_gap_close,
-                                fill_tools::FillOptions {
-                                    precision: self.bucket_precision,
-                                    dilate_contract: self.bucket_dilate_contract,
-                                    boundary_thickness: self.bucket_thickness,
-                                });
-                            let can_fill = !self.bucket_reference_all_layers
-                                && fallback.is_none()
-                                && fill_tools::can_fill_contour(
-                                    &reference_strokes, stage_pos.x, stage_pos.y);
-                            if can_fill || fallback.is_some() {
+                            // Symmetry affects the bucket seed just like it affects drawn
+                            // strokes. The mirrored region is solved from the same visible
+                            // boundaries, then both fills are committed in one Undo step.
+                            let mut seeds=vec![stage_pos];
+                            match self.symmetry_mode {
+                                SymmetryMode::Horizontal => seeds.push(
+                                    egui::pos2(self.project.width as f32-stage_pos.x,stage_pos.y)),
+                                SymmetryMode::Vertical => seeds.push(
+                                    egui::pos2(stage_pos.x,self.project.height as f32-stage_pos.y)),
+                                SymmetryMode::Off => {}
+                            }
+                            if seeds.len()>1 && seeds[0].distance(seeds[1])<0.5 {seeds.truncate(1);}
+                            let mut solutions=Vec::new();
+                            for seed in seeds {
+                                let fallback=fill_tools::flood_fill_polygon_with_options(
+                                    &reference_strokes,(seed.x,seed.y),
+                                    (self.project.width as f32,self.project.height as f32),
+                                    self.bucket_gap_close,
+                                    fill_tools::FillOptions {
+                                        precision:self.bucket_precision,
+                                        dilate_contract:self.bucket_dilate_contract,
+                                        boundary_thickness:self.bucket_thickness,
+                                    });
+                                let can_fill=!self.bucket_reference_all_layers
+                                    && fallback.is_none()
+                                    && fill_tools::can_fill_contour(
+                                        &reference_strokes,seed.x,seed.y);
+                                if fallback.is_some() || can_fill {
+                                    solutions.push((seed,fallback,can_fill));
+                                }
+                            }
+                            if solutions.is_empty() {
+                                self.status_message=tr(lang,
+                                    "Fill requires a closed region. Close small gaps between lines and retry.",
+                                    "التعبئة محتاجة مساحة مقفولة؛ اقفل الفجوات الصغيرة بين الخطوط وجرّب تاني.");
+                            } else {
                                 self.save_undo_state();
                                 self.ensure_editable_keyframe();
-                                if let Some(l) = self.project.layers.get_mut(self.active_layer_idx) {
-                                    if let Some(f) = l.keyframes.get_mut(&self.current_frame) {
-                                        if fallback.map(|points| {
-                                            // Re-filling an existing region must visibly
-                                            // override the previous fill while staying below
-                                            // every outline. Previously insert(0) hid new
-                                            // colors beneath older fill-only elements.
-                                            let insert_at = f.strokes.iter().rposition(|s|
-                                                s.color[3] == 0 && s.fill_color.is_some())
-                                                .map(|i| i + 1).unwrap_or(0);
-                                            f.strokes.insert(insert_at, fill_tools::polygon_fill_stroke(
-                                                points, self.brush_color));
-                                            true
-                                        }).unwrap_or(false)
-                                            || (can_fill && fill_tools::apply_contour_fill(
-                                                &mut f.strokes, stage_pos.x, stage_pos.y, self.brush_color)) {
-                                            self.has_unsaved_changes = true;
+                                let mut changed=false;
+                                if let Some(layer)=self.project.layers.get_mut(self.active_layer_idx) {
+                                    if let Some(frame)=layer.keyframes.get_mut(&self.current_frame) {
+                                        for (seed,fallback,can_fill) in solutions {
+                                            if let Some(points)=fallback {
+                                                let insert_at=frame.strokes.iter().rposition(|stroke|
+                                                    stroke.color[3]==0 && stroke.fill_color.is_some())
+                                                    .map(|i|i+1).unwrap_or(0);
+                                                frame.strokes.insert(insert_at,
+                                                    fill_tools::polygon_fill_stroke(points,self.brush_color));
+                                                changed=true;
+                                            } else if can_fill {
+                                                changed |= fill_tools::apply_contour_fill(
+                                                    &mut frame.strokes,seed.x,seed.y,self.brush_color);
+                                            }
                                         }
                                     }
                                 }
-                            } else {
-                                self.status_message = tr(lang,
-                                    "Fill requires a closed region. Close small gaps between lines and retry.",
-                                    "التعبئة محتاجة مساحة مقفولة؛ اقفل الفجوات الصغيرة بين الخطوط وجرّب تاني.");
+                                if changed {self.has_unsaved_changes=true;} else {self.undo_stack.pop();}
                             }
                         }
                         ActiveToolUI::EraserRed | ActiveToolUI::EraserGreen if pointer_down => {
@@ -7266,7 +7278,31 @@ impl eframe::App for StickApp {
                             }
                         }
                         ActiveToolUI::VectorDirectSelect => {
-                            if pointer_pressed {
+                            if self.vector_node_quick_edit
+                                && ctx.input(|i|i.pointer.secondary_clicked()) {
+                                self.save_undo_state();
+                                self.ensure_editable_keyframe();
+                                let edit=self.project.layers.get_mut(self.active_layer_idx)
+                                    .and_then(|layer|layer.keyframes.get_mut(&self.current_frame))
+                                    .and_then(|frame|vector_path::quick_edit_node(
+                                        &mut frame.strokes,stage_pos.x,stage_pos.y,
+                                        (12.0/scale).max(2.0)));
+                                match edit {
+                                    Some(vector_path::QuickNodeEdit::Inserted{stroke,point}) => {
+                                        self.selected_vector_node=Some((stroke,point));
+                                        self.selected_vector_nodes=vec![(stroke,point)];
+                                        self.selected_stroke_indices=vec![stroke];
+                                        self.has_unsaved_changes=true;
+                                    }
+                                    Some(vector_path::QuickNodeEdit::Removed{stroke,..}) => {
+                                        self.selected_vector_node=None;
+                                        self.selected_vector_nodes.clear();
+                                        self.selected_stroke_indices=vec![stroke];
+                                        self.has_unsaved_changes=true;
+                                    }
+                                    None => {self.undo_stack.pop();}
+                                }
+                            } else if pointer_pressed {
                                 let vector_pivot=self.project.layers.get(self.active_layer_idx)
                                     .and_then(|layer| {
                                         let frame=self.project.evaluate_layer_at_frame(layer,self.current_frame);
