@@ -318,6 +318,7 @@ pub fn flood_fill_polygon_with_options(
     let top = 2usize;
     let right = ((cw / cell).ceil() as usize + 2).min(w.saturating_sub(2));
     let bottom = ((ch / cell).ceil() as usize + 2).min(h.saturating_sub(2));
+    let mut used_canvas_edge_closure = false;
     let mut bracket = |contacts: &mut Vec<f32>, seed_coord: f32| -> Option<(f32,f32)> {
         contacts.sort_by(f32::total_cmp);
         let merge = (cell * 3.0 + gap.clamp(0.0,14.0) + 3.0).max(5.0);
@@ -329,21 +330,25 @@ pub fn flood_fill_polygon_with_options(
             .map(|pair|(pair[0],pair[1]))
     };
     if let Some((a,b))=bracket(&mut canvas_contacts[0],sy) {
+        used_canvas_edge_closure = true;
         let ya=(a/cell+2.0).floor().clamp(top as f32,bottom as f32) as usize;
         let yb=(b/cell+2.0).ceil().clamp(top as f32,bottom as f32) as usize;
         for y in ya..=yb { wall[y*w+left]=true; }
     }
     if let Some((a,b))=bracket(&mut canvas_contacts[1],sy) {
+        used_canvas_edge_closure = true;
         let ya=(a/cell+2.0).floor().clamp(top as f32,bottom as f32) as usize;
         let yb=(b/cell+2.0).ceil().clamp(top as f32,bottom as f32) as usize;
         for y in ya..=yb { wall[y*w+right]=true; }
     }
     if let Some((a,b))=bracket(&mut canvas_contacts[2],sx) {
+        used_canvas_edge_closure = true;
         let xa=(a/cell+2.0).floor().clamp(left as f32,right as f32) as usize;
         let xb=(b/cell+2.0).ceil().clamp(left as f32,right as f32) as usize;
         for x in xa..=xb { wall[top*w+x]=true; }
     }
     if let Some((a,b))=bracket(&mut canvas_contacts[3],sx) {
+        used_canvas_edge_closure = true;
         let xa=(a/cell+2.0).floor().clamp(left as f32,right as f32) as usize;
         let xb=(b/cell+2.0).ceil().clamp(left as f32,right as f32) as usize;
         for x in xa..=xb { wall[bottom*w+x]=true; }
@@ -415,35 +420,38 @@ pub fn flood_fill_polygon_with_options(
     // Grow the selected component INTO wall cells only, never into another
     // transparent component: a center divider therefore remains a barrier.
     let dilate = if options.dilate_contract.is_finite() { options.dilate_contract.clamp(-12.0, 12.0) } else { 0.0 };
-    let grow_steps = ((gap.clamp(0.0, 14.0) + 1.5 + dilate.max(0.0)) / cell).ceil()
-        .clamp(1.0, 32.0) as usize;
-    let mut covered = visited.clone();
-    let mut boundary = VecDeque::<(usize, usize)>::new();
-    for index in 0..size {
-        if !visited[index] { continue; }
-        let x = index % w;
-        let y = index / w;
-        if x == 0 || y == 0 || x + 1 >= w || y + 1 >= h { continue; }
-        for next in [index - 1, index + 1, index - w, index + w] {
-            if wall[next] && !covered[next] {
-                covered[next] = true;
-                boundary.push_back((next, 1));
+    if !used_canvas_edge_closure {
+        let grow_steps = ((gap.clamp(0.0, 14.0) + 1.5 + dilate.max(0.0)) / cell).ceil()
+            .clamp(1.0, 32.0) as usize;
+        let mut covered = visited.clone();
+        let mut boundary = VecDeque::<(usize, usize)>::new();
+        for index in 0..size {
+            if !visited[index] { continue; }
+            let x = index % w;
+            let y = index / w;
+            if x == 0 || y == 0 || x + 1 >= w || y + 1 >= h { continue; }
+            for next in [index - 1, index + 1, index - w, index + w] {
+                if wall[next] && !covered[next] {
+                    covered[next] = true;
+                    boundary.push_back((next, 1));
+                }
             }
         }
-    }
-    while let Some((index, distance)) = boundary.pop_front() {
-        if distance >= grow_steps { continue; }
-        let x = index % w;
-        let y = index / w;
-        if x == 0 || y == 0 || x + 1 >= w || y + 1 >= h { continue; }
-        for next in [index - 1, index + 1, index - w, index + w] {
-            if wall[next] && !covered[next] {
-                covered[next] = true;
-                boundary.push_back((next, distance + 1));
+        while let Some((index, distance)) = boundary.pop_front() {
+            if distance >= grow_steps { continue; }
+            let x = index % w;
+            let y = index / w;
+            if x == 0 || y == 0 || x + 1 >= w || y + 1 >= h { continue; }
+            for next in [index - 1, index + 1, index - w, index + w] {
+                if wall[next] && !covered[next] {
+                    covered[next] = true;
+                    boundary.push_back((next, distance + 1));
+                }
             }
         }
+    
+    
     }
-
     // Negative Dilate/Contract intentionally pulls the fill in from *every*
     // boundary, with a bounded four-connected erosion of the temporary mask.
     // Avoid changing the source outlines or the saved project schema.
