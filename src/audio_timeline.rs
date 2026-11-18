@@ -11,6 +11,17 @@ pub fn move_clip(track: &mut AudioTrack, requested_start: usize, max_frames: usi
     true
 }
 
+/// Translate the audio lane's horizontal pointer movement to an integer
+/// start frame. Uses round-to-nearest so slow drags work as soon as the
+/// pointer travels half a cell, independently of mouse velocity.
+pub fn drag_target_frame(origin: usize, delta_px: f32, cell_px: f32, max_frames: usize) -> Option<usize> {
+    if !delta_px.is_finite() || !cell_px.is_finite() || cell_px <= 0.0 || max_frames == 0 {
+        return None;
+    }
+    let shift=(delta_px / cell_px).round() as i64;
+    Some(((origin as i64).saturating_add(shift)).clamp(1,max_frames as i64) as usize)
+}
+
 pub fn peak_for_frame(peaks: &[f32], relative_frame: usize, length: usize) -> f32 {
     if peaks.is_empty() || length == 0 { return 0.0; }
     let sample = (relative_frame as u64 * peaks.len() as u64 / length as u64)
@@ -39,6 +50,16 @@ mod tests {
         assert_eq!((t.start_frame,t.end_frame),(80,100));
         assert!(move_clip(&mut t,0,100));
         assert_eq!((t.start_frame,t.end_frame),(1,21));
+    }
+
+    #[test]
+    fn slow_audio_drag_is_velocity_independent_and_clamped() {
+        assert_eq!(drag_target_frame(20, 0.49, 1.0, 100),Some(20));
+        assert_eq!(drag_target_frame(20, 0.51, 1.0, 100),Some(21));
+        assert_eq!(drag_target_frame(20, -0.51, 1.0, 100),Some(19));
+        assert_eq!(drag_target_frame(20, 12.0, 1.0, 25),Some(25));
+        assert_eq!(drag_target_frame(5, -5000.0, 10.0, 100),Some(1));
+        assert_eq!(drag_target_frame(20, f32::NAN, 5.0, 100),None);
     }
 
     #[test]
