@@ -1,5 +1,13 @@
 # Stick Studio — Session Handoff / سجل استكمال المشروع
 
+## 18 November 2026 — brush/select fixes, timeline action markers and Artist System intro (PR #54)
+- Branch `fix/brush-selection-timeline-artist-system-20261118` is based on main `e6ba73bd427d59e48157cfd1eea17ce749953bfa` / release `v4.1.0.259`.
+- Smooth Ink/Tapered Pen pressure geometry now avoids self-intersecting hairpin failures while preserving their intended smoothing/taper; Smooth Ink centerline behavior is shared by canvas and raster/video export.
+- Selection/Lasso no longer activates Free Transform axis gizmos. Free Transform has a smaller dedicated transform icon.
+- `FrameData.timeline_marker` is serde-defaulted and records InsertedEmpty / CopiedPose / Blank provenance. OLD, NEW and New mine render requested green / red / white-with-black-border circles; old projects remain readable with Legacy markers.
+- New-project Artist System intro is 8 seconds, cyan/gold HUD styled, with deterministic animated electric effects and synthesized lightning SFX. General Settings can disable the intro.
+- PR #54 must pass the Windows tests/Clippy/release build on its latest head before merge. Manual visual QA of exact HUD feel, brush behavior and input devices remains separate and must not be claimed from CI alone.
+
 ## 18 November 2026 — screen-recording QA, smooth audio dragging and invite joins
 - Source screen recording: silent MP4, 1920x1080, 60fps, approximately 9m47s. See `VIDEO_QA_2026-11-18.md` for timestamped observations, fixed issues and remaining QA.
 - PR #46 on `fix/video-qa-audio-scrub-invites-20261118` captures audio clip from initial pointer press, disables timeline's drag-to-scroll conflict, saves a single Undo state per actual audio move, and implements continuous ruler mouse-held frame scrubbing.
