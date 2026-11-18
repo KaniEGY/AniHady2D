@@ -2,7 +2,7 @@
 //!
 //! The original two timeline styles remain unchanged. Every operation here is
 //! validated before mutation and uses the existing editor Undo snapshots.
-use crate::project::{AniProject, TweenMode};
+use crate::project::{AniProject, FrameMarkerKind, TweenMode};
 use eframe::egui;
 use std::collections::HashSet;
 
@@ -113,7 +113,7 @@ pub fn render_ruler_cell(
 
 pub fn render_exposure_cell(
     painter: &egui::Painter, rect: egui::Rect,
-    keyframe: bool, occupied: bool, tween: TweenMode,
+    keyframe: bool, occupied: bool, marker: FrameMarkerKind, tween: TweenMode,
     current: bool, selected: bool, locked: bool,
 ) {
     let fill = if locked {egui::Color32::from_rgb(47,47,53)}
@@ -131,13 +131,17 @@ pub fn render_exposure_cell(
         let x=rect.center().x;
         let y=rect.center().y;
         let size=if selected {7.} else {5.5};
-        let diamond=vec![egui::pos2(x,y-size),egui::pos2(x+size,y),
-            egui::pos2(x,y+size),egui::pos2(x-size,y)];
-        let color=if tween!=TweenMode::None {
-            egui::Color32::from_rgb(215,145,245)
-        } else if occupied {egui::Color32::from_rgb(247,206,105)}
-        else {egui::Color32::from_rgb(182,194,205)};
-        painter.add(egui::Shape::convex_polygon(diamond,color,egui::Stroke::NONE));
+        if !crate::timeline_styles::draw_action_marker(
+            painter, egui::pos2(x,y), size, marker, occupied
+        ) {
+            let diamond=vec![egui::pos2(x,y-size),egui::pos2(x+size,y),
+                egui::pos2(x,y+size),egui::pos2(x-size,y)];
+            let color=if tween!=TweenMode::None {
+                egui::Color32::from_rgb(215,145,245)
+            } else if occupied {egui::Color32::from_rgb(247,206,105)}
+            else {egui::Color32::from_rgb(182,194,205)};
+            painter.add(egui::Shape::convex_polygon(diamond,color,egui::Stroke::NONE));
+        }
     }
     if selected {
         painter.rect_stroke(rect.shrink(1.0),2.0,
