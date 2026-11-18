@@ -4,16 +4,28 @@
 
 ## English (US)
 
+### The System, Transform and timeline interaction update
+- Added **The System** as a seventh saved interface preset: deep navy HUD panels, cyan neon borders, gold accents, System-style canvas/timeline chrome, and a dedicated activation sound.
+- The standalone normal **Selection** tool is removed from the visible toolbar. **Transform** now owns click selection, box selection, move, resize and rotate; the old Selection shortcut remains a compatibility alias to Transform.
+- New-project Artist System intro is now **4 seconds**. Appearance and dismissal use different synthesized System UI sounds, and every appearance chooses one of exactly **100** rotating bilingual System words.
+- Timeline quick actions for **Copy to next frame**, **Move keyframe forward** and **Clear selection** are icon-only controls shared by OLD, NEW and New mine. Their names appear as delayed tooltips after the configured two-second hover delay.
+- Frame provenance is now preserved through next-key creation, clipboard paste and New mine multi-copy: inserted empty = green circle, copied pose = red circle, explicit blank = white circle with black outline, authored/drawn legacy content keeps its drawn-frame marker.
+
+### Bugs fixed
+- Free Transform handle hit testing now uses the exact painted screen positions, fixing cursor/hitbox offsets after zoom, pan, rotation or canvas flips.
+- Selection/marquee outlines are drawn from transformed corner points so visible bounds stay aligned with the canvas transform.
+- Artist System and level-up overlays now block canvas/tool input behind the popup, preventing custom cursor and drawing interactions from leaking into background windows.
+
 ### What's new
 - Timeline action markers are consistent in OLD, NEW and New mine: a newly inserted empty cel is a green circle, a copied/current-pose keyframe is a red circle, and an explicit blank keyframe is a white circle with a black border. The marker type is saved with the project and old files default safely to legacy visuals.
-- Artist System has a new cyan/gold cyber-HUD identity. Creating a new project shows the artist level, rank and XP progress for 8 seconds with animated electric border effects and a synthesized lightning sound.
+- Artist System has a cyan/gold cyber-HUD identity. Creating a new project shows the artist level, rank and XP progress for 4 seconds with animated electric border effects and System UI sounds.
 - General Settings can disable the new-project Artist System intro; the global sound-effects switch still controls its sound.
 - Free Transform uses a smaller, distinct transform-gizmo icon.
 
 ### Bugs fixed
 - Smooth Ink now keeps a stable smoothed centerline for constant-pressure drawing and falls back safely on risky hairpin geometry instead of producing self-intersecting filled blobs.
 - Tapered Pen keeps tapered ends but uses a safe pressure-dab fallback on sharp reversals that could fold the pressure outline over itself.
-- Selection and Lasso no longer expose or activate Free Transform X/Y axis handles; rotate/resize/axis gizmos belong only to Free Transform.
+- Lasso does not expose or activate Free Transform X/Y axis handles; rotate/resize/axis gizmos belong only to Free Transform.
 
 ### Canvas-edge fill, independent tools, tablet and timeline fixes
 - Paint Bucket now treats the physical canvas border as a valid fill boundary, so an otherwise-open contour can close against the edge of the paper without leaking.
