@@ -1458,6 +1458,53 @@ fn draw_artist_lightning_fx(ctx: &egui::Context, rect: egui::Rect, time: f64) {
         painter.add(egui::Shape::line(bolt, egui::Stroke::new(1.8 + pulse*1.2, cyan)));
     }
 }
+fn online_action_card(
+    ui:&mut egui::Ui,
+    icon:&str,
+    title:&str,
+    subtitle:&str,
+    accent:egui::Color32,
+)->egui::Response {
+    let width=ui.available_width().min(390.0).max(250.0);
+    let (rect,response)=ui.allocate_exact_size(egui::vec2(width,72.0),egui::Sense::click());
+    let hovered=response.hovered();
+    let fill=if hovered {egui::Color32::from_rgb(34,43,55)}
+        else {egui::Color32::from_rgb(27,32,41)};
+    ui.painter().rect_filled(rect,8.0,fill);
+    ui.painter().rect_stroke(rect,8.0,egui::Stroke::new(if hovered{1.8}else{1.0},accent));
+    let icon_center=rect.left_center()+egui::vec2(34.0,0.0);
+    ui.painter().circle_filled(icon_center,22.0,
+        egui::Color32::from_rgba_unmultiplied(accent.r(),accent.g(),accent.b(),45));
+    ui.painter().text(icon_center,egui::Align2::CENTER_CENTER,icon,
+        egui::FontId::proportional(24.0),accent);
+    ui.painter().text(rect.left_top()+egui::vec2(69.0,17.0),
+        egui::Align2::LEFT_TOP,title,egui::FontId::proportional(16.5),egui::Color32::WHITE);
+    ui.painter().text(rect.left_top()+egui::vec2(69.0,42.0),
+        egui::Align2::LEFT_TOP,subtitle,egui::FontId::proportional(11.5),
+        egui::Color32::from_gray(182));
+    response.on_hover_text(format!("{}\n{}",title,subtitle))
+}
+
+fn online_info_chip(
+    ui:&mut egui::Ui,
+    icon:&str,
+    title:&str,
+    description:&str,
+    accent:egui::Color32,
+)->egui::Response {
+    let (rect,response)=ui.allocate_exact_size(egui::vec2(176.0,60.0),egui::Sense::hover());
+    ui.painter().rect_filled(rect,7.0,egui::Color32::from_rgb(25,30,38));
+    ui.painter().rect_stroke(rect,7.0,egui::Stroke::new(
+        if response.hovered(){1.6}else{0.9},accent));
+    ui.painter().text(rect.left_center()+egui::vec2(24.0,-8.0),
+        egui::Align2::CENTER_CENTER,icon,egui::FontId::proportional(19.0),accent);
+    ui.painter().text(rect.left_top()+egui::vec2(48.0,12.0),
+        egui::Align2::LEFT_TOP,title,egui::FontId::proportional(13.0),egui::Color32::WHITE);
+    ui.painter().text(rect.left_top()+egui::vec2(48.0,34.0),
+        egui::Align2::LEFT_TOP,"ⓘ",egui::FontId::proportional(11.0),accent);
+    response.on_hover_text(format!("{}\n{}",title,description))
+}
+
 fn draw_stick_timeline_cell(painter: &egui::Painter, rect: egui::Rect, is_keyframe: bool, has_content: bool, tween_mode: TweenMode, marker: FrameMarkerKind) {
     let c = rect.center();
     match tween_mode {
