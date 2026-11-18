@@ -2416,12 +2416,29 @@ impl StickApp {
                     }
                     OnlinePage::JoinRoom => {
                         ui.heading(tr(lang,"Join a room","الانضمام لغرفة"));
+                        ui.horizontal_wrapped(|ui|{
+                            online_info_chip(ui,"⌂",tr(lang,"LAN Rooms","غرف LAN"),
+                                tr(lang,"Rooms discovered automatically on your local network.",
+                                    "غرف بتظهر تلقائي على نفس الشبكة المحلية."),
+                                egui::Color32::from_rgb(72,201,137));
+                            let ts_ok=self.online_remote_info.as_ref().is_some_and(|x|x.connected);
+                            online_info_chip(ui,"⚡","Tailscale",
+                                tr(lang,"Remote private-network rooms discovered from authorized peers.",
+                                    "غرف بعيدة على شبكة خاصة من الأجهزة المسموح لها."),
+                                if ts_ok {egui::Color32::from_rgb(77,215,140)}
+                                else {egui::Color32::from_rgb(120,130,145)});
+                            online_info_chip(ui,"⇲",tr(lang,"Invite / Direct","دعوة / مباشر"),
+                                tr(lang,"Paste a Stick invitation or reachable host:port.",
+                                    "الصق رابط دعوة Stick أو عنوان host:port قابل للوصول."),
+                                egui::Color32::from_rgb(76,180,245));
+                        });
                         ui.small(tr(lang,
-                            "Rooms from your LAN or authorized Tailscale friends appear here.",
-                            "هنا بتظهر غرف نفس الشبكة أو أصحابك المسموح لهم على Tailscale."));
+                            "Hover an icon for 2 seconds for details, or open the Online Guide above.",
+                            "حط الماوس على الأيقونة ثانيتين للتفاصيل، أو افتح دليل الأونلاين فوق."));
                         ui.add_space(10.0);
                         ui.horizontal(|ui|{
-                            if ui.button(tr(lang,"Refresh","تحديث الغرف")).clicked(){
+                            if ui.button("⟳").on_hover_text(tr(lang,
+                                "Refresh room discovery","تحديث البحث عن الغرف")).clicked(){
                                 self.refresh_online_rooms();
                             }
                             if self.online_discovery.is_some(){ui.spinner();}
@@ -2452,11 +2469,18 @@ impl StickApp {
                                                     } else {tr(lang,"Animation","أنيميشن")},
                                                     room.members,room.limit,room.room_code));
                                             });
-                                            if room.locked {ui.label("🔒");}
+                                            if room.locked {
+                                                ui.label("🔒").on_hover_text(tr(lang,
+                                                    "Password protected room","غرفة محمية بكلمة سر"));
+                                            }
                                             if ui.add_enabled(self.online_session.is_none(),
-                                                egui::Button::new(
-                                                    if room.locked {tr(lang,"Select","اختيار")}
-                                                    else {tr(lang,"Join","دخول")})).clicked(){
+                                                egui::Button::new(if room.locked {"🔑"} else {"⇲"}))
+                                                .on_hover_text(if room.locked {
+                                                    tr(lang,"Select room and enter its password below",
+                                                        "اختار الغرفة واكتب كلمة السر تحت")
+                                                } else {
+                                                    tr(lang,"Join this room","ادخل الغرفة")
+                                                }).clicked(){
                                                 self.online_address=room.address.clone();
                                                 self.online_code_input=room.room_code.clone();
                                                 self.online_room_name=room.title.clone();
