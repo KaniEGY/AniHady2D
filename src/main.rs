@@ -510,6 +510,8 @@ struct AppConfig {
     ui_panel_color: [u8; 4],
     #[serde(default = "default_ui_accent_color")]
     ui_accent_color: [u8; 4],
+    #[serde(default)]
+    ui_style_preset: u8,
     #[serde(default = "default_autosave_mins")]
     autosave_interval_minutes: u64,
     #[serde(default = "default_cursor_scale")]
@@ -654,6 +656,7 @@ impl Default for AppConfig {
             timeline_playhead_color: default_tl_head(),
             ui_panel_color: default_ui_panel_color(),
             ui_accent_color: default_ui_accent_color(),
+            ui_style_preset: 0,
             autosave_interval_minutes: 5,
             brush_cursor_scale: 1.0,
             tool_icon_scale: 1.0,
@@ -834,6 +837,38 @@ fn load_artist_avatar(ctx: &egui::Context, path: Option<&str>) -> Option<egui::T
     Some(ctx.load_texture("stick_artist_avatar", color_image, egui::TextureOptions::LINEAR))
 }
 
+fn apply_interface_preset(config: &mut AppConfig, preset: u8) {
+    config.ui_style_preset=preset.min(6);
+    let (panel,accent,tl_bg,tl_cell,tl_head,icon_scale,right_split,timeline_style)=match config.ui_style_preset {
+        1 => ([26,38,58,255],[74,200,255,255],[20,31,50,255],[36,56,80,255],
+            [255,204,71,255],1.12,0.48,1), // Cartoon
+        2 => ([31,32,35,255],[148,155,165,255],[24,25,27,255],[43,45,49,255],
+            [210,74,74,255],0.94,0.42,0), // Serious / compact
+        3 => ([50,31,47,255],[244,118,190,255],[42,24,39,255],[72,43,66,255],
+            [255,167,214,255],1.15,0.50,1), // Cute pink
+        4 => ([42,42,45,255],[39,151,215,255],[31,31,34,255],[55,56,61,255],
+            [240,78,78,255],1.0,0.46,0), // Animate Style
+        5 => ([39,42,46,255],[66,151,218,255],[29,32,35,255],[52,56,61,255],
+            [232,84,84,255],0.98,0.43,1), // Krita Style
+        6 => ([34,37,42,255],[230,126,34,255],[27,29,33,255],[48,52,58,255],
+            [255,151,53,255],0.96,0.40,1), // Blender Style
+        _ => ([30,31,36,255],[0,122,204,255],[28,29,34,255],[40,42,48,255],
+            [225,55,55,255],1.0,0.45,0),
+    };
+    config.ui_panel_color=panel;
+    config.ui_accent_color=accent;
+    config.timeline_bg_color=tl_bg;
+    config.timeline_cell_color=tl_cell;
+    config.timeline_playhead_color=tl_head;
+    config.tool_icon_scale=icon_scale;
+    config.right_panel_split=right_split;
+    config.timeline_style=timeline_style;
+    config.show_top_bar=true;
+    config.show_left_dock=true;
+    config.show_right_dock=true;
+    config.show_timeline_dock=true;
+}
+
 fn apply_user_theme(ctx: &egui::Context, config: &AppConfig) {
     let mut style = (*ctx.style()).clone();
     let c = config.ui_panel_color;
@@ -843,6 +878,17 @@ fn apply_user_theme(ctx: &egui::Context, config: &AppConfig) {
         c[0].saturating_add(7), c[1].saturating_add(7), c[2].saturating_add(7)
     );
     style.visuals.selection.bg_fill = egui::Color32::from_rgb(a[0], a[1], a[2]);
+    let (item,pad)=match config.ui_style_preset {
+        1 => (egui::vec2(7.0,7.0),egui::vec2(9.0,6.0)),
+        2 => (egui::vec2(4.0,3.5),egui::vec2(6.0,3.0)),
+        3 => (egui::vec2(8.0,7.0),egui::vec2(10.0,6.0)),
+        4 => (egui::vec2(5.0,4.0),egui::vec2(7.0,4.0)),
+        5 => (egui::vec2(4.5,4.5),egui::vec2(6.5,3.5)),
+        6 => (egui::vec2(4.0,4.0),egui::vec2(6.0,3.0)),
+        _ => (egui::vec2(5.0,5.0),egui::vec2(7.0,4.0)),
+    };
+    style.spacing.item_spacing=item;
+    style.spacing.button_padding=pad;
     ctx.set_style(style);
 }
 
@@ -5280,6 +5326,27 @@ impl eframe::App for StickApp {
                             ui.close_menu();
                         }
 
+                        ui.menu_button(tr(lang,"Interface","الواجهة"),|ui|{
+                            ui.small(tr(lang,
+                                "Layout/color presets inspired by familiar creative workflows; no affiliation.",
+                                "ستايلات ألوان وتوزيع مألوفة لبرامج الإبداع، بدون شعارات أو تبعية للبرامج دي."));
+                            ui.separator();
+                            for (id,en,ar) in [
+                                (0u8,"Current Stick","واجهة Stick الحالية"),
+                                (1,"Cartoon","الواجهة الكرتونية"),
+                                (2,"Serious","الواجهة الجدية"),
+                                (3,"Cute Pink","واجهة البنات الكيوت"),
+                                (4,"Animate Style","انميت استايل"),
+                                (5,"Krita Style","كريتا استايل"),
+                                (6,"Blender Style","بلندر استايل"),
+                            ] {
+                                if ui.selectable_label(self.config.ui_style_preset==id,tr(lang,en,ar)).clicked() {
+                                    apply_interface_preset(&mut self.config,id);
+                                    self.config.save();
+                                    ui.close_menu();
+                                }
+                            }
+                        });
                         ui.menu_button(tr(lang,"Project","المشروع"),|ui|{
                             if ui.button(tr(lang,"Save (Ctrl+S)","حفظ (Ctrl+S)")).clicked(){self.trigger_save();ui.close_menu();}
                             if ui.button(tr(lang,"Save As...","حفظ باسم...")).clicked(){self.trigger_save_as();ui.close_menu();}
@@ -7767,6 +7834,19 @@ mod tool_discovery_tests {
         assert!(app.current_project_path.is_none());
         assert!(app.redo_stack.is_empty());
         assert!(app.selected_stroke_indices.is_empty());
+    }
+
+    #[test]
+    fn interface_presets_apply_distinct_saved_palettes() {
+        let mut cfg=AppConfig::default();
+        let base=cfg.ui_panel_color;
+        apply_interface_preset(&mut cfg,3);
+        assert_eq!(cfg.ui_style_preset,3);
+        assert_ne!(cfg.ui_panel_color,base);
+        assert_eq!(cfg.ui_accent_color,[244,118,190,255]);
+        apply_interface_preset(&mut cfg,99);
+        assert_eq!(cfg.ui_style_preset,6);
+        assert_eq!(cfg.ui_accent_color,[230,126,34,255]);
     }
 
     #[test]
