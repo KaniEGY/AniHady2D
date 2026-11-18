@@ -6070,9 +6070,9 @@ impl eframe::App for StickApp {
                                 if pointer_down {
                                     if let Some((drag_index,origin))=self.audio_drag_origin {
                                         if drag_index==audio_index && resp.dragged() {
-                                            let shift=(resp.drag_delta().x/cell_w).round() as i64;
-                                            let start=(origin as i64+shift)
-                                                .clamp(1,timeline_ops::MAX_TIMELINE_FRAMES as i64) as usize;
+                                            let start=audio_timeline::drag_target_frame(
+                                                origin,resp.drag_delta().x,cell_w,
+                                                timeline_ops::MAX_TIMELINE_FRAMES).unwrap_or(origin);
                                             if start != track.start_frame {
                                                 audio_move_request=Some((audio_index,start));
                                                 if !self.audio_drag_undo_captured {
