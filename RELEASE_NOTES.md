@@ -4,6 +4,14 @@
 
 ## English (US)
 
+### UI, canvas & brush update (experimental)
+- **Timeline layers:** replaced ambiguous glyph boxes with drawn visibility-eye and open/closed lock icons. Right-click a layer title in either timeline layout to Rename, Duplicate, or Delete (with the existing confirmation and Undo).
+- **Vector ink pen:** non-destructive smoothed rendering keeps editable control points. Choose round or square end caps, opacity, and stabilizer in tool properties; preview and PNG/video raster export use the same smoothed curve.
+- **Canvas Size Mode:** right properties panel now has common social-media presets and custom width/height, limited to 16 megapixels for memory safety. Resizing changes the stage boundaries without stretching existing strokes and supports Undo/Redo.
+- **Online and launcher guides:** added bilingual, closable manuals with visible buttons, explaining host rooms, security, Tailscale and the application's capabilities.
+- **New texture brushes:** Charcoal and Soft Pastel use deterministic procedural patterns shared between live preview and export.
+- **QA required:** successful Windows CI does not replace manual pen, UI and two-PC collaboration tests. The existing online protocol stays at v5. Projects from older builds remain supported; project files using new brush presets should be opened with this or newer Stick builds.
+
 ### Bugs fixed
 - The eyedropper samples overlapping layers from the front and distinguishes a shape's outline from its fill. Partial erasing now removes a single dab when its edge touches the eraser.
 - Opening, restoring or importing a whole document clears the previous document's undo history and active save path.
@@ -113,6 +121,7 @@
 - Added an unsaved-work guard to avoid restarting with an unfinished project.
 
 ## العربية (المصري)
+- **تحديث واجهة وستيك للرسم:** أيقونات واضحة للعين والقفل في التايم لاين، وقائمة كليك يمين لإعادة تسمية اللير والدبلكيت والحذف، وتحسين الفيكتور بمنحنيات أنعم وأطراف مربعة أو دائرية، ومقاسات جاهزة ومخصصة للكانفا، ودليل أونلاين ومميزات البرنامج بالعربي والإنجليزي مع إغلاق سهل، وفرشتي فحم وباستيل جديدتين. لازم نجرب الأداء والقلم والأونلاين على جهازين فعليين رغم نجاح الاختبارات الآلية. تغيير مقاس الكانفا لا يمط الرسومات القديمة.
 - **تجهيز موقع Stick Studio:** ضفنا صفحات رسمية للبرنامج وسياسة الخصوصية وشروط الاستخدام داخل `docs/`. تفعيل GitHub Pages وتوثيق الدومين للنشر العام على Google خطوات منفصلة، والموقع مش بنعتبره منشور قبل التأكد.
 - **تجهيز تسجيل Google:** أضفنا معرّف OAuth العام الخاص بـStick Studio في إصدارات ويندوز، مع إصلاح الإعدادات القديمة الفارغة أو غير الصحيحة. ما زال Google في وضع Testing، ولا نعتبر تسجيل الدخول والنسخ السحابي مختبرين عمليًا قبل تجارب أجهزة ويندوز.
 
