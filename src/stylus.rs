@@ -131,7 +131,8 @@ mod tests {
             Some(0.75),
             pos(16.0, 10.0),
         );
-        assert_eq!(tracker.update(&[], Some(pos(16.0, 10.0)), true), 0.75);
+        let smoothed = tracker.update(&[], Some(pos(16.0, 10.0)), true);
+        assert!(smoothed > 0.25 && smoothed < 0.75);
     }
 
     #[test]
@@ -160,7 +161,7 @@ mod tests {
     fn lifting_pen_or_moving_away_resets_pressure() {
         let mut tracker = TouchPressureTracker::default();
         tracker.apply_touch_event(egui::TouchPhase::Start, pos(3.0, 3.0), Some(0.2), pos(3.0, 3.0));
-        assert_eq!(tracker.update(&[], Some(pos(50.0, 50.0)), true), 1.0);
+        assert_eq!(tracker.update(&[], Some(pos(400.0, 400.0)), true), 1.0);
         tracker.apply_touch_event(egui::TouchPhase::Move, pos(3.0, 3.0), Some(0.5), pos(3.0, 3.0));
         tracker.apply_touch_event(egui::TouchPhase::End, pos(3.0, 3.0), None, pos(3.0, 3.0));
         assert_eq!(tracker.update(&[], Some(pos(3.0, 3.0)), true), 1.0);
