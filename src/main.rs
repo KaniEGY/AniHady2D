@@ -3133,16 +3133,16 @@ impl StickApp {
                             "٣. على نفس الشبكة، أصحابك يقدروا يدخلوا من قائمة الغرف أو العنوان. كود الـ٨ أرقام مش دليل بحث عالمي عن الغرف."));
                         ui.add_space(6.0);
                         ui.label(tr(lang,
-                            "4. For friends on different networks, use an authorized Tailscale connection and enter the host's 100.x address (TCP port 47554).",
-                            "٤. لو على شبكات مختلفة، استخدموا Tailscale المسموح بين الأجهزة، واكتبوا عنوان الهوست 100.x (بورت TCP 47554)."));
+                            "4. NEW: While hosting, use Invite link to copy a safe connection link (no password). Friends can paste it in Join Room. LAN and existing Tailscale joins still work.",
+                            "٤. جديد: من غرفة الهوست انسخ رابط الدعوة بدون كلمة السر، وصاحبك يلصقه في الدخول. LAN وTailscale لسه شغالين."));
                         ui.add_space(6.0);
                         ui.label(tr(lang,
-                            "5. Keep the host PC running. The host can manage participants, shared tool colors and resync the project.",
-                            "٥. لازم جهاز الهوست يفضل شغال. الهوست يقدر يدير الأعضاء وألوانهم ويزامن المشروع."));
+                            "5. On different networks, ZeroTier is an optional alternative to Tailscale when both PCs join the same trusted virtual network. Direct public IPv4/DNS requires a reachable TCP port 47554.",
+                            "٥. على شبكات مختلفة ينفع ZeroTier بدل Tailscale لو الجهازين متصلين بنفس الشبكة الخاصة. الدخول المباشر عبر IP عام أو DNS محتاج وصول لبورت TCP 47554."));
                         ui.add_space(6.0);
                         ui.label(tr(lang,
-                            "6. Use matching Stick versions. Cursor sync and drawing protocol v5 require compatible peers.",
-                            "٦. لازم كل الأجهزة تستخدم نسخ متوافقة من Stick؛ تحريك المؤشر والرسم محتاجين بروتوكول v5."));
+                            "6. Keep the host open and use matching Stick versions. A room code or invitation is not a global rendezvous or NAT traversal relay.",
+                            "٦. خليك فاتح الهوست واستخدموا نسخ Stick متوافقة. كود الغرفة أو رابط الدعوة مش سيرفر بحث عالمي ومش بيتجاوز حجب الراوتر."));
                         ui.add_space(8.0);
                         ui.colored_label(egui::Color32::from_rgb(255,204,105),tr(lang,
                             "Security: direct LAN traffic is not end-to-end encrypted by Stick. Do not disable your firewall. Allow TCP 47554 and UDP 47553 only as appropriate.",
