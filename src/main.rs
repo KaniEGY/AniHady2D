@@ -3251,24 +3251,21 @@ impl StickApp {
             self.audio_scrub_output=Some(output);
         }
         let Some((_,handle))=self.audio_scrub_output.as_ref() else{return};
-        let fps=self.project.fps.max(1) as f64;
-        let preview_secs=(6.0/fps).clamp(0.22,0.34);
-        let pre_roll=(1.5/fps).clamp(0.045,0.080);
         let mut sinks=Vec::new();
         for track in &self.project.audio_tracks {
             if track.sync_mode != AudioSyncMode::Stream || track.muted || track.gain<=0.0
                 || self.current_frame<track.start_frame || self.current_frame>track.end_frame {
                 continue;
             }
-            let target=(self.current_frame-track.start_frame) as f64/fps;
-            let seek_secs=(target-pre_roll).max(0.0);
+            let preview=audio_timeline::scrub_preview_window(
+                self.current_frame-track.start_frame,self.project.fps);
             let Ok(file)=File::open(&track.file_path) else{continue};
             let Ok(src)=Decoder::new(BufReader::new(file)) else{continue};
             let Ok(sink)=Sink::try_new(handle) else{continue};
             sink.set_volume(track.gain.clamp(0.0,2.0));
             sink.append(src
-                .skip_duration(Duration::from_secs_f64(seek_secs))
-                .take_duration(Duration::from_secs_f64(preview_secs)));
+                .skip_duration(Duration::from_secs_f64(preview.skip_secs))
+                .take_duration(Duration::from_secs_f64(preview.duration_secs)));
             sinks.push(sink);
         }
         self.audio_scrub_sinks=sinks;
