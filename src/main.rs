@@ -1020,7 +1020,7 @@ fn draw_gear_icon(painter: &egui::Painter, rect: egui::Rect, scale: f32) {
     }
 }
 
-fn draw_anicraft_timeline_cell(painter: &egui::Painter, rect: egui::Rect, is_keyframe: bool, has_content: bool, tween_mode: TweenMode) {
+fn draw_stick_timeline_cell(painter: &egui::Painter, rect: egui::Rect, is_keyframe: bool, has_content: bool, tween_mode: TweenMode) {
     let c = rect.center();
     match tween_mode {
         TweenMode::Classic => {
@@ -5917,7 +5917,7 @@ impl eframe::App for StickApp {
                                         egui::Stroke::new(2.0, egui::Color32::from_rgb(255, 202, 65))
                                     );
                                 }
-                                if !is_b { draw_anicraft_timeline_cell(ui.painter(), cr, is_kf, has_d, tw); }
+                                if !is_b { draw_stick_timeline_cell(ui.painter(), cr, is_kf, has_d, tw); }
                                 }
                                 if cresp.clicked() {
                                     timeline_seek = Some((l_idx, f));
@@ -6934,6 +6934,15 @@ impl eframe::App for StickApp {
 
             self.last_pointer_pos = if pointer_down { pointer_pos } else { None };
 
+            // Keep artwork, ghosts and media inside the paper bounds when the
+            // view is axis-aligned. This is a display-only clip and never
+            // modifies stored strokes or exports. When the paper is rotated,
+            // egui's rectangular scissor cannot accurately clip its polygon.
+            let paper_clip = if self.canvas_rotation_deg.abs() < 0.001 {
+                stage_rect.intersect(canvas_rect)
+            } else { canvas_rect };
+            let paper_painter=painter.with_clip_rect(paper_clip);
+
             // Real Onion Skin preview: faint past/future drawings behind
             // the current frame. Only active in Animation workspace. No
             // changes to saved data and never exported as actual artwork.
@@ -6959,7 +6968,7 @@ impl eframe::App for StickApp {
                         let ghost_data = self.project.evaluate_layer_at_frame(layer, ghost.frame);
                         for stroke in &ghost_data.strokes {
                             draw_stroke_pro(
-                                &painter, stroke, Some(tint), layer_opacity,
+                                &paper_painter, stroke, Some(tint), layer_opacity,
                                 scale, 0.0, 0.0, &to_screen,
                             );
                         }
@@ -6970,7 +6979,7 @@ impl eframe::App for StickApp {
                                     // More complex transforms will be unified with the
                                     // shared compositor in a later milestone.
                                     draw_stroke_pro(
-                                        &painter, stroke, Some(tint), layer_opacity,
+                                        &paper_painter, stroke, Some(tint), layer_opacity,
                                         scale, instance.x, instance.y, &to_screen,
                                     );
                                 }
@@ -6997,14 +7006,14 @@ impl eframe::App for StickApp {
                                     pos: to_screen(egui::pos2(x,y)), uv, color: tint });
                             }
                             mesh.indices.extend_from_slice(&[0, 1, 2, 0, 2, 3]);
-                            painter.add(egui::Shape::mesh(mesh));
+                            paper_painter.add(egui::Shape::mesh(mesh));
                         }
                     }
-                    for s in &fd.strokes { draw_stroke_pro(&painter, s, None, l_op, scale, 0.0, 0.0, &to_screen); }
+                    for s in &fd.strokes { draw_stroke_pro(&paper_painter, s, None, l_op, scale, 0.0, 0.0, &to_screen); }
                     for txt in &fd.text_items {
                         let tint = egui::Color32::from_rgba_unmultiplied(txt.color[0], txt.color[1],
                             txt.color[2], (txt.color[3] as f32 * l_op) as u8);
-                        let galley = painter.layout_no_wrap(
+                        let galley = paper_painter.layout_no_wrap(
                             fix_ar(&txt.content),
                             egui::FontId::proportional(txt.font_size * scale),
                             tint,
@@ -7012,7 +7021,7 @@ impl eframe::App for StickApp {
                         let text_shape = egui::epaint::TextShape::new(
                             to_screen(egui::pos2(txt.x, txt.y)), galley, tint,
                         ).with_angle(self.canvas_rotation_deg.to_radians());
-                        painter.add(egui::Shape::Text(text_shape));
+                        paper_painter.add(egui::Shape::Text(text_shape));
                     }
                 }
             }
@@ -7147,14 +7156,14 @@ impl eframe::App for StickApp {
                     }
                 }
             }
-            if let Some(stroke) = &self.current_stroke { draw_stroke_pro(&painter, stroke, None, 1.0, scale, 0.0, 0.0, &to_screen); }
+            if let Some(stroke) = &self.current_stroke { draw_stroke_pro(&paper_painter, stroke, None, 1.0, scale, 0.0, 0.0, &to_screen); }
             if let (Some(p0), Some(p1)) = (self.shape_drag_start, self.shape_drag_current) {
                 let mut shape = build_geometric_stroke(self.selected_shape_kind, p0, p1, self.brush_color, self.brush_size);
                 shape.opacity = self.brush_opacity;
                 if self.shape_fill_enabled && self.selected_shape_kind != GeometricShapeKind::StraightLine {
                     shape.fill_color = Some(self.brush_color);
                 }
-                draw_stroke_pro(&painter, &shape, None, 1.0, scale, 0.0, 0.0, &to_screen);
+                draw_stroke_pro(&paper_painter, &shape, None, 1.0, scale, 0.0, 0.0, &to_screen);
             }
             // Display chrome only, intentionally excluded from all exports.
             canvas_appearance::draw_chrome(&painter,stage_w,stage_h,scale,
