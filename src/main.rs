@@ -1242,7 +1242,7 @@ struct StickApp {
     stylus_tracker: TouchPressureTracker,
     texture_cache: HashMap<String, egui::TextureHandle>,
     status_message: String,
-    audio_sink: Option<(OutputStream, Sink)>,
+    audio_sink: Option<(OutputStream, Vec<Sink>)>,
     last_pointer_pos: Option<egui::Pos2>,
     last_secondary_pointer_pos: Option<egui::Pos2>,
 }
@@ -2509,15 +2509,18 @@ impl StickApp {
         if self.is_playing { return; }
         let fps = self.project.fps.max(1) as f64;
         for track in &self.project.audio_tracks {
-            if track.sync_mode == AudioSyncMode::Stream && self.current_frame >= track.start_frame && self.current_frame <= track.end_frame {
+            if track.sync_mode == AudioSyncMode::Stream && !track.muted && track.gain > 0.0
+                && self.current_frame >= track.start_frame && self.current_frame <= track.end_frame {
                 let seek_secs = (self.current_frame - track.start_frame) as f64 / fps;
                 let path = track.file_path.clone();
+                let gain = track.gain.clamp(0.0,2.0);
                 let frame_dur_ms = (1000.0 / fps).clamp(40.0, 120.0) as u64;
                 std::thread::spawn(move || {
                     if let Ok((_s, h)) = OutputStream::try_default() {
                         if let Ok(sink) = Sink::try_new(&h) {
                             if let Ok(file) = File::open(&path) {
                                 if let Ok(src) = Decoder::new(BufReader::new(file)) {
+                                    sink.set_volume(gain);
                                     sink.append(src.skip_duration(Duration::from_secs_f64(seek_secs)).take_duration(Duration::from_millis(frame_dur_ms)));
                                     sink.sleep_until_end();
                                 }
@@ -2531,26 +2534,32 @@ impl StickApp {
     }
 
     fn start_audio_playback(&mut self) {
-        if let Some(track) = self.project.audio_tracks.first() {
-            if self.current_frame > track.end_frame { return; }
-            let fps = self.project.fps.max(1) as f64;
-            let start_offset = self.current_frame.saturating_sub(track.start_frame) as f64 / fps;
-            let max_dur = (track.end_frame.saturating_sub(self.current_frame) + 1) as f64 / fps;
-            if let Ok((stream, handle)) = OutputStream::try_default() {
-                if let Ok(sink) = Sink::try_new(&handle) {
-                    if let Ok(file) = File::open(&track.file_path) {
-                        if let Ok(src) = Decoder::new(BufReader::new(file)) {
-                            sink.append(src.skip_duration(Duration::from_secs_f64(start_offset)).take_duration(Duration::from_secs_f64(max_dur.max(0.1))));
-                            self.audio_sink = Some((stream, sink));
-                        }
-                    }
-                }
-            }
+        self.stop_audio_playback();
+        let Ok((stream, handle)) = OutputStream::try_default() else { return; };
+        let fps = self.project.fps.max(1) as f64;
+        let mut sinks = Vec::new();
+        for track in &self.project.audio_tracks {
+            if track.muted || track.gain <= 0.0 || self.current_frame > track.end_frame { continue; }
+            let Ok(file) = File::open(&track.file_path) else { continue; };
+            let Ok(source) = Decoder::new(BufReader::new(file)) else { continue; };
+            let Ok(sink) = Sink::try_new(&handle) else { continue; };
+            let skip = self.current_frame.saturating_sub(track.start_frame) as f64 / fps;
+            let delay = track.start_frame.saturating_sub(self.current_frame) as f64 / fps;
+            let audible = (track.end_frame.saturating_sub(track.start_frame) + 1) as f64 / fps - skip;
+            if audible <= 0.0 { continue; }
+            sink.set_volume(track.gain.clamp(0.0,2.0));
+            sink.append(source.skip_duration(Duration::from_secs_f64(skip))
+                .take_duration(Duration::from_secs_f64(audible))
+                .delay(Duration::from_secs_f64(delay)));
+            sinks.push(sink);
         }
+        if !sinks.is_empty() { self.audio_sink = Some((stream,sinks)); }
     }
 
     fn stop_audio_playback(&mut self) {
-        if let Some((_, sink)) = self.audio_sink.take() { sink.stop(); }
+        if let Some((_, sinks)) = self.audio_sink.take() {
+            for sink in sinks { sink.stop(); }
+        }
     }
 
     fn remember_recent_project(&mut self, path: &Path) {
@@ -2773,10 +2782,21 @@ impl StickApp {
         if let Some(path) = rfd::FileDialog::new().add_filter("Audio", &["mp3", "wav"]).pick_file() {
             let name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
             let p_str = path.to_string_lossy().to_string();
+            let duration = File::open(&path).ok()
+                .and_then(|file| Decoder::new(BufReader::new(file)).ok())
+                .and_then(|decoder| decoder.total_duration());
             let peaks = extract_audio_waveform(&p_str, 120);
             self.save_undo_state();
-            if self.timeline_length < 24 { self.timeline_length = 24; self.project.total_frames = 24; }
-            self.project.audio_tracks.push(AudioTrack { name, file_path: p_str, start_frame: self.current_frame, end_frame: self.timeline_length, sync_mode: AudioSyncMode::Stream, waveform_peaks: peaks });
+            let frames = duration.map(|d| (d.as_secs_f64()*self.project.fps.max(1) as f64)
+                .ceil() as usize).unwrap_or(120).max(1);
+            let end_frame = self.current_frame.saturating_add(frames - 1)
+                .min(timeline_ops::MAX_TIMELINE_FRAMES);
+            self.timeline_length = self.timeline_length.max(end_frame);
+            self.project.total_frames=self.timeline_length;
+            self.project.audio_tracks.push(AudioTrack {
+                name, file_path: p_str, start_frame: self.current_frame,
+                end_frame, sync_mode: AudioSyncMode::Stream,
+                waveform_peaks: peaks, gain: 1.0, muted: false });
             self.selected_audio_idx = Some(self.project.audio_tracks.len() - 1);
             self.has_unsaved_changes = true;
             self.play_sfx(SfxType::NewFrame);
