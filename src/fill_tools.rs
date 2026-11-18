@@ -237,6 +237,7 @@ pub fn flood_fill_polygon_with_options(
     if w.checked_mul(h)? > 2_000_000 { return None; }
     let size = w * h;
     let mut wall = vec![false; size];
+    let mut canvas_contacts: [Vec<f32>; 4] = std::array::from_fn(|_| Vec::new());
     let world_to_px = |x: f32, y: f32| -> (f32, f32) {
         (x / cell + 2.0, y / cell + 2.0)
     };
@@ -249,6 +250,39 @@ pub fn flood_fill_polygon_with_options(
         segment_budget = segment_budget.saturating_add(stroke.points.len());
         if segment_budget > 250_000 { return None; }
         let thickness = if options.boundary_thickness.is_finite() { options.boundary_thickness.clamp(0.0, 20.0) } else { 0.0 };
+        let edge_margin = (stroke.base_width.abs() * 0.5
+            + gap.clamp(0.0, 14.0) + thickness * 0.5 + cell * 1.5).max(2.0);
+        let mut record_endpoint = |p: &StrokePoint| {
+            if p.x.abs() <= edge_margin { canvas_contacts[0].push(p.y.clamp(0.0, ch)); }
+            if (p.x-cw).abs() <= edge_margin { canvas_contacts[1].push(p.y.clamp(0.0, ch)); }
+            if p.y.abs() <= edge_margin { canvas_contacts[2].push(p.x.clamp(0.0, cw)); }
+            if (p.y-ch).abs() <= edge_margin { canvas_contacts[3].push(p.x.clamp(0.0, cw)); }
+        };
+        if let Some(first) = stroke.points.first() { record_endpoint(first); }
+        if let Some(last) = stroke.points.last() { record_endpoint(last); }
+        for pair in stroke.points.windows(2) {
+            let (a,b)=(&pair[0],&pair[1]);
+            let dx=b.x-a.x;
+            let dy=b.y-a.y;
+            if dx.abs()>1e-6 {
+                for (edge_x, slot) in [(0.0_f32,0usize),(cw,1usize)] {
+                    let t=(edge_x-a.x)/dx;
+                    if (0.0..=1.0).contains(&t) {
+                        let y=a.y+dy*t;
+                        if (0.0..=ch).contains(&y) { canvas_contacts[slot].push(y); }
+                    }
+                }
+            }
+            if dy.abs()>1e-6 {
+                for (edge_y, slot) in [(0.0_f32,2usize),(ch,3usize)] {
+                    let t=(edge_y-a.y)/dy;
+                    if (0.0..=1.0).contains(&t) {
+                        let x=a.x+dx*t;
+                        if (0.0..=cw).contains(&x) { canvas_contacts[slot].push(x); }
+                    }
+                }
+            }
+        }
         let r = ((stroke.base_width.abs() * 0.5 + gap.clamp(0.0, 14.0) + thickness * 0.5) / cell)
             .clamp(1.15, 9.0);
         let r2 = r * r;
@@ -275,6 +309,51 @@ pub fn flood_fill_polygon_with_options(
             }
         }
     }
+    // The paper edge participates in filling only when real linework reaches
+    // that same edge at two positions with the clicked seed between them.
+    // We rasterize only that bracketed edge segment. This closes an incomplete
+    // circle/shape against the canvas while preserving the safety rule that a
+    // random open contour in the middle of the page is not fillable.
+    let left = 2usize;
+    let top = 2usize;
+    let right = ((cw / cell).ceil() as usize + 2).min(w.saturating_sub(2));
+    let bottom = ((ch / cell).ceil() as usize + 2).min(h.saturating_sub(2));
+    let mut used_canvas_edge_closure = false;
+    let mut bracket = |contacts: &mut Vec<f32>, seed_coord: f32| -> Option<(f32,f32)> {
+        contacts.sort_by(f32::total_cmp);
+        let merge = (cell * 3.0 + gap.clamp(0.0,14.0) + 3.0).max(5.0);
+        contacts.dedup_by(|a,b| (*a-*b).abs() <= merge);
+        contacts.windows(2)
+            .filter(|pair| pair[0] <= seed_coord && seed_coord <= pair[1]
+                && pair[1]-pair[0] > merge)
+            .min_by(|a,b| (a[1]-a[0]).total_cmp(&(b[1]-b[0])))
+            .map(|pair|(pair[0],pair[1]))
+    };
+    if let Some((a,b))=bracket(&mut canvas_contacts[0],sy) {
+        used_canvas_edge_closure = true;
+        let ya=(a/cell+2.0).floor().clamp(top as f32,bottom as f32) as usize;
+        let yb=(b/cell+2.0).ceil().clamp(top as f32,bottom as f32) as usize;
+        for y in ya..=yb { wall[y*w+left]=true; }
+    }
+    if let Some((a,b))=bracket(&mut canvas_contacts[1],sy) {
+        used_canvas_edge_closure = true;
+        let ya=(a/cell+2.0).floor().clamp(top as f32,bottom as f32) as usize;
+        let yb=(b/cell+2.0).ceil().clamp(top as f32,bottom as f32) as usize;
+        for y in ya..=yb { wall[y*w+right]=true; }
+    }
+    if let Some((a,b))=bracket(&mut canvas_contacts[2],sx) {
+        used_canvas_edge_closure = true;
+        let xa=(a/cell+2.0).floor().clamp(left as f32,right as f32) as usize;
+        let xb=(b/cell+2.0).ceil().clamp(left as f32,right as f32) as usize;
+        for x in xa..=xb { wall[top*w+x]=true; }
+    }
+    if let Some((a,b))=bracket(&mut canvas_contacts[3],sx) {
+        used_canvas_edge_closure = true;
+        let xa=(a/cell+2.0).floor().clamp(left as f32,right as f32) as usize;
+        let xb=(b/cell+2.0).ceil().clamp(left as f32,right as f32) as usize;
+        for x in xa..=xb { wall[bottom*w+x]=true; }
+    }
+
     let (px, py) = world_to_px(sx, sy);
     let ix = px.floor() as usize;
     let iy = py.floor() as usize;
@@ -341,35 +420,36 @@ pub fn flood_fill_polygon_with_options(
     // Grow the selected component INTO wall cells only, never into another
     // transparent component: a center divider therefore remains a barrier.
     let dilate = if options.dilate_contract.is_finite() { options.dilate_contract.clamp(-12.0, 12.0) } else { 0.0 };
-    let grow_steps = ((gap.clamp(0.0, 14.0) + 1.5 + dilate.max(0.0)) / cell).ceil()
-        .clamp(1.0, 32.0) as usize;
     let mut covered = visited.clone();
-    let mut boundary = VecDeque::<(usize, usize)>::new();
-    for index in 0..size {
-        if !visited[index] { continue; }
-        let x = index % w;
-        let y = index / w;
-        if x == 0 || y == 0 || x + 1 >= w || y + 1 >= h { continue; }
-        for next in [index - 1, index + 1, index - w, index + w] {
-            if wall[next] && !covered[next] {
-                covered[next] = true;
-                boundary.push_back((next, 1));
+    if !used_canvas_edge_closure {
+        let grow_steps = ((gap.clamp(0.0, 14.0) + 1.5 + dilate.max(0.0)) / cell).ceil()
+            .clamp(1.0, 32.0) as usize;
+        let mut boundary = VecDeque::<(usize, usize)>::new();
+        for index in 0..size {
+            if !visited[index] { continue; }
+            let x = index % w;
+            let y = index / w;
+            if x == 0 || y == 0 || x + 1 >= w || y + 1 >= h { continue; }
+            for next in [index - 1, index + 1, index - w, index + w] {
+                if wall[next] && !covered[next] {
+                    covered[next] = true;
+                    boundary.push_back((next, 1));
+                }
+            }
+        }
+        while let Some((index, distance)) = boundary.pop_front() {
+            if distance >= grow_steps { continue; }
+            let x = index % w;
+            let y = index / w;
+            if x == 0 || y == 0 || x + 1 >= w || y + 1 >= h { continue; }
+            for next in [index - 1, index + 1, index - w, index + w] {
+                if wall[next] && !covered[next] {
+                    covered[next] = true;
+                    boundary.push_back((next, distance + 1));
+                }
             }
         }
     }
-    while let Some((index, distance)) = boundary.pop_front() {
-        if distance >= grow_steps { continue; }
-        let x = index % w;
-        let y = index / w;
-        if x == 0 || y == 0 || x + 1 >= w || y + 1 >= h { continue; }
-        for next in [index - 1, index + 1, index - w, index + w] {
-            if wall[next] && !covered[next] {
-                covered[next] = true;
-                boundary.push_back((next, distance + 1));
-            }
-        }
-    }
-
     // Negative Dilate/Contract intentionally pulls the fill in from *every*
     // boundary, with a bounded four-connected erosion of the temporary mask.
     // Avoid changing the source outlines or the saved project schema.
@@ -640,6 +720,23 @@ mod tests {
         assert!(contour_contains(&left,72.,110.));
         assert!(!contour_contains(&left,147.,110.),
             "diameter must separate the other half");
+    }
+
+    #[test]
+    fn canvas_edge_closes_region_for_bucket_fill() {
+        // Three drawn sides end on the left paper edge. The paper edge itself
+        // must act as the fourth wall for fill purposes.
+        let lines = vec![
+            shape(&[(0.,25.),(100.,25.)]),
+            shape(&[(100.,25.),(100.,105.)]),
+            shape(&[(100.,105.),(0.,105.)]),
+        ];
+        let ring = flood_fill_polygon(&lines,(55.,65.),(140.,140.),1.4)
+            .expect("canvas edge should close the region");
+        let fill = polygon_fill_stroke(ring,[30,120,240,255]);
+        assert!(contour_contains(&fill,55.,65.));
+        assert!(!contour_contains(&fill,120.,65.),
+            "fill must stay on the canvas-edge-bounded side");
     }
 
     #[test]

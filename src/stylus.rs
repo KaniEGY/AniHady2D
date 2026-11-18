@@ -8,8 +8,9 @@
 
 use eframe::egui;
 
-const MAX_TOUCH_POINTER_DISTANCE: f32 = 18.0;
-const MAX_STALE_PRESSURE_DISTANCE: f32 = 32.0;
+const MAX_TOUCH_POINTER_DISTANCE: f32 = 64.0;
+const MAX_STALE_PRESSURE_DISTANCE: f32 = 256.0;
+const PRESSURE_NEW_SAMPLE_WEIGHT: f32 = 0.45;
 
 #[derive(Default, Debug)]
 pub struct TouchPressureTracker {
@@ -45,7 +46,15 @@ impl TouchPressureTracker {
         match phase {
             egui::TouchPhase::Start | egui::TouchPhase::Move => match force {
                 Some(value) if value.is_finite() && (0.0..=1.0).contains(&value) => {
-                    self.pressure = Some(value.clamp(0.02, 1.0));
+                    let raw = value.clamp(0.02, 1.0);
+                    // Tablet backends can alternate between dense pressure
+                    // samples and sparse pointer events. Smooth valid pressure
+                    // samples instead of jumping between widths frame-to-frame.
+                    let filtered = self.pressure
+                        .map(|previous| previous * (1.0 - PRESSURE_NEW_SAMPLE_WEIGHT)
+                            + raw * PRESSURE_NEW_SAMPLE_WEIGHT)
+                        .unwrap_or(raw);
+                    self.pressure = Some(filtered.clamp(0.02, 1.0));
                     self.sample_position = Some(pos);
                 }
                 _ => self.reset(),
@@ -122,7 +131,8 @@ mod tests {
             Some(0.75),
             pos(16.0, 10.0),
         );
-        assert_eq!(tracker.update(&[], Some(pos(16.0, 10.0)), true), 0.75);
+        let smoothed = tracker.update(&[], Some(pos(16.0, 10.0)), true);
+        assert!(smoothed > 0.25 && smoothed < 0.75);
     }
 
     #[test]
@@ -137,10 +147,21 @@ mod tests {
     }
 
     #[test]
+    fn pressure_samples_are_smoothed_instead_of_width_jumping() {
+        let mut tracker = TouchPressureTracker::default();
+        tracker.apply_touch_event(
+            egui::TouchPhase::Start, pos(10.0,10.0), Some(0.2), pos(10.0,10.0));
+        tracker.apply_touch_event(
+            egui::TouchPhase::Move, pos(12.0,10.0), Some(1.0), pos(12.0,10.0));
+        let value = tracker.update(&[], Some(pos(12.0,10.0)), true);
+        assert!(value > 0.2 && value < 1.0);
+    }
+
+    #[test]
     fn lifting_pen_or_moving_away_resets_pressure() {
         let mut tracker = TouchPressureTracker::default();
         tracker.apply_touch_event(egui::TouchPhase::Start, pos(3.0, 3.0), Some(0.2), pos(3.0, 3.0));
-        assert_eq!(tracker.update(&[], Some(pos(50.0, 50.0)), true), 1.0);
+        assert_eq!(tracker.update(&[], Some(pos(400.0, 400.0)), true), 1.0);
         tracker.apply_touch_event(egui::TouchPhase::Move, pos(3.0, 3.0), Some(0.5), pos(3.0, 3.0));
         tracker.apply_touch_event(egui::TouchPhase::End, pos(3.0, 3.0), None, pos(3.0, 3.0));
         assert_eq!(tracker.update(&[], Some(pos(3.0, 3.0)), true), 1.0);

@@ -4,6 +4,19 @@
 
 ## English (US)
 
+### Canvas-edge fill, independent tools, tablet and timeline fixes
+- Paint Bucket now treats the physical canvas border as a valid fill boundary, so an otherwise-open contour can close against the edge of the paper without leaking.
+- Drawing strokes and Onion Skin previews remain visible in the workspace outside the paper bounds; export bounds are unchanged.
+- Brush, Vector Ink Pen, full eraser, partial eraser and shape outline sizes are isolated instead of sharing one size value. Vector Pen opacity/stabilizer are also independent from normal brushes.
+- Hold **Alt** and move the pointer right/left or up/down to resize the active brush-like tool without changing other tools.
+- Symmetry can show an optional divider and now previews the mirrored stroke live while drawing.
+- Added a **Tablet Pen** settings tab with pressure enable/disable, sensitivity and minimum-pressure controls; pressure samples are filtered to reduce sparse-event width glitches.
+- Interface presets are presented as **Main Interface** plus **Interface 1–6**.
+- Timeline style 3 is labeled **New mine**. Added a Last Frame button beside First Frame, and removed the obsolete F5 Insert Frame action while retaining F4 Delete Frame and F6 Keyframe.
+- Settings Profile now includes **Save current settings** beside Restore Defaults.
+- **Manual QA still required:** real graphics-tablet drivers/backends vary; CI validates code paths but does not replace hardware testing.
+
+
 ### Interface style presets
 - Added a saved Interface submenu to the hamburger menu.
 - Presets: Current Stick, Cartoon, Serious, Cute Pink, Animate Style, Krita Style and Blender Style.
@@ -218,6 +231,19 @@
 - Added an unsaved-work guard to avoid restarting with an unfinished project.
 
 ## العربية (المصري)
+
+### إصلاح حدود الدلو وفصل الأدوات وقلم التابلت والتايم لاين
+- الدلو بقى يعتبر حدود الكانفا نفسها حاجز للتعبئة، فلو الرسمة مفتوحة من ناحية طرف الورقة والطرف هو اللي بيقفلها، اللون يفضل جوه المنطقة.
+- الرسم والأونين سكين يقدروا يظهروا برا حدود الورقة داخل مساحة العمل، من غير تغيير حدود التصدير.
+- حجم الفرشة، قلم الحبر/الفيكتور، الممحاة الكاملة، الممحاة الجزئية وسُمك الأشكال بقوا منفصلين عن بعض. شفافية ومثبت قلم الفيكتور بقوا منفصلين عن الفرشة العادية كمان.
+- تقدر تضغط مطول على **Alt** وتحرك الماوس يمين/شمال أو فوق/تحت لتغيير حجم الأداة النشطة فقط.
+- الرسم المتماثل فيه اختيار لإظهار خط فاصل، والجهة المقابلة بتظهر مباشرة أثناء الرسم بدل ما تستنى لحد ما ترفع القلم.
+- اتضافت خانة **إعدادات القلم** للجرافيك تابلت: تشغيل/قفل حساسية الضغط، قوة الحساسية، وأقل ضغط. واتضاف فلتر لعينات الضغط لتقليل الجلتشات الناتجة عن العينات المتقطعة.
+- الواجهات بقت تظهر باسم **الواجهة الرئيسية** ثم **واجهة 1–6**.
+- اسم التايم لاين الثالث بقى **New mine**، واتضاف زر آخر فريم جنب أول فريم، واتشال F5 القديم مع الاحتفاظ بـ F4 للحذف وF6 للكي فريم.
+- ملف الإعدادات بقى فيه زر **حفظ الإعدادات الحالية** جنب استعادة الإعدادات الافتراضية.
+- **لسه مطلوب اختبار عملي:** اختلاف تعريفات وأجهزة الجرافيك تابلت محتاج تجربة فعلية على جهاز أحد المختبرين؛ نجاح CI مش بديل لاختبار الهاردوير.
+
 
 ### تحسينات فيديو الجلتشات (تجريبية)
 - تم ضبط سحب الصوت من أول ضغطة وحفظ Undo واحد عند تحريكه، ومنع سحب مساحة التايم لاين من مقاطعة سحب المسار.
