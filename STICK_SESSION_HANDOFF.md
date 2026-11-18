@@ -1,5 +1,17 @@
 # Stick Studio — Session Handoff / سجل استكمال المشروع
 
+## 19 November 2026 — quick color shortcuts, configurable gestures and Online UI
+- Branch `feat/quick-color-shortcuts-online-ui-20261119` is based on released main build 271 (`aec8a9f56ea833c74b18184c78edfa67058d6f7d`).
+- Radial Colors center is now a clickable Custom Color action using the current selected color. It opens the exact color picker and closes the radial menu.
+- Colors radial menu is available from right-click for Brush, Vector Pen and Bucket; the default keyboard shortcut is Z and is user-rebindable.
+- Size-adjust and opacity-adjust hold gestures are stored in AppConfig and user-rebindable. Defaults remain Alt and Ctrl. Size feedback displays px + normalized percentage; opacity displays its live alpha preview.
+- Removed the redundant right-panel Split slider; the existing draggable three-dot divider remains and still persists `right_panel_split`.
+- Online Create/Join UI now uses icon cards and delayed-hover descriptions for LAN, Tailscale and Direct/Tunnel paths. Room Join/Locked actions use icon buttons with tooltips.
+- Existing collaboration transport is intentionally preserved: TCP 47554 for room/project traffic + UDP 47553 for LAN/peer discovery, with Tailscale/ZeroTier as private overlays. No WebRTC/renet rewrite was mixed into this UI patch and protocol v5 is unchanged.
+- Added provider-neutral direct tunnel guidance: any reachable TCP endpoint that forwards to local 47554 can be pasted into Direct Join. External service pricing/limits are not guaranteed by Stick.
+- Added `ONLINE_ARCHITECTURE_REVIEW_2026-11-19.md` and updated `STICK_ONLINE_GUIDE.md`.
+- Before merge: require Windows Compatibility/Unit Tests, Rust lints and Release EXE build; after merge, verify main Publish Direct Release and assets.
+
 ## 19 November 2026 — direct timeline drag, radial canvas menus, sculpt/fill and scrub performance
 - Branch `fix/direct-keyframe-drag-sculpt-radial-audio-20261119` is based on main merge `4c70b5ae40d81968ffcad654574e2a094d896033`.
 - Removed the three temporary timeline quick-action icons (Copy +1 / Move +1 / Clear selection). OLD, NEW and New mine now use the same interaction: click a genuine keyframe to select it, then a subsequent left-button hold+drag moves it; release commits the destination. Selected keys get a cyan outline and the drag destination gets a gold preview. New mine retains multi-select and Alt-drag copy.
