@@ -692,6 +692,12 @@ struct AppConfig {
     tool_shape: String,
     #[serde(default = "default_hand_key")]
     tool_hand: String,
+    #[serde(default = "default_quick_color_key")]
+    quick_color_key: String,
+    #[serde(default = "default_size_gesture_key")]
+    size_gesture_key: String,
+    #[serde(default = "default_opacity_gesture_key")]
+    opacity_gesture_key: String,
     #[serde(default = "default_del_frame_key")]
     delete_frame_key: String,
     insert_keyframe: String,
@@ -726,6 +732,9 @@ fn default_autosave_mins() -> u64 { 5 }
 fn default_cursor_scale() -> f32 { 1.0 }
 fn default_tablet_pressure_sensitivity() -> f32 { 1.0 }
 fn default_tablet_min_pressure() -> f32 { 0.02 }
+fn default_quick_color_key() -> String { "Z".to_string() }
+fn default_size_gesture_key() -> String { "Alt".to_string() }
+fn default_opacity_gesture_key() -> String { "Ctrl".to_string() }
 // Public Desktop OAuth identifier for the Stick Studio Google Cloud project.
 // Not a client secret. A valid build-time override is still supported.
 const OFFICIAL_GOOGLE_CLIENT_ID: &str =
@@ -828,6 +837,9 @@ impl Default for AppConfig {
             tool_text: "N".to_string(),
             tool_shape: "U".to_string(),
             tool_hand: "H".to_string(),
+            quick_color_key: default_quick_color_key(),
+            size_gesture_key: default_size_gesture_key(),
+            opacity_gesture_key: default_opacity_gesture_key(),
             delete_frame_key: "F4".to_string(),
             insert_keyframe: "F6".to_string(),
             insert_blank_kf: "F7".to_string(),
@@ -915,12 +927,29 @@ impl AppConfig {
 fn is_shortcut_pressed(i: &egui::InputState, key_name: &str) -> bool {
     if key_name.is_empty() { return false; }
     if key_name.eq_ignore_ascii_case("Shift") {
-        return i.modifiers.shift && !i.modifiers.ctrl && !i.modifiers.alt && i.events.iter().any(|e| matches!(e, egui::Event::Key { pressed: true, .. }));
+        return i.modifiers.shift && !i.modifiers.ctrl && !i.modifiers.alt
+            && i.events.iter().any(|e| matches!(e, egui::Event::Key { pressed: true, .. }));
+    }
+    if key_name.eq_ignore_ascii_case("Alt") {
+        return i.modifiers.alt && !i.modifiers.ctrl && !i.modifiers.shift;
+    }
+    if key_name.eq_ignore_ascii_case("Ctrl") || key_name.eq_ignore_ascii_case("Control") {
+        return i.modifiers.ctrl && !i.modifiers.alt && !i.modifiers.shift;
     }
     if let Some(k) = egui::Key::from_name(key_name) {
         return i.key_pressed(k) && !i.modifiers.ctrl && !i.modifiers.alt;
     }
     false
+}
+
+fn is_hold_shortcut_active(i: &egui::InputState, key_name: &str) -> bool {
+    if key_name.is_empty() { return false; }
+    if key_name.eq_ignore_ascii_case("Alt") { return i.modifiers.alt; }
+    if key_name.eq_ignore_ascii_case("Ctrl") || key_name.eq_ignore_ascii_case("Control") {
+        return i.modifiers.ctrl;
+    }
+    if key_name.eq_ignore_ascii_case("Shift") { return i.modifiers.shift; }
+    egui::Key::from_name(key_name).is_some_and(|key| i.key_down(key))
 }
 
 fn generate_stick_window_icon() -> egui::IconData {
@@ -1700,6 +1729,7 @@ struct StickApp {
     alt_size_drag_origin: Option<(egui::Pos2, f32)>,
     ctrl_opacity_drag_origin: Option<(egui::Pos2, f32)>,
     canvas_quick_menu: Option<canvas_quick_menu::QuickMenuState>,
+    show_quick_custom_color: bool,
 }
 
 impl StickApp {
@@ -1890,6 +1920,7 @@ impl StickApp {
             alt_size_drag_origin: None,
             ctrl_opacity_drag_origin: None,
             canvas_quick_menu: None,
+            show_quick_custom_color: false,
         }
     }
 
