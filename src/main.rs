@@ -29,6 +29,7 @@ mod cursor_sync;
 mod cloud_sync;
 mod project_sync;
 mod remote_access;
+mod online_invite;
 mod transform_handles;
 mod media_transform;
 mod audio_timeline;
@@ -1120,6 +1121,8 @@ struct StickApp {
     online_password: String,
     online_capacity: usize,
     online_address: String,
+    online_invite_input: String,
+    online_share_address: String,
     online_code_input: String,
     online_participants: Vec<Participant>,
     online_rooms: Vec<RoomListing>,
@@ -1155,6 +1158,8 @@ struct StickApp {
     editing_symbol_name: Option<String>,
     selected_audio_idx: Option<usize>,
     audio_drag_origin: Option<(usize,usize)>,
+    audio_drag_undo_captured: bool,
+    timeline_scrub_active: bool,
     active_tool_ui: ActiveToolUI,
     active_krita_brush: KritaBrushPreset,
     brush_opacity: f32,
@@ -1281,6 +1286,8 @@ impl StickApp {
             online_password: String::new(),
             online_capacity: 4,
             online_address: String::new(),
+            online_invite_input: String::new(),
+            online_share_address: String::new(),
             online_code_input: String::new(),
             online_participants: Vec::new(),
             online_rooms: Vec::new(),
@@ -1316,6 +1323,8 @@ impl StickApp {
             editing_symbol_name: None,
             selected_audio_idx: None,
             audio_drag_origin: None,
+            audio_drag_undo_captured: false,
+            timeline_scrub_active: false,
             active_tool_ui: ActiveToolUI::Brush,
             active_krita_brush: KritaBrushPreset::GPenInk,
             brush_opacity: 1.0,
@@ -3390,7 +3399,7 @@ impl StickApp {
                 ui.add(egui::Slider::new(&mut self.bucket_gap_close, 0.0..=12.0)
                     .text(tr(lang, "Close small gaps", "قفل الفجوات الصغيرة")));
                 ui.separator();
-                ui.strong(tr(lang, "Blender-inspired fill controls", "خصائص تعبئة مستوحاة من بلندر"));
+                ui.strong(tr(lang, "Advanced fill controls", "إعدادات التعبئة المتقدمة"));
                 ui.add(egui::Slider::new(&mut self.bucket_precision, 0.5..=2.5)
                     .text(tr(lang, "Precision", "الدقة")));
                 ui.add(egui::Slider::new(&mut self.bucket_dilate_contract, -12.0..=12.0)
@@ -5556,6 +5565,11 @@ impl eframe::App for StickApp {
         let mut audio_move_request: Option<(usize, usize)> = None;
         let mut audio_drag_started = false;
         let mut timeline_seek = None;
+        if !pointer_down {
+            self.audio_drag_origin=None;
+            self.audio_drag_undo_captured=false;
+            self.timeline_scrub_active=false;
+        }
         let mut timeline_visibility_toggle: Option<usize> = None;
         let mut timeline_lock_toggle: Option<usize> = None;
         let mut timeline_layer_rename: Option<usize> = None;
@@ -5698,7 +5712,8 @@ impl eframe::App for StickApp {
                         "Ctrl أو Shift مع الضغط لتحديد أكتر من كي فريم. اسحب للنقل، وAlt مع السحب للنسخ. الصوت مش بيتحرك."));
                 }
                 let can_delete_global = self.timeline_length > 1 && self.project.layers.iter().all(|layer| !layer.locked);
-                egui::ScrollArea::both().id_salt("timeline_frame_scroller").show(ui, |ui| {
+                egui::ScrollArea::both().id_salt("timeline_frame_scroller")
+                    .drag_to_scroll(false).show(ui, |ui| {
                     ui.horizontal(|ui| {
                         ui.allocate_ui(egui::vec2(label_w, header_h), |ui| {
                             ui.strong(egui::RichText::new(
@@ -5732,7 +5747,11 @@ impl eframe::App for StickApp {
                                         egui::FontId::proportional(11.0), egui::Color32::WHITE);
                                 }
                             }
-                            if resp.clicked() || (pointer_down && resp.hovered()) {
+                            if pointer_pressed && pointer_pos.is_some_and(|pos| r.contains(pos)) {
+                                self.timeline_scrub_active=true;
+                            }
+                            if resp.clicked() || (self.timeline_scrub_active && pointer_down
+                                && pointer_pos.is_some_and(|pos| r.contains(pos))) {
                                 timeline_seek = Some((self.active_layer_idx, f));
                             }
                         }
