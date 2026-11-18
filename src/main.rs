@@ -8107,10 +8107,13 @@ impl eframe::App for StickApp {
                                             egui::pos2(x,y)
                                         })
                                     });
-                                let axis=vector_pivot.and_then(|pivot|
-                                    transform_handles::translation_axis(
-                                        egui::Rect::from_center_size(pivot,egui::vec2(1.,1.)),
-                                        stage_pos,scale));
+                                let axis=vector_pivot.and_then(|pivot| {
+                                    let x_tip=to_screen(pivot
+                                        +egui::vec2(transform_handles::TRANSLATE_OFFSET_PX/scale,0.0));
+                                    let y_tip=to_screen(pivot
+                                        +egui::vec2(0.0,-transform_handles::TRANSLATE_OFFSET_PX/scale));
+                                    transform_handles::translation_axis_screen(x_tip,y_tip,pos)
+                                });
                                 if let Some(axis)=axis {
                                     self.vector_axis_drag=Some(axis);
                                     self.save_undo_state();
