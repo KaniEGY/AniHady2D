@@ -120,10 +120,15 @@ pub fn visit_round_marks(stroke: &Stroke, mut paint: impl FnMut(RoundMark, f32))
                 // Canvas/export renderers substitute this preset's smoothed centerline.
             }
             if !stroke.is_vector && stroke.brush_preset == KritaBrushPreset::ChiselMarker {
-                // Marker is deliberately a single continuous translucent ribbon.
-                // The previous textured path alpha-blended rectangular stamps on
-                // top of one another, which exposed obvious square segments.
-                paint(RoundMark::Line { width: (width * 0.68).max(0.5) }, flow);
+                // Paint Marker coverage once as one filled ribbon. This removes
+                // both repeated-stamp blocks and alpha-dark joints on curves.
+                let outline=crate::stroke_geometry::constant_outline(
+                    &stroke.points,(width*0.68).max(0.5));
+                if !outline.is_empty() {
+                    paint(RoundMark::Outline(outline),flow);
+                } else {
+                    paint(RoundMark::Line { width: (width*0.68).max(0.5) },flow);
+                }
                 continue;
             }
             if varying {
