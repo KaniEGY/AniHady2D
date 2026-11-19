@@ -210,15 +210,16 @@ pub fn draw_stroke_pro<F: Fn(egui::Pos2) -> egui::Pos2>(
     // The old order silently discarded fill colors on hand-drawn loops.
     if let Some(fc) = stroke.fill_color {
         let fill_c = override_color.unwrap_or(fc);
-        let pts: Vec<egui::Pos2> = stroke
-            .points
-            .iter()
-            .map(|p| to_screen(egui::pos2(p.x + ox, p.y + oy)))
+        let rings:Vec<Vec<egui::Pos2>>=crate::fill_tools::split_fill_rings(&stroke.points)
+            .into_iter()
+            .map(|ring|ring.iter()
+                .map(|p|to_screen(egui::pos2(p.x+ox,p.y+oy))).collect())
             .collect();
-        // Region fills are often concave. Convex-only tessellation used
-        // to produce white seams and incorrect triangles in the live canvas.
-        if let Some(mesh) = crate::fill_render::solid_polygon_mesh(
-            &pts,
+        // Region fills may be concave and may contain nested closed contours.
+        // Earcut receives those inner rings as holes so they stay independently
+        // paintable instead of inheriting the outer Bucket color.
+        if let Some(mesh) = crate::fill_render::solid_polygon_mesh_rings(
+            &rings,
             egui::Color32::from_rgba_unmultiplied(
                 fill_c[0], fill_c[1], fill_c[2],
                 (fill_c[3] as f32 * combined_opacity) as u8,
