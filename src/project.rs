@@ -505,10 +505,20 @@ pub struct OnionSkinSettings {
     pub color_before: [u8; 4],
     #[serde(default = "default_onion_after")]
     pub color_after: [u8; 4],
+    /// Percentage of opacity removed for each additional previous ghost.
+    #[serde(default = "default_onion_fade_percent")]
+    pub fade_before_percent: f32,
+    /// Percentage of opacity removed for each additional next ghost.
+    #[serde(default = "default_onion_fade_percent")]
+    pub fade_after_percent: f32,
 }
 
 fn default_two() -> usize {
     2
+}
+
+fn default_onion_fade_percent() -> f32 {
+    25.0
 }
 
 fn default_onion_before() -> [u8; 4] {
@@ -527,6 +537,8 @@ impl Default for OnionSkinSettings {
             frames_after: 2,
             color_before: [255, 80, 80, 90],
             color_after: [80, 255, 100, 90],
+            fade_before_percent: default_onion_fade_percent(),
+            fade_after_percent: default_onion_fade_percent(),
         }
     }
 }
@@ -976,6 +988,15 @@ mod brush_tip_compat_tests {
         assert_eq!(restored.tip_shape, BrushTipShape::Round);
         assert_eq!(restored.points.len(), 1);
         assert_eq!(restored.color, [12, 34, 56, 255]);
+    }
+
+    #[test]
+    fn old_onion_skin_settings_get_fade_defaults() {
+        let settings: OnionSkinSettings = serde_json::from_str(
+            r#"{"enabled":true,"frames_before":2,"frames_after":2,"color_before":[255,80,80,90],"color_after":[80,255,100,90]}"#
+        ).unwrap();
+        assert_eq!(settings.fade_before_percent,25.0);
+        assert_eq!(settings.fade_after_percent,25.0);
     }
 
     #[test]
