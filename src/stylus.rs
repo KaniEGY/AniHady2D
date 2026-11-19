@@ -231,14 +231,14 @@ mod tests {
     }
 
     #[test]
-    fn lifting_pen_or_moving_away_resets_pressure() {
+    fn lifting_pen_or_moving_away_never_becomes_full_pressure() {
         let mut tracker = TouchPressureTracker::default();
         tracker.apply_touch_event(egui::TouchPhase::Start, pos(3.0, 3.0), Some(0.2), pos(3.0, 3.0));
-        assert_eq!(tracker.update(&[], Some(pos(400.0, 400.0)), true), 1.0);
+        assert_eq!(tracker.update(&[], Some(pos(400.0, 400.0)), true), 0.0);
         tracker.apply_touch_event(egui::TouchPhase::Move, pos(3.0, 3.0), Some(0.5), pos(3.0, 3.0));
         tracker.apply_touch_event(egui::TouchPhase::End, pos(3.0, 3.0), None, pos(3.0, 3.0));
         assert_eq!(tracker.update(&[], Some(pos(3.0, 3.0)), true), 0.0);
         tracker.apply_touch_event(egui::TouchPhase::Start, pos(3.0, 3.0), Some(0.5), pos(3.0, 3.0));
-        assert_eq!(tracker.update(&[], Some(pos(3.0, 3.0)), false), 1.0);
+        assert_eq!(tracker.update(&[], Some(pos(3.0, 3.0)), false), 0.0);
     }
 }
