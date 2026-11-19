@@ -4,7 +4,7 @@
 
 ## English (US)
 
-### Vector Nodes, movable layer effects and nested Bucket regions
+### Bugs fixed
 - Vector Nodes cursor now uses the exact real pointer hotspot instead of the old generic down/right icon offset.
 - Vector-node selection/right-click hit areas are larger and remain screen-size consistent while zooming.
 - Right-click insertion now hit-tests the same smoothed vector curve that is actually rendered; right-clicking the inserted/selected node again removes it.
@@ -306,9 +306,9 @@
 - Fixed the updater getting stuck if GitHub can't be reached.
 - Added an unsaved-work guard to avoid restarting with an unfinished project.
 
-## العربية
+## العربية (المصري)
 
-### نقاط الفيكتور، نافذة المؤثرات، والدلو مع الدوائر المتداخلة
+### المشاكل اللي اتصلحت
 - مؤشر أداة نقاط الفيكتور بقى فوق مكان الماوس الحقيقي من غير الإزاحة القديمة.
 - كبّرنا Hitbox تحديد النقاط وكلك يمين، وبيفضل ثابت بصريًا مع الزوم.
 - كلك يمين لإضافة نقطة بقى بيختبر نفس المنحنى الناعم الظاهر على الشاشة؛ وكلك يمين مرة تانية على النقطة المضافة/المحددة بيحذفها.
