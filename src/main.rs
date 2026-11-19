@@ -43,7 +43,7 @@ use exporter::{ImageExportFormat, VideoExportFormat};
 use profile::UserProfile;
 use collab::{OnlineMode, OnlineEvent, OnlineSession, RoomListing, Participant};
 use project::{
-    AniProject, AudioSyncMode, AudioTrack, EasingCurve, FrameData, FrameMarkerKind, KritaBrushPreset, Layer, MediaItem, MediaType,
+    AniProject, AudioSyncMode, AudioTrack, EasingCurve, FrameData, FrameMarkerKind, KritaBrushPreset, Layer, LayerEffectPreset, MediaItem, MediaType,
     BrushTipShape, Stroke, StrokePoint, Symbol, SymbolInstance, TextItem, TweenMode, PROJECT_SCHEMA_VERSION,
 };
 // Game UI sounds are generated as samples without shipping external audio assets.
@@ -3718,7 +3718,7 @@ impl StickApp {
                 y: (self.project.height as f32-height)*0.5,
                 width, height, rotation_deg: 0.0, flip_h: false, flip_v: false });
             kf.insert(self.current_frame, fd);
-            self.project.layers.insert(0, Layer { name: format!("Img_{}", img_name), visible: true, locked: false, is_guide: false, xp_first_paint_rewarded: false, opacity: 1.0, keyframes: kf });
+            self.project.layers.insert(0, Layer { name: format!("Img_{}", img_name), visible: true, locked: false, is_guide: false, xp_first_paint_rewarded: false, opacity: 1.0, effect: LayerEffectPreset::None, keyframes: kf });
             self.active_layer_idx = 0;
             self.clear_cel_selection();
             self.selected_media_idx = Some(0);
@@ -3770,7 +3770,7 @@ impl StickApp {
                     fd.media_items.push(MediaItem { path: f_path.to_string_lossy().to_string(), media_type: MediaType::VideoFrame, x: 0.0, y: 0.0, width: self.project.width as f32, height: self.project.height as f32, rotation_deg: 0.0, flip_h: false, flip_v: false });
                     kf.insert(self.current_frame + i, fd);
                 }
-                self.project.layers.insert(0, Layer { name: "Video_Layer".to_string(), visible: true, locked: false, is_guide: false, xp_first_paint_rewarded: false, opacity: 1.0, keyframes: kf });
+                self.project.layers.insert(0, Layer { name: "Video_Layer".to_string(), visible: true, locked: false, is_guide: false, xp_first_paint_rewarded: false, opacity: 1.0, effect: LayerEffectPreset::None, keyframes: kf });
                 self.active_layer_idx = 0;
                 self.clear_cel_selection();
                 self.selected_media_idx = Some(0);
@@ -6629,6 +6629,7 @@ impl eframe::App for StickApp {
         let mut copy_layer_index: Option<usize> = None;
         let mut paste_layer_index: Option<usize> = None;
         let mut rename_layer_index: Option<usize> = None;
+        let mut layer_effect_request: Option<(usize,LayerEffectPreset)> = None;
         if self.config.show_right_dock {
         egui::SidePanel::right("right_panel").resizable(true).default_width(376.0)
             .min_width(285.0).show(ctx, |ui| {
@@ -6847,7 +6848,7 @@ impl eframe::App for StickApp {
                     self.save_undo_state();
                     let mut kf = HashMap::new();
                     kf.insert(1, Default::default());
-                    self.project.layers.insert(0, Layer { name: format!("Layer_{}", self.project.layers.len() + 1), visible: true, locked: false, is_guide: false, xp_first_paint_rewarded: false, opacity: 1.0, keyframes: kf });
+                    self.project.layers.insert(0, Layer { name: format!("Layer_{}", self.project.layers.len() + 1), visible: true, locked: false, is_guide: false, xp_first_paint_rewarded: false, opacity: 1.0, effect: LayerEffectPreset::None, keyframes: kf });
                     self.active_layer_idx = 0;
                     self.has_unsaved_changes = true;
                 }
@@ -6939,6 +6940,31 @@ impl eframe::App for StickApp {
                     if lock_resp.on_hover_text(tr(lang, "Lock or unlock layer", "اقفل أو افتح قفل اللير")).clicked() {
                         dock_lock_toggle = Some(idx);
                     }
+                    ui.menu_button(
+                        egui::RichText::new("✦").color(if layer.effect==LayerEffectPreset::None {
+                            egui::Color32::from_gray(150)
+                        } else {egui::Color32::from_rgb(255,205,63)}),
+                        |ui| {
+                            ui.strong(tr(lang,"Layer Effects","مؤثرات اللير"));
+                            ui.small(tr(lang,
+                                "Applies only to this layer and is saved with the project.",
+                                "بتتطبق على اللير ده بس وبتتحفظ مع المشروع."));
+                            ui.separator();
+                            for (preset,en,ar) in [
+                                (LayerEffectPreset::None,"None","بدون"),
+                                (LayerEffectPreset::Warm,"Warm","دافئ"),
+                                (LayerEffectPreset::Cool,"Cool","بارد"),
+                                (LayerEffectPreset::Rose,"Rose","وردي"),
+                                (LayerEffectPreset::Mint,"Mint","نعناعي"),
+                                (LayerEffectPreset::Night,"Night","ليلي"),
+                                (LayerEffectPreset::Vintage,"Vintage","فينتاج"),
+                            ] {
+                                if ui.selectable_label(layer.effect==preset,tr(lang,en,ar)).clicked() {
+                                    layer_effect_request=Some((idx,preset));
+                                    ui.close_menu();
+                                }
+                            }
+                        });
                     let layer_response = ui.vertical(|ui| {
                         let response = ui.selectable_label(selected_row,
                             egui::RichText::new(&layer.name).strong().size(14.0));
@@ -7065,6 +7091,16 @@ impl eframe::App for StickApp {
             if let Some(layer) = self.project.layers.get_mut(idx) {
                 layer.locked=!layer.locked;
                 self.has_unsaved_changes=true;
+            }
+        }
+        if let Some((idx,preset))=layer_effect_request {
+            let changed=self.project.layers.get(idx).is_some_and(|layer|layer.effect!=preset);
+            if changed {
+                self.save_undo_state();
+                if let Some(layer)=self.project.layers.get_mut(idx) {
+                    layer.effect=preset;
+                    self.has_unsaved_changes=true;
+                }
             }
         }
         if let Some(idx) = copy_layer_index {
@@ -9603,7 +9639,7 @@ mod tool_discovery_tests {
             width:100.0,height:100.0,rotation_deg:0.0,flip_h:false,flip_v:false,
         });
         let mut layer=Layer{name:"Image".into(),visible:true,locked:false,is_guide:false,
-            xp_first_paint_rewarded:false,opacity:1.0,keyframes:HashMap::from([(3,data)])};
+            xp_first_paint_rewarded:false,opacity:1.0,effect:LayerEffectPreset::None,keyframes:HashMap::from([(3,data)])};
         assert_eq!(StickApp::image_layer_range(&layer,30),Some((3,30)));
         assert!(StickApp::set_image_layer_end(&mut layer,12,30));
         assert_eq!(StickApp::image_layer_range(&layer,30),Some((3,12)));
