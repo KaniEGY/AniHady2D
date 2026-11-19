@@ -1063,6 +1063,15 @@ mod brush_tip_compat_tests {
     }
 
     #[test]
+    fn monochrome_layer_effect_preserves_alpha_and_equalizes_rgb() {
+        let c=LayerEffectPreset::Monochrome.apply_rgba([220,80,20,91]);
+        assert_eq!(c[3],91);
+        assert_eq!(c[0],c[1]);
+        assert_eq!(c[1],c[2]);
+        assert!(c[0]>80 && c[0]<220);
+    }
+
+    #[test]
     fn legacy_strokes_default_to_round_tip() {
         let legacy = r#"{
           "points":[{"x":2.0,"y":3.0}],
