@@ -1,5 +1,18 @@
 # Stick Studio — Session Handoff / سجل استكمال المشروع
 
+## 19 November 2026 — media/vector/text/timeline quality overhaul
+- Branch `feat/media-vector-levelup-timeline-overhaul-20261119` starts from released main `8423a50fafc296c3ecc5992c8db5b5b8922c9328` / `v4.1.0.284`.
+- Level-up UX: visual banner is 4 seconds, has an independent General-settings toggle, and Arabic message selection mixes in 100 hand-written Egyptian motivational/joke lines.
+- Vector Nodes: right-click node deletion / segment insertion is always enabled; edit hit radius is screen-consistent and expanded; selected vector strokes take priority. Tool UI is reduced to a Node Density 10–100% control plus usage help.
+- Text: `TextItem.rotation_deg` is backward-compatible via serde default. Free Transform rotation updates text angle and position, selection/hit-testing is rotation-aware, and exporter composites rotated text.
+- Media: image/video property pane has opacity presets plus continuous opacity. Layer rename is routed through `layer_ops::rename_layer`, which mutates name only; regression test verifies media/keyframes/path preservation.
+- Layer effects: backward-compatible `LayerEffectPreset` adds None/Warm/Cool/Rose/Mint/Night/Vintage. Every layer row has ✦; canvas and export apply the same RGB tint to media, strokes/fills, text and symbol strokes. Locked layers reject effect edits.
+- Timeline frame menu: `FrameAction::Cut` is an editor clipboard action; Cut stores the visible frame pose and replaces the source with an explicit blank key. Redundant Clear Frame UI was removed while its engine action remains for compatibility/tests.
+- Still-image timeline clips: dedicated lane supports body move, left start trim and right end trim. Explicit end markers survive later timeline growth. Video lane remains fixed-duration and move-only. Layer locks block image/video clip dragging.
+- Compatibility: new text rotation and layer effect fields both default safely when loading old projects; no schema-version bump is required because old data omits the fields and serde supplies defaults.
+- Static audit verified all modified `Layer {..}` / `TextItem {..}` constructors include the new fields. Exporter diff was normalized back to the original line endings before PR review.
+- Final acceptance requires Windows unit/compatibility tests, Clippy and release EXE on the latest PR head. Exact GUI drag feel, effect appearance and text rotation remain manual visual QA and must not be inferred from CI.
+
 ## 19 November 2026 — Free Transform pointer/hitbox visual alignment
 - Branch `fix/transform-cursor-hitbox-alignment-20261119` starts from released main `bde8773d2cb7909ebd828a97dcdfe278d47e14e3` / `v4.1.0.282`.
 - User screenshot showed a selection marquee ending roughly 20 px up/left of the visible orange Transform cursor. Root cause was not the marquee geometry: the OS cursor is hidden for custom tool icons, while the generic non-brush icon path rendered its center at `pointer_pos + (8 + icon_size/2, 7 + icon_size/2)`. For the symmetric Transform gizmo this made the visual cursor itself lie down/right of the true input hotspot.
