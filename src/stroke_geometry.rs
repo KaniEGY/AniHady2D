@@ -7,6 +7,41 @@ const MAX_INPUT_POINTS: usize = 12_000;
 const MAX_RENDER_SAMPLES: usize = 24_000;
 const ROUND_CAP_STEPS: usize = 12;
 
+/// Speed-aware pointer stabilizer for live freehand input. Slow, tiny motion
+/// gets the requested smoothing, while fast travel progressively catches up to
+/// the real pointer so higher stabilizer values do not feel like a long rubber
+/// band. This only filters input coordinates; pressure is handled separately.
+pub fn adaptive_stabilized_xy(
+    previous_filtered: (f32, f32),
+    previous_raw: Option<(f32, f32)>,
+    raw: (f32, f32),
+    strength: f32,
+) -> (f32, f32) {
+    if !previous_filtered.0.is_finite() || !previous_filtered.1.is_finite()
+        || !raw.0.is_finite() || !raw.1.is_finite() {
+        return raw;
+    }
+    let strength = strength.clamp(0.0, 0.85);
+    if strength <= 0.001 { return raw; }
+
+    let lag = (raw.0 - previous_filtered.0).hypot(raw.1 - previous_filtered.1);
+    let travel = previous_raw
+        .filter(|p| p.0.is_finite() && p.1.is_finite())
+        .map(|p| (raw.0 - p.0).hypot(raw.1 - p.1))
+        .unwrap_or(lag);
+
+    let base_follow = (1.0 - strength * 0.95).clamp(0.18, 1.0);
+    let motion = (travel / 10.0).clamp(0.0, 1.0);
+    let separation = (lag / 28.0).clamp(0.0, 1.0);
+    let catch_up = motion.max(separation);
+    let follow = base_follow + (1.0 - base_follow) * catch_up;
+
+    (
+        previous_filtered.0 + (raw.0 - previous_filtered.0) * follow,
+        previous_filtered.1 + (raw.1 - previous_filtered.1) * follow,
+    )
+}
+
 fn length(a: &StrokePoint, b: &StrokePoint) -> f32 {
     (b.x - a.x).hypot(b.y - a.y)
 }
@@ -204,6 +239,21 @@ mod tests {
         assert!(pressure_outline(&[p(1.,1.,1.),p(f32::NAN,2.,1.)],10.).is_empty());
         assert!(pressure_outline(&[],5.).is_empty());
         assert!(pressure_outline(&[p(1.,1.,1.),p(2.,2.,1.)],f32::NAN).is_empty());
+    }
+
+    #[test]
+    fn adaptive_stabilizer_filters_jitter_but_catches_fast_motion() {
+        let slow=adaptive_stabilized_xy((0.,0.),Some((0.,0.)),(1.,0.),0.70);
+        assert!(slow.0>0.18 && slow.0<0.60, "slow={slow:?}");
+        let fast=adaptive_stabilized_xy((0.,0.),Some((0.,0.)),(20.,0.),0.70);
+        assert!(fast.0>18.0, "fast={fast:?}");
+        assert_eq!(adaptive_stabilized_xy((2.,3.),Some((2.,3.)),(9.,11.),0.0),(9.,11.));
+    }
+
+    #[test]
+    fn adaptive_stabilizer_never_produces_non_finite_output() {
+        let result=adaptive_stabilized_xy((f32::NAN,0.),None,(4.,5.),0.7);
+        assert_eq!(result,(4.,5.));
     }
 
     #[test]
