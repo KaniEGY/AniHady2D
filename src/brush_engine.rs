@@ -499,25 +499,26 @@ mod tests {
     }
 
     #[test]
-    fn marker_is_one_continuous_constant_width_line_not_texture_boxes() {
+    fn marker_is_one_filled_continuous_constant_width_ribbon() {
         let s=Stroke {
             points:vec![point(0.,0.,0.2),point(20.,2.,1.0),point(40.,0.,0.4)],
             color:[0,0,0,255],fill_color:None,base_width:20.,is_vector:false,
             brush_preset:KritaBrushPreset::ChiselMarker,opacity:0.42,
             brush_texture_id:None,tip_shape:BrushTipShape::Round,
         };
-        let mut lines=Vec::new();
+        let mut lines=0;
         let mut dots=0;
-        let mut outlines=0;
+        let mut outlines=Vec::new();
         visit_round_marks(&s,|mark,_|match mark {
-            RoundMark::Line{width}=>lines.push(width),
+            RoundMark::Line{..}=>lines+=1,
             RoundMark::Dot(_)=>dots+=1,
-            RoundMark::Outline(_)=>outlines+=1,
+            RoundMark::Outline(outline)=>outlines.push(outline),
         });
-        assert_eq!(lines.len(),1);
-        assert!((lines[0]-13.6).abs()<0.01);
+        assert_eq!(lines,0);
         assert_eq!(dots,0);
-        assert_eq!(outlines,0);
+        assert_eq!(outlines.len(),1);
+        assert!(!outlines[0].is_empty());
+        assert!(outlines[0].iter().all(|(x,y)|x.is_finite()&&y.is_finite()));
     }
 
     #[test]
