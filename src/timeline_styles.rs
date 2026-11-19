@@ -2,33 +2,54 @@
 //! These helpers do not mutate project data or timeline commands: OLD and
 //! NEW share the exact same frames, keyframes, and context-menu actions.
 use eframe::egui;
-use crate::project::{FrameMarkerKind, TweenMode};
+use crate::project::{FrameData, FrameMarkerKind, TweenMode};
 
-/// Draw action-specific circular frame markers shared by every timeline skin.
-/// Returns true when a special marker was painted; callers can render their
-/// legacy marker when this returns false.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FrameVisualState {
+    EmptyBase,
+    Copied,
+    NewBlank,
+    Authored,
+}
+
+/// One stable color system shared by OLD, NEW and New mine:
+/// red = untouched/default empty frame; green = exact duplicate; yellow =
+/// newly created blank keyframe; white = authored/edited drawing.
+pub fn frame_visual_state(marker: FrameMarkerKind, has_content: bool) -> FrameVisualState {
+    if marker == FrameMarkerKind::CopiedPose {
+        return FrameVisualState::Copied;
+    }
+    if has_content {
+        return FrameVisualState::Authored;
+    }
+    match marker {
+        FrameMarkerKind::Blank | FrameMarkerKind::InsertedEmpty => FrameVisualState::NewBlank,
+        FrameMarkerKind::Legacy => FrameVisualState::EmptyBase,
+        FrameMarkerKind::CopiedPose => FrameVisualState::Copied,
+    }
+}
+
 pub fn draw_action_marker(
     painter: &egui::Painter, center: egui::Pos2, radius: f32,
     marker: FrameMarkerKind, has_content: bool,
 ) -> bool {
-    match marker {
-        FrameMarkerKind::InsertedEmpty if !has_content => {
-            painter.circle_filled(center, radius, egui::Color32::from_rgb(55, 205, 105));
-            painter.circle_stroke(center, radius, egui::Stroke::new(1.1, egui::Color32::from_rgb(18, 76, 43)));
-            true
-        }
-        FrameMarkerKind::CopiedPose => {
-            painter.circle_filled(center, radius, egui::Color32::from_rgb(232, 67, 67));
-            painter.circle_stroke(center, radius, egui::Stroke::new(1.0, egui::Color32::from_rgb(91, 22, 22)));
-            true
-        }
-        FrameMarkerKind::Blank if !has_content => {
-            painter.circle_filled(center, radius, egui::Color32::WHITE);
-            painter.circle_stroke(center, radius, egui::Stroke::new(1.5, egui::Color32::BLACK));
-            true
-        }
-        _ => false,
-    }
+    let (fill,stroke)=match frame_visual_state(marker,has_content) {
+        FrameVisualState::EmptyBase => (
+            egui::Color32::from_rgb(232,67,67),
+            egui::Stroke::new(1.2,egui::Color32::from_rgb(92,22,22))),
+        FrameVisualState::Copied => (
+            egui::Color32::from_rgb(55,205,105),
+            egui::Stroke::new(1.2,egui::Color32::from_rgb(18,76,43))),
+        FrameVisualState::NewBlank => (
+            egui::Color32::from_rgb(247,194,66),
+            egui::Stroke::new(1.2,egui::Color32::from_rgb(104,74,12))),
+        FrameVisualState::Authored => (
+            egui::Color32::WHITE,
+            egui::Stroke::new(1.4,egui::Color32::BLACK)),
+    };
+    painter.circle_filled(center,radius,fill);
+    painter.circle_stroke(center,radius,stroke);
+    true
 }
 
 /// Frame 1 is time zero. Display compact minute:second:subframe timing.
@@ -140,9 +161,78 @@ pub fn draw_cell(
     }
 }
 
+
+/// Clip Timeline cell: thumbnail-first presentation inspired by exposure
+/// thumbnails in traditional animation software. It deliberately ignores the
+/// red/green/yellow/white marker system so the drawing itself is the focus.
+pub fn draw_clip_cell(
+    painter:&egui::Painter,
+    rect:egui::Rect,
+    frame:Option<&FrameData>,
+    stage_size:(f32,f32),
+    current:bool,
+    selected:bool,
+    locked:bool,
+) {
+    let body=rect.shrink2(egui::vec2(2.0,3.0));
+    let border=if selected {egui::Color32::from_rgb(255,205,63)}
+        else if current {egui::Color32::from_rgb(70,190,245)}
+        else {egui::Color32::from_rgb(92,99,110)};
+    painter.rect_filled(body,3.0,
+        if locked {egui::Color32::from_rgb(45,45,48)}
+        else {egui::Color32::from_rgb(238,239,241)});
+    painter.rect_stroke(body,3.0,egui::Stroke::new(if selected{2.2}else{1.0},border));
+    let Some(frame)=frame else{return};
+    let preview=body.shrink2(egui::vec2(4.0,4.0));
+    let sx=preview.width()/stage_size.0.max(1.0);
+    let sy=preview.height()/stage_size.1.max(1.0);
+    let scale=sx.min(sy);
+    let origin=preview.center()-egui::vec2(stage_size.0*scale,stage_size.1*scale)*0.5;
+
+    let mut budget=420usize;
+    for stroke in &frame.strokes {
+        if budget==0{break;}
+        if stroke.points.len()<2{continue;}
+        let color=egui::Color32::from_rgba_unmultiplied(
+            stroke.color[0],stroke.color[1],stroke.color[2],
+            ((stroke.color[3] as f32)*stroke.opacity.clamp(0.0,1.0)) as u8);
+        let step=((stroke.points.len().saturating_sub(1))/budget.max(1)).max(1);
+        let mut last:Option<egui::Pos2>=None;
+        for p in stroke.points.iter().step_by(step) {
+            let q=origin+egui::vec2(p.x*scale,p.y*scale);
+            if let Some(prev)=last {
+                painter.line_segment([prev,q],egui::Stroke::new(
+                    (stroke.base_width*scale).clamp(0.7,2.4),color));
+                budget=budget.saturating_sub(1);
+                if budget==0{break;}
+            }
+            last=Some(q);
+        }
+    }
+    if !frame.text_items.is_empty() {
+        painter.text(preview.right_bottom()-egui::vec2(3.0,2.0),
+            egui::Align2::RIGHT_BOTTOM,"T",egui::FontId::proportional(9.0),
+            egui::Color32::from_rgb(35,70,120));
+    }
+    if !frame.media_items.is_empty() {
+        painter.text(preview.left_bottom()+egui::vec2(3.0,-2.0),
+            egui::Align2::LEFT_BOTTOM,"▣",egui::FontId::proportional(9.0),
+            egui::Color32::from_rgb(90,75,35));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn stable_frame_color_states_match_editor_rules() {
+        assert_eq!(frame_visual_state(FrameMarkerKind::Legacy,false),FrameVisualState::EmptyBase);
+        assert_eq!(frame_visual_state(FrameMarkerKind::CopiedPose,true),FrameVisualState::Copied);
+        assert_eq!(frame_visual_state(FrameMarkerKind::Blank,false),FrameVisualState::NewBlank);
+        assert_eq!(frame_visual_state(FrameMarkerKind::InsertedEmpty,false),FrameVisualState::NewBlank);
+        assert_eq!(frame_visual_state(FrameMarkerKind::Legacy,true),FrameVisualState::Authored);
+    }
+
     #[test]
     fn one_based_frames_generate_correct_timecode() {
         assert_eq!(label_for_frame(1,30,true), "00:00:00");

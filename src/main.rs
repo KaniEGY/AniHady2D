@@ -113,6 +113,7 @@ enum SymmetryMode {
     Off,
     Horizontal,
     Vertical,
+    Quad,
 }
 
 #[derive(Clone, PartialEq)]
@@ -625,6 +626,8 @@ struct AppConfig {
     #[serde(default = "default_true_val")]
     timeline_show_timecodes: bool,
     #[serde(default = "default_true_val")]
+    timeline_fps_locked: bool,
+    #[serde(default = "default_true_val")]
     show_top_bar: bool,
     #[serde(default = "default_true_val")]
     show_left_dock: bool,
@@ -800,6 +803,7 @@ impl Default for AppConfig {
             timeline_new_cell_width: default_new_timeline_cell_width(),
             timeline_new_row_height: default_new_timeline_row_height(),
             timeline_show_timecodes: true,
+            timeline_fps_locked: true,
             show_top_bar: true,
             show_left_dock: true,
             show_right_dock: true,
@@ -1217,6 +1221,19 @@ fn draw_symmetry_icon(
             painter.add(egui::Shape::line(vec![
                 c+egui::vec2(-7.0,3.0),c+egui::vec2(-3.0,8.0),c+egui::vec2(5.0,5.0)
             ],shape));
+        }
+        SymmetryMode::Quad => {
+            let size=7.0;
+            for offset in [
+                egui::vec2(-4.5,-4.5),egui::vec2(4.5,-4.5),
+                egui::vec2(-4.5,4.5),egui::vec2(4.5,4.5)
+            ] {
+                painter.rect_stroke(
+                    egui::Rect::from_center_size(c+offset,egui::vec2(size,size)),
+                    1.0,shape);
+            }
+            painter.line_segment([c+egui::vec2(0.0,-11.0),c+egui::vec2(0.0,11.0)],axis);
+            painter.line_segment([c+egui::vec2(-11.0,0.0),c+egui::vec2(11.0,0.0)],axis);
         }
     }
 }
@@ -2847,30 +2864,57 @@ impl StickApp {
     fn ensure_editable_keyframe(&mut self) {
         if let Some(layer) = self.project.layers.get_mut(self.active_layer_idx) {
             if !layer.keyframes.contains_key(&self.current_frame) {
-                let mut inherited = Self::get_effective_keyframe_index(layer, self.current_frame)
+                let inherited = Self::get_effective_keyframe_index(layer, self.current_frame)
                     .and_then(|k| layer.keyframes.get(&k).cloned())
                     .unwrap_or_default();
-                inherited.timeline_marker = FrameMarkerKind::Legacy;
                 layer.keyframes.insert(self.current_frame, inherited);
+            }
+            // Any actual editing path calls this helper. Once a copied/blank
+            // frame is edited it becomes an authored frame (white marker).
+            if let Some(frame)=layer.keyframes.get_mut(&self.current_frame) {
+                frame.timeline_marker=FrameMarkerKind::Legacy;
             }
         }
     }
 
-    fn mirrored_stroke(&self, stroke: &Stroke) -> Option<Stroke> {
-        let (stage_w, stage_h) = (self.project.width as f32, self.project.height as f32);
-        let mut mirrored = stroke.clone();
+    fn symmetry_strokes(&self, stroke: Stroke) -> Vec<Stroke> {
+        let (stage_w,stage_h)=(self.project.width as f32,self.project.height as f32);
+        let mirror_x=|source:&Stroke| {
+            let mut s=source.clone();
+            for p in &mut s.points {p.x=stage_w-p.x;}
+            s
+        };
+        let mirror_y=|source:&Stroke| {
+            let mut s=source.clone();
+            for p in &mut s.points {p.y=stage_h-p.y;}
+            s
+        };
+        let different=|a:&Stroke,b:&Stroke| a.points.iter().zip(&b.points)
+            .any(|(p,q)|(p.x-q.x).abs()>0.001||(p.y-q.y).abs()>0.001);
+
+        let mut result=vec![stroke.clone()];
         match self.symmetry_mode {
+            SymmetryMode::Off => {}
             SymmetryMode::Horizontal => {
-                for p in &mut mirrored.points { p.x = stage_w - p.x; }
+                let x=mirror_x(&stroke);
+                if different(&stroke,&x){result.push(x);}
             }
             SymmetryMode::Vertical => {
-                for p in &mut mirrored.points { p.y = stage_h - p.y; }
+                let y=mirror_y(&stroke);
+                if different(&stroke,&y){result.push(y);}
             }
-            SymmetryMode::Off => return None,
+            SymmetryMode::Quad => {
+                let x=mirror_x(&stroke);
+                let y=mirror_y(&stroke);
+                let xy=mirror_y(&x);
+                for candidate in [x,y,xy] {
+                    if result.iter().all(|existing|different(existing,&candidate)) {
+                        result.push(candidate);
+                    }
+                }
+            }
         }
-        let changed = stroke.points.iter().zip(&mirrored.points)
-            .any(|(a,b)| (a.x-b.x).abs() > 0.001 || (a.y-b.y).abs() > 0.001);
-        changed.then_some(mirrored)
+        result
     }
 
     fn active_sizable_tool_size(&self) -> Option<f32> {
@@ -2955,9 +2999,7 @@ impl StickApp {
                 return;
             }
         }
-        let mirrored = self.mirrored_stroke(&stroke);
-        let mut strokes_to_add = vec![stroke];
-        if let Some(m) = mirrored { strokes_to_add.push(m); }
+        let strokes_to_add=self.symmetry_strokes(stroke);
         self.ensure_editable_keyframe();
         if let Some(layer) = self.project.layers.get_mut(self.active_layer_idx) {
             layer.keyframes.entry(self.current_frame).or_default().strokes.extend(strokes_to_add);
@@ -5233,10 +5275,6 @@ impl eframe::App for StickApp {
                         ui.small(tr(lang,
                             "The intro uses separate system boot and dismiss sounds plus one of 100 rotating System words.",
                             "النافذة لها صوت ظهور واختفاء مختلفين، وبتعرض كلمة مميزة من 100 كلمة كل مرة."));
-                        if ui.checkbox(&mut self.config.show_grid,
-                            tr(lang, "Show Grid", "إظهار شبكة الرسم")).changed() {
-                            self.config.save();
-                        }
                         let mut appearance_changed = false;
                         egui::CollapsingHeader::new(tr(lang, "Canvas Appearance", "مظهر الكانفا"))
                             .default_open(true).show(ui, |ui| {
@@ -6693,6 +6731,7 @@ impl eframe::App for StickApp {
                     (SymmetryMode::Off, "Symmetry off", "إيقاف التماثل"),
                     (SymmetryMode::Horizontal, "Mirror left / right", "تماثل يمين / شمال"),
                     (SymmetryMode::Vertical, "Mirror top / bottom", "تماثل فوق / تحت"),
+                    (SymmetryMode::Quad, "Four-way quadrant symmetry", "تماثل الأربع مربعات"),
                 ] {
                     let active = self.symmetry_mode == mode;
                     let (rect, response) = ui.allocate_exact_size(
@@ -7094,10 +7133,17 @@ impl eframe::App for StickApp {
                 if handle.dragged() {
                     let delta = ui.input(|i| i.pointer.delta().y);
                     if delta.abs() > 0.1 {
+                        let old_height=self.config.timeline_dock_height;
                         self.config.timeline_dock_height =
                             (self.config.timeline_dock_height - delta).clamp(140.0,available);
-                        self.config.save();
+                        let applied=self.config.timeline_dock_height-old_height;
+                        // The CentralPanel loses/gains this height, moving its
+                        // center by half. Compensate pan so the paper stays put.
+                        self.pan_offset.y += applied*0.5;
                     }
+                }
+                if handle.drag_stopped() {
+                    self.config.save();
                 }
                 let bg = self.config.timeline_bg_color;
                 ui.painter().rect_filled(ui.max_rect(), 0.0,
@@ -7144,6 +7190,33 @@ impl eframe::App for StickApp {
                     {
                         self.has_unsaved_changes = true;
                     }
+                    ui.separator();
+                    ui.group(|ui|{
+                        ui.horizontal(|ui|{
+                            ui.label("FPS");
+                            let fps_response=ui.add_enabled(
+                                !self.config.timeline_fps_locked,
+                                egui::DragValue::new(&mut self.project.fps)
+                                    .range(1..=120).speed(1.0));
+                            if fps_response.changed() {
+                                self.has_unsaved_changes=true;
+                                if self.is_playing {
+                                    self.stop_audio_playback();
+                                    self.is_playing=false;
+                                }
+                            }
+                            let lock_icon=if self.config.timeline_fps_locked {"🔒"} else {"🔓"};
+                            if ui.small_button(lock_icon)
+                                .on_hover_text(if self.config.timeline_fps_locked {
+                                    tr(lang,"Unlock FPS editing","افتح تعديل الفريمات في الثانية")
+                                } else {
+                                    tr(lang,"Lock FPS editing","اقفل تعديل الفريمات في الثانية")
+                                }).clicked() {
+                                self.config.timeline_fps_locked=!self.config.timeline_fps_locked;
+                                self.config.save();
+                            }
+                        });
+                    });
                 });
                 if self.loop_enabled {
                     ui.horizontal(|ui| {
@@ -7166,8 +7239,11 @@ impl eframe::App for StickApp {
                 ui.horizontal(|ui| {
                     ui.label(tr(lang, "Timeline zoom", "تكبير التايم لاين"));
                     if self.config.timeline_style != 0 {
+                        let width_range=if self.config.timeline_style==3 {
+                            64.0..=140.0
+                        } else {28.0..=110.0};
                         if ui.add(egui::Slider::new(&mut self.config.timeline_new_cell_width,
-                            28.0..=110.0).show_value(false)).changed() { self.config.save(); }
+                            width_range).show_value(false)).changed() { self.config.save(); }
                     } else {
                         ui.add(egui::Slider::new(&mut self.timeline_cell_width, 16.0..=84.0)
                             .show_value(false));
@@ -7186,12 +7262,17 @@ impl eframe::App for StickApp {
                 });
                 let modern = self.config.timeline_style != 0;
                 let advanced = self.config.timeline_style == 2;
-                let cell_w = if modern {
+                let clip_style = self.config.timeline_style == 3;
+                let cell_w = if clip_style {
+                    self.config.timeline_new_cell_width.clamp(64.0, 140.0)
+                } else if modern {
                     self.config.timeline_new_cell_width.clamp(28.0, 110.0)
                 } else { self.timeline_cell_width };
                 let label_w = if modern { 218.0 } else { 198.0 };
                 let header_h = if modern { 39.0 } else { 30.0 };
-                let row_h = if modern {
+                let row_h = if clip_style {
+                    self.config.timeline_new_row_height.clamp(58.0, 112.0)
+                } else if modern {
                     self.config.timeline_new_row_height.clamp(36.0, 76.0)
                 } else { 34.0 };
                 let cols = self.timeline_length.max(30);
@@ -7322,7 +7403,14 @@ impl eframe::App for StickApp {
                                 } else {
                                     egui::Color32::from_rgb(cell[0], cell[1], cell[2])
                                 };
-                                if advanced {
+                                if clip_style {
+                                    timeline_styles::draw_clip_cell(
+                                        ui.painter(),cr,
+                                        if is_kf {key} else {None},
+                                        (self.project.width as f32,self.project.height as f32),
+                                        self.current_frame==f,selected_key,
+                                        layer.locked || is_b);
+                                } else if advanced {
                                     advanced_timeline::render_exposure_cell(ui.painter(),cr,is_kf,
                                         has_d && !is_b,marker,tw,self.current_frame==f,
                                         selected_key,
@@ -7346,7 +7434,7 @@ impl eframe::App for StickApp {
                                 }
                                 if !is_b { draw_stick_timeline_cell(ui.painter(), cr, is_kf, has_d, tw, marker); }
                                 }
-                                if selected_key && !advanced {
+                                if selected_key && !advanced && !clip_style {
                                     ui.painter().rect_stroke(
                                         cr.shrink(1.5),4.0,
                                         egui::Stroke::new(2.0,egui::Color32::from_rgb(75,210,255)));
@@ -7764,22 +7852,29 @@ impl eframe::App for StickApp {
                             "NEW Timeline").changed();
                         changed |= ui.selectable_value(&mut self.config.timeline_style, 2,
                             "New mine").changed();
+                        changed |= ui.selectable_value(&mut self.config.timeline_style, 3,
+                            "Clip Timeline").changed();
                     });
                     ui.small(if self.config.timeline_style == 0 {
-                        tr(lang, "Legacy Stick frame grid: unchanged.",
-                            "OLD: نفس شبكة الفريمات الحالية بدون أي تغيير.")
+                        tr(lang, "Legacy Stick frame grid with stable frame-state colors.",
+                            "OLD: شبكة Stick التقليدية مع ألوان حالة الفريم الثابتة.")
                     } else if self.config.timeline_style == 2 {
                         tr(lang,
                             "NEW MINE: multi-select and drag-edit keyframes on independent layer tracks; audio waveform lanes are retained.",
                             "New mine: تحديد ونقل ونسخ مجموعة كي فريمات بين مسارات الليرز، مع الاحتفاظ بموجات الصوت.")
+                    } else if self.config.timeline_style == 3 {
+                        tr(lang,
+                            "CLIP: thumbnail-first cells show the actual drawing in each keyframe; state colors are intentionally hidden.",
+                            "Clip: الفريمات بتعرض معاينة الرسم نفسه، ومن غير نظام ألوان حالة الفريمات.")
                     } else {
                         tr(lang,
-                            "NEW: exposure-sheet tracks, keyframe diamonds and a time ruler. Both layouts edit the same project.",
-                            "NEW: صفوف أوضح، كي فريمات ملوّنة ومسطرة توقيت. الشكلين بيعدلوا نفس المشروع.")
+                            "NEW: exposure-sheet tracks and a time ruler using the same stable frame-state colors.",
+                            "NEW: صفوف أوضح ومسطرة توقيت بنفس ألوان حالة الفريمات الثابتة.")
                     });
                     if self.config.timeline_style != 0 {
+                        let row_range=if self.config.timeline_style==3 {58.0..=112.0} else {36.0..=76.0};
                         changed |= ui.add(egui::Slider::new(
-                            &mut self.config.timeline_new_row_height, 36.0..=76.0)
+                            &mut self.config.timeline_new_row_height, row_range)
                             .text(tr(lang, "Track row height", "ارتفاع صف اللير"))).changed();
                         changed |= ui.checkbox(&mut self.config.timeline_show_timecodes,
                             tr(lang, "Timecode labels", "عرض التوقيت بدل رقم الفريم")).changed();
@@ -7801,6 +7896,12 @@ impl eframe::App for StickApp {
                         self.project.onion_skin.color_before[3] = (prev_alpha * 255.0).round() as u8;
                         self.has_unsaved_changes = true;
                     }
+                    if ui.add(egui::Slider::new(
+                        &mut self.project.onion_skin.fade_before_percent,0.0..=95.0)
+                        .suffix("%").text(tr(lang,
+                            "Fade per extra frame","نقص الشفافية مع كل فريم أبعد"))).changed() {
+                        self.has_unsaved_changes=true;
+                    }
                     ui.label(tr(lang, "Ghost tint", "لون الفريمات القديمة"));
                     if ui.color_edit_button_srgba_unmultiplied(&mut self.project.onion_skin.color_before).changed() {
                         self.has_unsaved_changes = true;
@@ -7815,6 +7916,12 @@ impl eframe::App for StickApp {
                         self.project.onion_skin.color_after[3] = (next_alpha * 255.0).round() as u8;
                         self.has_unsaved_changes = true;
                     }
+                    if ui.add(egui::Slider::new(
+                        &mut self.project.onion_skin.fade_after_percent,0.0..=95.0)
+                        .suffix("%").text(tr(lang,
+                            "Fade per extra frame","نقص الشفافية مع كل فريم أبعد"))).changed() {
+                        self.has_unsaved_changes=true;
+                    }
                     ui.label(tr(lang, "Ghost tint", "لون الفريمات الجاية"));
                     if ui.color_edit_button_srgba_unmultiplied(&mut self.project.onion_skin.color_after).changed() {
                         self.has_unsaved_changes = true;
@@ -7822,8 +7929,11 @@ impl eframe::App for StickApp {
                     ui.separator();
                     ui.label(tr(lang, "Timeline cell width", "عرض الفريم في التايم لاين"));
                     if self.config.timeline_style != 0 {
+                        let width_range=if self.config.timeline_style==3 {
+                            64.0..=140.0
+                        } else {28.0..=110.0};
                         if ui.add(egui::Slider::new(&mut self.config.timeline_new_cell_width,
-                            28.0..=110.0)).changed() { self.config.save(); }
+                            width_range)).changed() { self.config.save(); }
                     } else {
                         ui.add(egui::Slider::new(&mut self.timeline_cell_width, 20.0..=90.0));
                     }
@@ -7836,16 +7946,26 @@ impl eframe::App for StickApp {
         if let Some((selected,layer_delta,frame_delta,mode))=advanced_relocate_request {
             // Rejected drags must not create an Undo snapshot.
             let mut next=self.project.clone();
-            match advanced_timeline::relocate_keyframes(
-                &mut next,&selected,layer_delta,frame_delta,mode) {
+            let result=if mode==advanced_timeline::RelocateMode::Move
+                && layer_delta==0 && selected.len()==1 {
+                let source=selected[0];
+                let target=(source.frame as i64+i64::from(frame_delta)) as usize;
+                advanced_timeline::move_keyframe_with_push(&mut next,source,target)
+                    .map(|cell|vec![cell])
+            } else {
+                advanced_timeline::relocate_keyframes(
+                    &mut next,&selected,layer_delta,frame_delta,mode)
+            };
+            match result {
                 Ok(destination) => {
                     self.save_undo_state();
                     self.project=next;
+                    self.timeline_length=self.timeline_length.max(self.project.total_frames);
                     self.advanced_selected_cels=destination;
                     self.has_unsaved_changes=true;
                     self.status_message=tr(lang,
-                        "Keyframes moved to the new timeline position.",
-                        "تم نقل الكي فريمات للمكان الجديد في التايم لاين.").to_string();
+                        "Keyframe moved; an occupied destination is pushed forward.",
+                        "تم نقل الكي فريم، ولو المكان مشغول الفريمات بتتزق لقدّام.").to_string();
                 }
                 Err(reason) => {self.status_message=reason.to_string();}
             }
@@ -8111,6 +8231,14 @@ impl eframe::App for StickApp {
                             guide,
                         );
                     }
+                    SymmetryMode::Quad => {
+                        painter.line_segment(
+                            [to_screen(egui::pos2(stage_w * 0.5, 0.0)),
+                             to_screen(egui::pos2(stage_w * 0.5, stage_h))],guide);
+                        painter.line_segment(
+                            [to_screen(egui::pos2(0.0, stage_h * 0.5)),
+                             to_screen(egui::pos2(stage_w, stage_h * 0.5))],guide);
+                    }
                     SymmetryMode::Off => {}
                 }
             }
@@ -8253,9 +8381,24 @@ impl eframe::App for StickApp {
                                     egui::pos2(self.project.width as f32-stage_pos.x,stage_pos.y)),
                                 SymmetryMode::Vertical => seeds.push(
                                     egui::pos2(stage_pos.x,self.project.height as f32-stage_pos.y)),
+                                SymmetryMode::Quad => {
+                                    let x=self.project.width as f32-stage_pos.x;
+                                    let y=self.project.height as f32-stage_pos.y;
+                                    seeds.extend([
+                                        egui::pos2(x,stage_pos.y),
+                                        egui::pos2(stage_pos.x,y),
+                                        egui::pos2(x,y),
+                                    ]);
+                                }
                                 SymmetryMode::Off => {}
                             }
-                            if seeds.len()>1 && seeds[0].distance(seeds[1])<0.5 {seeds.truncate(1);}
+                            let mut unique=Vec::with_capacity(seeds.len());
+                            for seed in seeds {
+                                if unique.iter().all(|p:&egui::Pos2|p.distance(seed)>=0.5) {
+                                    unique.push(seed);
+                                }
+                            }
+                            let seeds=unique;
                             let mut solutions=Vec::new();
                             for seed in seeds {
                                 let fallback=fill_tools::flood_fill_polygon_with_options(
@@ -8347,13 +8490,22 @@ impl eframe::App for StickApp {
                             }
                         }
                         ActiveToolUI::Sculpt if pointer_down => {
-                            if pointer_pressed { self.save_undo_state(); }
-                            if !pointer_pressed && !self.is_active_layer_locked() {
-                                if let Some(previous)=self.last_pointer_pos {
+                            if !self.is_active_layer_locked() {
+                                if pointer_pressed {
+                                    self.save_undo_state();
+                                    self.ensure_editable_keyframe();
+                                    if let Some(layer)=self.project.layers.get_mut(self.active_layer_idx) {
+                                        if let Some(frame)=layer.keyframes.get_mut(&self.current_frame) {
+                                            sculpt_tools::prepare_sculpt(
+                                                &mut frame.strokes,
+                                                (stage_pos.x,stage_pos.y),
+                                                self.sculpt_radius);
+                                        }
+                                    }
+                                } else if let Some(previous)=self.last_pointer_pos {
                                     let previous=to_stage(previous);
                                     let movement=stage_pos-previous;
                                     if movement.length_sq()>0.00001 {
-                                        self.ensure_editable_keyframe();
                                         if let Some(layer)=self.project.layers.get_mut(self.active_layer_idx){
                                             if let Some(frame)=layer.keyframes.get_mut(&self.current_frame){
                                                 if sculpt_tools::sculpt(
@@ -8802,11 +8954,14 @@ impl eframe::App for StickApp {
                     settings.frames_before,
                     settings.frames_after,
                 ) {
-                    let base_tint = match ghost.side {
-                        onion_skin::GhostSide::Previous => settings.color_before,
-                        onion_skin::GhostSide::Next => settings.color_after,
+                    let (base_tint,fade_percent) = match ghost.side {
+                        onion_skin::GhostSide::Previous =>
+                            (settings.color_before,settings.fade_before_percent),
+                        onion_skin::GhostSide::Next =>
+                            (settings.color_after,settings.fade_after_percent),
                     };
-                    let tint = onion_skin::ghost_color(base_tint, ghost.distance);
+                    let tint = onion_skin::ghost_color(
+                        base_tint,ghost.distance,fade_percent);
                     for layer in self.project.layers.iter().rev() {
                         if !layer.visible || layer.is_guide { continue; }
                         let layer_opacity = layer.opacity.clamp(0.0, 1.0);
@@ -9047,9 +9202,8 @@ impl eframe::App for StickApp {
                 }
             }
             if let Some(stroke) = &self.current_stroke {
-                draw_stroke_pro(&painter, stroke, None, 1.0, scale, 0.0, 0.0, &to_screen);
-                if let Some(mirrored) = self.mirrored_stroke(stroke) {
-                    draw_stroke_pro(&painter, &mirrored, None, 1.0, scale, 0.0, 0.0, &to_screen);
+                for preview in self.symmetry_strokes(stroke.clone()) {
+                    draw_stroke_pro(&painter, &preview, None, 1.0, scale, 0.0, 0.0, &to_screen);
                 }
             }
             if let (Some(p0), Some(p1)) = (self.shape_drag_start, self.shape_drag_current) {
@@ -9058,9 +9212,8 @@ impl eframe::App for StickApp {
                 if self.shape_fill_enabled && self.selected_shape_kind != GeometricShapeKind::StraightLine {
                     shape.fill_color = Some(self.brush_color);
                 }
-                draw_stroke_pro(&painter, &shape, None, 1.0, scale, 0.0, 0.0, &to_screen);
-                if let Some(mirrored) = self.mirrored_stroke(&shape) {
-                    draw_stroke_pro(&painter, &mirrored, None, 1.0, scale, 0.0, 0.0, &to_screen);
+                for preview in self.symmetry_strokes(shape) {
+                    draw_stroke_pro(&painter, &preview, None, 1.0, scale, 0.0, 0.0, &to_screen);
                 }
             }
             // Display chrome only, intentionally excluded from all exports.

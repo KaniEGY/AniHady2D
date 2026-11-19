@@ -15,12 +15,12 @@ pub fn ghost_frames(
     if current == 0 || current > total { return Vec::new(); }
     let mut frames = Vec::new();
     // More distant ghost frames first, so the closest preview remains legible.
-    for distance in (1..=before.min(6)).rev() {
+    for distance in (1..=before.min(12)).rev() {
         if let Some(frame) = current.checked_sub(distance).filter(|&f| f > 0) {
             frames.push(GhostFrame { frame, side: GhostSide::Previous, distance });
         }
     }
-    for distance in (1..=after.min(6)).rev() {
+    for distance in (1..=after.min(12)).rev() {
         if let Some(frame) = current.checked_add(distance).filter(|&f| f <= total) {
             frames.push(GhostFrame { frame, side: GhostSide::Next, distance });
         }
@@ -28,9 +28,11 @@ pub fn ghost_frames(
     frames
 }
 
-pub fn ghost_color(base: [u8; 4], distance: usize) -> [u8; 4] {
-    let distance = distance.clamp(1, 6) as u16;
-    let alpha = (base[3] as u16 / distance) as u8;
+pub fn ghost_color(base: [u8; 4], distance: usize, fade_percent: f32) -> [u8; 4] {
+    let distance = distance.clamp(1, 12);
+    let keep = (1.0 - fade_percent.clamp(0.0, 95.0) / 100.0)
+        .powi(distance.saturating_sub(1) as i32);
+    let alpha = ((base[3] as f32) * keep).round().clamp(0.0, 255.0) as u8;
     [base[0], base[1], base[2], alpha]
 }
 
@@ -61,12 +63,20 @@ mod tests {
 
     #[test]
     fn zero_opacity_stays_invisible_at_any_distance() {
-        assert_eq!(ghost_color([255, 80, 80, 0], 1)[3], 0);
-        assert_eq!(ghost_color([255, 80, 80, 0], 6)[3], 0);
+        assert_eq!(ghost_color([255, 80, 80, 0], 1, 25.0)[3], 0);
+        assert_eq!(ghost_color([255, 80, 80, 0], 12, 25.0)[3], 0);
     }
 
     #[test]
     fn distant_ghost_is_fainter() {
-        assert!(ghost_color([255, 80, 80, 90], 2)[3] < ghost_color([255, 80, 80, 90], 1)[3]);
+        assert!(ghost_color([255, 80, 80, 90], 2, 25.0)[3]
+            < ghost_color([255, 80, 80, 90], 1, 25.0)[3]);
+    }
+
+    #[test]
+    fn fade_amount_is_user_controllable() {
+        let base=[255,80,80,100];
+        assert_eq!(ghost_color(base,4,0.0)[3],100);
+        assert!(ghost_color(base,4,60.0)[3] < ghost_color(base,4,20.0)[3]);
     }
 }
