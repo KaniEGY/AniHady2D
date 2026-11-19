@@ -5,6 +5,12 @@
 ## English (US)
 
 ### Bugs fixed
+- Tool cursor icons now use the same hotspot as the real click coordinate. Selection arrow tip, Lasso loop, Eyedropper nib and centered transform/vector/tool cursors no longer render down/right from the actual pointer.
+- Added customizable canvas-view shortcuts: **V** mirrors the canvas left/right and **F** flips it top/bottom. Both are available in Settings → Shortcuts and the shortcut help window; Reset Shortcuts restores V/F.
+- Existing installs that still had the retired V Transform compatibility alias are migrated to **M**, preventing V from triggering Transform and canvas mirror at the same time.
+- Marker no longer paints a chain of visible rectangular texture blocks. It now renders as one continuous translucent constant-width marker stroke, matching the dedicated smooth-marker behavior used by mature painting apps.
+- Watercolor, Airbrush, Sketch Pencil, Graphite Pencil, Dry Brush, Chalk, Charcoal, Pastel, Calligraphy and Soft Sketch now use denser per-preset dab spacing instead of one coarse universal spacing value.
+- Grain-bearing pencil/chalk/dry brushes now smooth stamp travel direction over adjacent samples, reducing sudden square/zig-zag stamp rotation without removing their texture.
 - Fast Brush and Vector Pen strokes now consume the real intra-frame pointer path instead of only the frame's final cursor position. Hover moves before the initial press are excluded, near-duplicate samples are dropped, and a 96-sample safety cap preserves the first/last points without allowing a stalled frame to enqueue unbounded work.
 - Tablet pressure now latches per contact: once a real pressure sample proves the current contact is a pen, a missing/zero pressure reading during lift stays at zero instead of falling back to a full-pressure mouse dab. The next mouse contact resets normally to 100% pressure.
 - Pointer-up catch-up is pressure-aware, preventing a synthetic thick endpoint/blob after a pressure-capable stylus leaves the surface.
@@ -320,6 +326,12 @@
 ## العربية (المصري)
 
 ### المشاكل اللي اتصلحت
+- أيقونات الأدوات بقت مرتبطة بنفس **Hotspot الضغط الحقيقي**: سن سهم التحديد، مركز اللاسو، سن القطارة، ومركز أدوات التحويل/الفيكتور بقوا في نفس مكان الكليك بدل الإزاحة القديمة لتحت ويمين.
+- اتضاف اختصارين قابلين للتخصيص للكانفا: **V** لعكس الكانفا يمين/شمال، و **F** لقلب الكانفا فوق/تحت. موجودين في الإعدادات → الاختصارات وكمان نافذة شرح الاختصارات، وReset Shortcuts بيرجعهم V/F.
+- الأجهزة القديمة اللي كان عندها اختصار V القديم كـalias للتحويل بيتنقل تلقائيًا لـ **M** عشان V ماينفذش وظيفتين مع بعض.
+- **الماركر** مبقاش سلسلة مربعات/ختمات مستطيلة ظاهرة؛ بقى Stroke واحد متصل شفاف وثابت العرض، أقرب لسلوك الماركر الحقيقي في برامج الرسم.
+- المائية، البخاخ، السكتش، قلم الرصاص، الفرشة الجافة، الطباشير، الفحم، الباستيل، الخطاط والسكتش الناعم بقوا يستخدموا Spacing مخصوص وأكثف لكل نوع بدل قيمة واحدة خشنة لكل الفرش.
+- فرش القلم/الطباشير/الجافة بقى عندها تنعيم لاتجاه الختمات بين العينات، فالتكتشر يفضل موجود لكن من غير دوران مفاجئ ومربعات متكسرة.
 - الفرشة وقلم الفيكتور بقوا ياخدوا **كل حركات المؤشر اللي وصلت جوه نفس الفريم** بدل آخر مكان بس، فالحركة السريعة بالقلم أو الماوس تبقى أنعم ومايتفقدش منها نقط. حركات الـHover قبل بداية الضغطة بتترفض، والنقط شبه المكررة بتتشال، وفي حد أمان 96 عينة لكل فريم عشان أي تهنيج ما يعملش backlog ضخم.
 - ضغط التابلت بقى مربوط بكل ضغطة لوحدها: أول ما البرنامج يتأكد إن الضغطة جاية من قلم بضغط حقيقي، لو قراءة الضغط اختفت أو وصلت صفر وقت رفع القلم مش هترجع فجأة لضغط ماوس 100% وتعمل بقعة في آخر الخط. الضغطة الجديدة بالماوس بترجع طبيعي لضغط كامل.
 - إكمال نهاية الخط عند رفع المؤشر بقى واعي بالضغط، عشان مايتضافش طرف تخين صناعي بعد ما سن القلم يسيب السطح.

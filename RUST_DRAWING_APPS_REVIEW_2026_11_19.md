@@ -204,3 +204,43 @@ rustcreate is tiled raster storage + touched-tile undo + changed-tile GPU upload
 That can materially improve very large canvases, but it should be a dedicated
 migration with project compatibility tests rather than being mixed into an
 input-quality hotfix.
+
+
+## Brush correction pass — video review (2026-11-19)
+
+The uploaded brush test video exposed a concrete rendering defect: **Marker**
+showed each rectangular texture stamp as a separate block instead of reading as
+one marker stroke. The other textured media also showed too much stamp cadence
+at large sizes.
+
+Additional source comparison for this pass:
+
+- **Rnote** models Marker separately from Textured and Solid styles. Its default
+  marker uses a smooth style and constant pressure rather than a repeated
+  pressure-sized texture nib. Stick now follows that behavioral split: Marker is
+  rendered as one continuous translucent stroke, not a stack of rectangular
+  texture quads.
+- **rustcreate** exposes brush spacing as a fraction of diameter; its reference
+  presets use dense values such as 0.08 ink, 0.10 airbrush and 0.15 pencil.
+  Stick's old textured path was effectively around 0.24 diameter. Textured
+  Stick media now use denser per-preset spacing roughly in the 0.09–0.14
+  diameter range while retaining the existing hard 20k-dab safety budget.
+- **JFPainter** processes all input samples through a brush engine that owns
+  width/hardness/spacing and accumulates stroke coverage before commit. Stick
+  keeps its simpler project format, but now uses the same principle that
+  spacing belongs to the brush family rather than one universal constant.
+- **Graphite** bounds sample spacing from brush footprint and keeps an
+  incremental stroke walk. Stick keeps its current renderer but smooths the
+  travel direction used by grain stamps so pencil/chalk/dry media do not rotate
+  abruptly from one noisy sample to the next.
+
+Implementation selected for Stick:
+1. Marker leaves the texture-stamp path and becomes a single continuous,
+   constant-width translucent line.
+2. Watercolor, Airbrush, Sketch, Graphite, Dry, Chalk, Charcoal, Pastel,
+   Calligraphy and Soft Sketch receive denser per-preset dab spacing.
+3. Direction-bearing grain brushes get short direction memory to reduce blocky
+   stamp rotation while preserving texture variation.
+4. Vector Pen is intentionally unchanged.
+5. The changes remain preview/export shared so the canvas and PNG/video output
+   continue to agree.

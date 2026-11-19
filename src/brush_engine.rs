@@ -19,7 +19,11 @@ pub fn visit_round_marks(stroke: &Stroke, mut paint: impl FnMut(RoundMark, f32))
         (false, KritaBrushPreset::SoftAirbrush) => &[(1.55, 0.25), (1.05, 0.5), (0.65, 1.0)],
         _ => &[(1.0, 1.0)],
     };
-    let pressure = if stroke.is_vector || stroke.brush_preset == KritaBrushPreset::Fineliner {
+    let pressure = if stroke.is_vector
+        || matches!(stroke.brush_preset, KritaBrushPreset::Fineliner | KritaBrushPreset::ChiselMarker) {
+        // Marker/highlighter width should stay stable like dedicated marker
+        // tools in mature painting apps; pressure may still affect opacity at
+        // the stroke level, but it must not turn the nib into blocky boxes.
         1.0
     } else {
         first.pressure.clamp(0.02, 2.0)
@@ -31,7 +35,7 @@ pub fn visit_round_marks(stroke: &Stroke, mut paint: impl FnMut(RoundMark, f32))
     // range is visually meaningful; otherwise use the renderer's native
     // round-joined line path.
     let (min_pressure, max_pressure) = if stroke.is_vector
-        || stroke.brush_preset == KritaBrushPreset::Fineliner {
+        || matches!(stroke.brush_preset, KritaBrushPreset::Fineliner | KritaBrushPreset::ChiselMarker) {
         (pressure, pressure)
     } else {
         stroke.points.iter().fold((pressure, pressure), |(min_p, max_p), p| {
@@ -40,7 +44,7 @@ pub fn visit_round_marks(stroke: &Stroke, mut paint: impl FnMut(RoundMark, f32))
         })
     };
     let varying = !stroke.is_vector
-        && stroke.brush_preset != KritaBrushPreset::Fineliner
+        && !matches!(stroke.brush_preset, KritaBrushPreset::Fineliner | KritaBrushPreset::ChiselMarker)
         && max_pressure - min_pressure > 0.03;
     for &(size, flow) in layers {
         let width = stroke.base_width * size;
@@ -94,6 +98,13 @@ pub fn visit_round_marks(stroke: &Stroke, mut paint: impl FnMut(RoundMark, f32))
                 }
                 // Constant-pressure Smooth Ink uses the fast round-joined line path.
                 // Canvas/export renderers substitute this preset's smoothed centerline.
+            }
+            if !stroke.is_vector && stroke.brush_preset == KritaBrushPreset::ChiselMarker {
+                // Marker is deliberately a single continuous translucent ribbon.
+                // The previous textured path alpha-blended rectangular stamps on
+                // top of one another, which exposed obvious square segments.
+                paint(RoundMark::Line { width: (width * 0.68).max(0.5) }, flow);
+                continue;
             }
             if varying {
                 if has_risky_turn(&stroke.points) {
@@ -275,6 +286,18 @@ fn dab_for(p: &StrokePoint, width: f32) -> BrushDab {
 pub fn visit_pressure_dabs(
     points: &[StrokePoint],
     width: f32,
+    paint: impl FnMut(BrushDab, [f32; 2]),
+) {
+    visit_pressure_dabs_spaced(points, width, 0.48, paint);
+}
+
+/// Same path-distance sampler with caller-controlled spacing, expressed as a
+/// fraction of dab radius. Textured media need denser stamps than the basic
+/// pressure-dab fallback so fast strokes do not reveal individual rectangles.
+pub fn visit_pressure_dabs_spaced(
+    points: &[StrokePoint],
+    width: f32,
+    spacing_radius_ratio: f32,
     mut paint: impl FnMut(BrushDab, [f32; 2]),
 ) {
     if !width.is_finite() || width <= 0.0 {
@@ -294,7 +317,8 @@ pub fn visit_pressure_dabs(
     };
     let total: f64 = valid.zip(path.clone()).map(|(a, b)| length(a, b)).sum();
     let minimum_spacing = total / (MAX_DABS_PER_STROKE - 2) as f64;
-    let spacing = |d: BrushDab| (f64::from(d.radius) * 0.48).max(0.2).max(minimum_spacing);
+    let spacing_ratio = spacing_radius_ratio.clamp(0.12, 1.5) as f64;
+    let spacing = |d: BrushDab| (f64::from(d.radius) * spacing_ratio).max(0.2).max(minimum_spacing);
     let mut previous = first;
     let mut last_dab = dab_for(first, width);
     let mut direction = [1.0, 0.0];
@@ -378,6 +402,38 @@ mod tests {
         assert!((dabs.last().unwrap().x - 40.0).abs() < 0.01);
         assert!(dabs.first().unwrap().radius < dabs.last().unwrap().radius);
         assert!(dabs.iter().all(|d| d.radius.is_finite() && d.radius > 0.0));
+    }
+
+    #[test]
+    fn marker_is_one_continuous_constant_width_line_not_texture_boxes() {
+        let s=Stroke {
+            points:vec![point(0.,0.,0.2),point(20.,2.,1.0),point(40.,0.,0.4)],
+            color:[0,0,0,255],fill_color:None,base_width:20.,is_vector:false,
+            brush_preset:KritaBrushPreset::ChiselMarker,opacity:0.42,
+            brush_texture_id:None,tip_shape:BrushTipShape::Round,
+        };
+        let mut lines=Vec::new();
+        let mut dots=0;
+        let mut outlines=0;
+        visit_round_marks(&s,|mark,_|match mark {
+            RoundMark::Line{width}=>lines.push(width),
+            RoundMark::Dot(_)=>dots+=1,
+            RoundMark::Outline(_)=>outlines+=1,
+        });
+        assert_eq!(lines.len(),1);
+        assert!((lines[0]-13.6).abs()<0.01);
+        assert_eq!(dots,0);
+        assert_eq!(outlines,0);
+    }
+
+    #[test]
+    fn dense_texture_spacing_emits_more_samples_than_default_spacing() {
+        let pts=[point(0.,0.,1.),point(100.,0.,1.)];
+        let mut normal=0;
+        let mut dense=0;
+        visit_pressure_dabs(&pts,20.,|_,_|normal+=1);
+        visit_pressure_dabs_spaced(&pts,20.,0.24,|_,_|dense+=1);
+        assert!(dense>normal);
     }
 
     #[test]
