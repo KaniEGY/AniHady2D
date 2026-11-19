@@ -16,16 +16,20 @@ const PRESSURE_NEW_SAMPLE_WEIGHT: f32 = 0.45;
 pub struct TouchPressureTracker {
     pressure: Option<f32>,
     sample_position: Option<egui::Pos2>,
+    /// Latched only for the current contact. Once a real pressure sample
+    /// has appeared, a later missing/zero sample is pen lift, not a mouse.
+    sensed_this_contact: bool,
 }
 
 impl TouchPressureTracker {
     pub fn pressure_is_available(&self) -> bool {
-        self.pressure.is_some()
+        self.sensed_this_contact
     }
 
     pub fn reset(&mut self) {
         self.pressure = None;
         self.sample_position = None;
+        self.sensed_this_contact = false;
     }
 
     fn apply_touch_event(
@@ -46,20 +50,45 @@ impl TouchPressureTracker {
         match phase {
             egui::TouchPhase::Start | egui::TouchPhase::Move => match force {
                 Some(value) if value.is_finite() && (0.0..=1.0).contains(&value) => {
-                    let raw = value.clamp(0.02, 1.0);
-                    // Tablet backends can alternate between dense pressure
-                    // samples and sparse pointer events. Smooth valid pressure
-                    // samples instead of jumping between widths frame-to-frame.
-                    let filtered = self.pressure
-                        .map(|previous| previous * (1.0 - PRESSURE_NEW_SAMPLE_WEIGHT)
-                            + raw * PRESSURE_NEW_SAMPLE_WEIGHT)
-                        .unwrap_or(raw);
-                    self.pressure = Some(filtered.clamp(0.02, 1.0));
+                    self.sensed_this_contact = true;
+                    self.sample_position = Some(pos);
+                    if value <= 0.001 {
+                        // A real zero means the stylus is leaving the surface.
+                        // Keep the pressure channel active but do not turn the
+                        // missing sample into a full-pressure mouse dab.
+                        self.pressure = Some(0.0);
+                    } else {
+                        let raw = value.clamp(0.02, 1.0);
+                        let filtered = self.pressure
+                            .filter(|previous| *previous > 0.0)
+                            .map(|previous| previous * (1.0 - PRESSURE_NEW_SAMPLE_WEIGHT)
+                                + raw * PRESSURE_NEW_SAMPLE_WEIGHT)
+                            .unwrap_or(raw);
+                        self.pressure = Some(filtered.clamp(0.02, 1.0));
+                    }
+                }
+                // Windows/driver stacks can drop the final pressure reading
+                // while the pointer is still technically down. Once this
+                // contact has proven it is pressure-capable, absence means
+                // lift-off rather than "mouse at pressure 1".
+                None if self.sensed_this_contact => {
+                    self.pressure = Some(0.0);
                     self.sample_position = Some(pos);
                 }
-                _ => self.reset(),
+                _ if self.sensed_this_contact => {
+                    self.pressure = Some(0.0);
+                    self.sample_position = Some(pos);
+                }
+                _ => {}
             },
-            egui::TouchPhase::End | egui::TouchPhase::Cancel => self.reset(),
+            egui::TouchPhase::End | egui::TouchPhase::Cancel => {
+                if self.sensed_this_contact {
+                    self.pressure = Some(0.0);
+                    self.sample_position = Some(pos);
+                } else {
+                    self.reset();
+                }
+            },
         }
     }
 
@@ -96,7 +125,11 @@ impl TouchPressureTracker {
         {
             self.reset();
         }
-        self.pressure.unwrap_or(1.0)
+        if self.sensed_this_contact {
+            self.pressure.unwrap_or(0.0)
+        } else {
+            1.0
+        }
     }
 }
 
@@ -158,13 +191,35 @@ mod tests {
     }
 
     #[test]
+    fn missing_pressure_after_real_pen_sample_is_lift_not_full_mouse_pressure() {
+        let mut tracker=TouchPressureTracker::default();
+        tracker.apply_touch_event(
+            egui::TouchPhase::Start,pos(10.0,10.0),Some(0.45),pos(10.0,10.0));
+        assert!(tracker.pressure_is_available());
+        tracker.apply_touch_event(
+            egui::TouchPhase::Move,pos(12.0,10.0),None,pos(12.0,10.0));
+        assert_eq!(tracker.update(&[],Some(pos(12.0,10.0)),true),0.0);
+        assert!(tracker.pressure_is_available());
+    }
+
+    #[test]
+    fn a_new_mouse_contact_after_pen_lift_returns_to_full_pressure() {
+        let mut tracker=TouchPressureTracker::default();
+        tracker.apply_touch_event(
+            egui::TouchPhase::Start,pos(4.0,4.0),Some(0.3),pos(4.0,4.0));
+        tracker.update(&[],Some(pos(4.0,4.0)),false);
+        assert_eq!(tracker.update(&[],Some(pos(8.0,8.0)),true),1.0);
+        assert!(!tracker.pressure_is_available());
+    }
+
+    #[test]
     fn lifting_pen_or_moving_away_resets_pressure() {
         let mut tracker = TouchPressureTracker::default();
         tracker.apply_touch_event(egui::TouchPhase::Start, pos(3.0, 3.0), Some(0.2), pos(3.0, 3.0));
         assert_eq!(tracker.update(&[], Some(pos(400.0, 400.0)), true), 1.0);
         tracker.apply_touch_event(egui::TouchPhase::Move, pos(3.0, 3.0), Some(0.5), pos(3.0, 3.0));
         tracker.apply_touch_event(egui::TouchPhase::End, pos(3.0, 3.0), None, pos(3.0, 3.0));
-        assert_eq!(tracker.update(&[], Some(pos(3.0, 3.0)), true), 1.0);
+        assert_eq!(tracker.update(&[], Some(pos(3.0, 3.0)), true), 0.0);
         tracker.apply_touch_event(egui::TouchPhase::Start, pos(3.0, 3.0), Some(0.5), pos(3.0, 3.0));
         assert_eq!(tracker.update(&[], Some(pos(3.0, 3.0)), false), 1.0);
     }
