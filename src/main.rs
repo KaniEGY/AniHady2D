@@ -3384,11 +3384,14 @@ impl StickApp {
         const END_MARKER:&str="__stick_image_end__";
         let Some((start,current_end))=Self::image_layer_range(layer,timeline_length) else{return false};
         let end=end.max(start);
-        if end==current_end {return false;}
+        let marker_frame=end.saturating_add(1);
+        let already_explicit=layer.keyframes.get(&marker_frame)
+            .is_some_and(|data|data.label==END_MARKER);
+        if end==current_end && already_explicit {return false;}
         layer.keyframes.retain(|_,data|data.label!=END_MARKER);
         let mut blank=FrameData::default();
         blank.label=END_MARKER.to_string();
-        layer.keyframes.insert(end.saturating_add(1),blank);
+        layer.keyframes.insert(marker_frame,blank);
         true
     }
 
