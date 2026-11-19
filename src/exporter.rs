@@ -256,7 +256,7 @@ fn export_text_font() -> Option<&'static fontdue::Font> {
     }).as_ref()
 }
 
-fn draw_export_text(pixmap: &mut Pixmap, item: &crate::project::TextItem) {
+fn draw_export_text_unrotated(pixmap: &mut Pixmap, item: &crate::project::TextItem) {
     let Some(font) = export_text_font() else { return; };
     if item.content.trim().is_empty() || !item.font_size.is_finite() { return; }
     use fontdue::layout::{CoordinateSystem, Layout, LayoutSettings, TextStyle};
@@ -291,6 +291,20 @@ fn draw_export_text(pixmap: &mut Pixmap, item: &crate::project::TextItem) {
             }
         }
     }
+}
+
+fn draw_export_text(pixmap:&mut Pixmap,item:&crate::project::TextItem) {
+    let angle=if item.rotation_deg.is_finite(){item.rotation_deg}else{0.0};
+    if angle.abs()<0.001 {
+        draw_export_text_unrotated(pixmap,item);
+        return;
+    }
+    let Some(mut temp)=Pixmap::new(pixmap.width(),pixmap.height()) else{return};
+    draw_export_text_unrotated(&mut temp,item);
+    let transform=Transform::from_translate(-item.x,-item.y)
+        .post_rotate(angle)
+        .post_translate(item.x,item.y);
+    pixmap.draw_pixmap(0,0,temp.as_ref(),&tiny_skia::PixmapPaint::default(),transform,None);
 }
 
 fn fill_skia_polygon(
@@ -791,11 +805,23 @@ mod layer_opacity_tests {
             crate::project::TextItem {
                 content: "Hello أهلاً".to_owned(),
                 x: 12.0, y: 16.0,
-                font_size: 32.0, color: [0, 0, 0, 255],
+                font_size: 32.0, color: [0, 0, 0, 255], rotation_deg: 0.0,
             }
         );
         let rendered = render_frame_pixmap(&project, 1, true, [0,0,0,0]);
         assert!(rendered.data().chunks_exact(4).any(|p| p[3] != 0));
+    }
+
+    #[test]
+    fn rotated_text_is_present_in_export() {
+        if export_text_font().is_none() { return; }
+        let mut project=AniProject::default();
+        project.width=180; project.height=180;
+        project.layers[0].keyframes.get_mut(&1).unwrap().text_items.push(
+            crate::project::TextItem{content:"Rotate".into(),x:70.,y:50.,
+                font_size:28.,color:[0,0,0,255],rotation_deg:90.});
+        let rendered=render_frame_pixmap(&project,1,true,[0,0,0,0]);
+        assert!(rendered.data().chunks_exact(4).any(|p|p[3]!=0));
     }
 
     #[test]
