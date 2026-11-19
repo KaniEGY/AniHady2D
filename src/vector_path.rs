@@ -190,6 +190,23 @@ pub fn quick_edit_node(
     quick_edit_node_in_selection(strokes,&[],x,y,tolerance)
 }
 
+pub fn quick_edit_node_prefer_selection(
+    strokes: &mut [Stroke], selected_strokes: &[usize],
+    x: f32, y: f32, tolerance: f32,
+) -> Option<QuickNodeEdit> {
+    if selected_strokes.is_empty() {
+        return quick_edit_node(strokes,x,y,tolerance);
+    }
+    // Selected strokes get first priority, but a stale selection must never
+    // make right-click look broken on another visible vector path.
+    if let Some(edit)=quick_edit_node_in_selection(
+        strokes,selected_strokes,x,y,tolerance
+    ) {
+        return Some(edit);
+    }
+    quick_edit_node(strokes,x,y,tolerance)
+}
+
 pub fn quick_edit_node_in_selection(
     strokes: &mut [Stroke], selected_strokes: &[usize],
     x: f32, y: f32, tolerance: f32,
@@ -356,6 +373,19 @@ mod tests {
         assert!(matches!(quick_edit_node(&mut strokes,x,y,tolerance),
             Some(QuickNodeEdit::Inserted{..})));
         assert_eq!(strokes[0].points.len(),before+1);
+    }
+
+    #[test]
+    fn quick_node_edit_falls_back_to_visible_unselected_vector() {
+        let mut strokes=vec![
+            vector(&[(0.,0.),(80.,0.)]),
+            vector(&[(0.,40.),(80.,40.)]),
+        ];
+        let before=strokes[1].points.len();
+        let edit=quick_edit_node_prefer_selection(&mut strokes,&[0],40.,40.,8.)
+            .expect("right-click should edit the visible second path");
+        assert!(matches!(edit,QuickNodeEdit::Inserted{stroke:1,..}));
+        assert_eq!(strokes[1].points.len(),before+1);
     }
 
     #[test]
