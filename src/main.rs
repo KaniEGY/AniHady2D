@@ -3376,11 +3376,9 @@ impl StickApp {
         let end=end.max(start);
         if end==current_end {return false;}
         layer.keyframes.retain(|_,data|data.label!=END_MARKER);
-        if end<timeline_length {
-            let mut blank=FrameData::default();
-            blank.label=END_MARKER.to_string();
-            layer.keyframes.insert(end+1,blank);
-        }
+        let mut blank=FrameData::default();
+        blank.label=END_MARKER.to_string();
+        layer.keyframes.insert(end.saturating_add(1),blank);
         true
     }
 
@@ -7702,6 +7700,116 @@ impl eframe::App for StickApp {
                             }
                         });
                     }
+                    // Imported still images behave like editable timeline clips:
+                    // body drag moves the exposure, left/right grips trim its visible range.
+                    for (image_layer,layer) in self.project.layers.iter().enumerate() {
+                        if !Self::media_layer_is_import_only(layer) {continue;}
+                        let Some((image_start,image_end))=
+                            Self::image_layer_range(layer,self.timeline_length) else {continue};
+                        let has_image=layer.keyframes.values().any(|data|
+                            data.media_items.iter().any(|m|m.media_type==MediaType::Image));
+                        if !has_image {continue;}
+                        ui.horizontal(|ui| {
+                            ui.allocate_ui(egui::vec2(label_w,row_h),|ui| {
+                                let active=self.active_layer_idx==image_layer
+                                    && self.selected_media_idx.is_some();
+                                let response=ui.selectable_label(active,
+                                    egui::RichText::new(format!("▧ {}",layer.name))
+                                        .color(if active {egui::Color32::from_rgb(111,205,255)}
+                                            else {egui::Color32::from_rgb(170,210,232)}));
+                                if response.clicked() {
+                                    self.active_layer_idx=image_layer;
+                                    self.current_frame=image_start;
+                                    self.selected_media_idx=Some(0);
+                                    self.selected_audio_idx=None;
+                                    self.right_panel_tab=2;
+                                    self.config.show_right_dock=true;
+                                }
+                                ui.small(tr(lang,"Drag ↔ • trim grips","اسحب ↔ • مد من الحواف"));
+                            });
+                            let lane_width=cell_w*cols as f32;
+                            let (rect,_resp)=ui.allocate_exact_size(
+                                egui::vec2(lane_width,row_h),egui::Sense::click_and_drag());
+                            ui.painter().rect_filled(rect,3.0,egui::Color32::from_rgb(29,38,48));
+                            let left=rect.left()+(image_start.saturating_sub(1) as f32)*cell_w;
+                            let right=rect.left()+(image_end.min(cols) as f32)*cell_w;
+                            if right>left && left<rect.right() {
+                                let clip=egui::Rect::from_min_max(
+                                    egui::pos2(left.max(rect.left()),rect.top()+2.0),
+                                    egui::pos2(right.min(rect.right()),rect.bottom()-2.0));
+                                let selected=self.active_layer_idx==image_layer
+                                    && self.selected_media_idx.is_some();
+                                ui.painter().rect_filled(clip,4.0,
+                                    if selected {egui::Color32::from_rgb(37,103,139)}
+                                    else {egui::Color32::from_rgb(42,73,92)});
+                                ui.painter().rect_stroke(clip,4.0,egui::Stroke::new(
+                                    1.0,egui::Color32::from_rgb(93,194,238)));
+                                let grip=8.0f32.min(clip.width()*0.25);
+                                ui.painter().rect_filled(
+                                    egui::Rect::from_min_max(clip.min,egui::pos2(clip.left()+grip,clip.bottom())),
+                                    2.0,egui::Color32::from_rgb(95,192,231));
+                                ui.painter().rect_filled(
+                                    egui::Rect::from_min_max(egui::pos2(clip.right()-grip,clip.top()),clip.max),
+                                    2.0,egui::Color32::from_rgb(95,192,231));
+                                ui.painter().text(clip.center(),egui::Align2::CENTER_CENTER,
+                                    format!("{}–{}",image_start,image_end),
+                                    egui::FontId::monospace(10.0),egui::Color32::WHITE);
+                                if pointer_pressed && pointer_pos.is_some_and(|p|clip.contains(p)) {
+                                    if let Some(p)=pointer_pos {
+                                        let mode=if p.x<=clip.left()+12.0 {1}
+                                            else if p.x>=clip.right()-12.0 {2}else{0};
+                                        self.image_drag_origin=Some((image_layer,image_start,image_end,mode));
+                                        self.image_drag_pointer_x=Some(p.x);
+                                        self.image_drag_undo_captured=false;
+                                        self.active_layer_idx=image_layer;
+                                        self.current_frame=image_start;
+                                        self.selected_media_idx=Some(0);
+                                        self.selected_audio_idx=None;
+                                        self.right_panel_tab=2;
+                                        self.config.show_right_dock=true;
+                                    }
+                                }
+                                if pointer_down {
+                                    if let Some((drag_layer,start,end,mode))=self.image_drag_origin {
+                                        if drag_layer==image_layer {
+                                            if let (Some(pos),Some(press_x))=(pointer_pos,self.image_drag_pointer_x) {
+                                                let delta=((pos.x-press_x)/cell_w).round() as i64;
+                                                match mode {
+                                                    1 => {
+                                                        let next=((start as i64)+delta)
+                                                            .clamp(1,end as i64) as usize;
+                                                        if next!=image_start {
+                                                            image_trim_request=Some((image_layer,next,end));
+                                                        }
+                                                    }
+                                                    2 => {
+                                                        let next=((end as i64)+delta)
+                                                            .clamp(start as i64,timeline_ops::MAX_TIMELINE_FRAMES as i64) as usize;
+                                                        if next!=image_end {
+                                                            image_trim_request=Some((image_layer,start,next));
+                                                        }
+                                                    }
+                                                    _ => {
+                                                        let next=((start as i64)+delta)
+                                                            .clamp(1,timeline_ops::MAX_TIMELINE_FRAMES as i64) as usize;
+                                                        if next!=image_start {
+                                                            image_move_request=Some((image_layer,next));
+                                                        }
+                                                    }
+                                                }
+                                                if (image_trim_request.is_some()||image_move_request.is_some())
+                                                    && !self.image_drag_undo_captured {
+                                                    image_drag_started=true;
+                                                    self.image_drag_undo_captured=true;
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        });
+                    }
+
                     // Imported videos get a dedicated clip lane while their decoded
                     // frames remain stored in the existing video layer for compatibility.
                     for (video_layer, layer) in self.project.layers.iter().enumerate() {
@@ -7905,6 +8013,30 @@ impl eframe::App for StickApp {
                 });
             });
             // The grip and the height slider both modify the same persisted value.
+        }
+        if image_drag_started {self.save_undo_state();}
+        if let Some((layer_index,start))=image_move_request {
+            if let Some(layer)=self.project.layers.get_mut(layer_index) {
+                if let Some(new_end)=Self::move_image_layer(
+                    layer,start,self.timeline_length,timeline_ops::MAX_TIMELINE_FRAMES) {
+                    self.timeline_length=self.timeline_length.max(new_end);
+                    self.project.total_frames=self.timeline_length;
+                    self.current_frame=start;
+                    self.has_unsaved_changes=true;
+                }
+            }
+        }
+        if let Some((layer_index,start,end))=image_trim_request {
+            self.timeline_length=self.timeline_length.max(end);
+            self.project.total_frames=self.timeline_length;
+            if let Some(layer)=self.project.layers.get_mut(layer_index) {
+                let changed_start=Self::set_image_layer_start(layer,start,self.timeline_length);
+                let changed_end=Self::set_image_layer_end(layer,end,self.timeline_length);
+                if changed_start||changed_end {
+                    self.current_frame=start;
+                    self.has_unsaved_changes=true;
+                }
+            }
         }
         if video_drag_started {self.save_undo_state();}
         if let Some((layer_index,start))=video_move_request {
