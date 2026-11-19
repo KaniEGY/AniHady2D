@@ -335,7 +335,7 @@ mod tests {
 
     #[test]
     fn rotated_text_hit_test_tracks_visual_rotation() {
-        let text=TextItem{content:"AB".into(),x:100.,y:100.,font_size:30.,
+        let text=TextItem{content:"ABCDEFG".into(),x:100.,y:100.,font_size:30.,
             color:[0,0,0,255],rotation_deg:90.};
         assert!(text_hit_test(&text,egui::pos2(90.,115.)));
         assert!(!text_hit_test(&text,egui::pos2(125.,115.)));
