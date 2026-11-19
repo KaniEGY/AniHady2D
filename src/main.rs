@@ -9115,9 +9115,22 @@ impl eframe::App for StickApp {
                     for s in &fd.strokes {
                         draw_stroke_pro(&painter, s, None, l_op, scale, 0.0, 0.0, &to_screen);
                     }
-                    // Symbol instances are real visible artwork. Export already
-                    // applied their full transform; the editor now uses the
-                    // same pivot/scale/rotation/translation order.
+                    for txt in &fd.text_items {
+                        let tint = egui::Color32::from_rgba_unmultiplied(txt.color[0], txt.color[1],
+                            txt.color[2], (txt.color[3] as f32 * l_op) as u8);
+                        let galley = paper_painter.layout_no_wrap(
+                            fix_ar(&txt.content),
+                            egui::FontId::proportional(txt.font_size * scale),
+                            tint,
+                        );
+                        let text_shape = egui::epaint::TextShape::new(
+                            to_screen(egui::pos2(txt.x, txt.y)), galley, tint,
+                        ).with_angle(self.canvas_rotation_deg.to_radians());
+                        paper_painter.add(egui::Shape::Text(text_shape));
+                    }
+                    // Symbol instances are real visible artwork. Export paints
+                    // them after media/strokes/text, so the editor follows the
+                    // same compositing order and transform semantics.
                     for instance in &fd.symbol_instances {
                         if let Some(symbol)=self.project.library_symbols.get(&instance.symbol_name) {
                             let instance_scale = if instance.scale.is_finite() {
@@ -9133,19 +9146,6 @@ impl eframe::App for StickApp {
                                     0.0,0.0,&symbol_to_screen);
                             }
                         }
-                    }
-                    for txt in &fd.text_items {
-                        let tint = egui::Color32::from_rgba_unmultiplied(txt.color[0], txt.color[1],
-                            txt.color[2], (txt.color[3] as f32 * l_op) as u8);
-                        let galley = paper_painter.layout_no_wrap(
-                            fix_ar(&txt.content),
-                            egui::FontId::proportional(txt.font_size * scale),
-                            tint,
-                        );
-                        let text_shape = egui::epaint::TextShape::new(
-                            to_screen(egui::pos2(txt.x, txt.y)), galley, tint,
-                        ).with_angle(self.canvas_rotation_deg.to_radians());
-                        paper_painter.add(egui::Shape::Text(text_shape));
                     }
                 }
             }
