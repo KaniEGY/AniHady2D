@@ -1,5 +1,12 @@
 # Stick Studio — Session Handoff / سجل استكمال المشروع
 
+## 19 November 2026 — Free Transform pointer/hitbox visual alignment
+- Branch `fix/transform-cursor-hitbox-alignment-20261119` starts from released main `bde8773d2cb7909ebd828a97dcdfe278d47e14e3` / `v4.1.0.282`.
+- User screenshot showed a selection marquee ending roughly 20 px up/left of the visible orange Transform cursor. Root cause was not the marquee geometry: the OS cursor is hidden for custom tool icons, while the generic non-brush icon path rendered its center at `pointer_pos + (8 + icon_size/2, 7 + icon_size/2)`. For the symmetric Transform gizmo this made the visual cursor itself lie down/right of the true input hotspot.
+- Free Transform now uses `transform_handles::cursor_rect_at_hotspot`, whose visual center is exactly the raw screen-space pointer used by handle/selection hit-testing.
+- Existing resize/rotate/translation handle hit tests already compare against the exact painted screen positions. The marquee already draws all four stage-space corners through the same `to_screen` transform, so those paths were retained rather than adding a compensating offset.
+- Regression tests assert exact cursor-center/hotspot identity and safe handling of invalid icon sizes. Final acceptance requires Windows tests, Clippy and release build, plus manual pointer-feel QA.
+
 ## 19 November 2026 — Clip Timeline thumbnail parity and rendering audit
 - Branch `fix/clip-timeline-thumbnails-audit-20261119` starts from released main `78cc00a47390f62e6398f974b38254ffb40bbcf3` / `v4.1.0.280`.
 - Root cause of intermittent blank Clip cells: the Clip Timeline passed frame data only for explicit keyframes. Held exposures were intentionally replaced by `None`, and tween in-betweens were never evaluated. Clip cells now borrow static visible exposures and evaluate only tween frames that need a real in-between pose, avoiding unnecessary cloning in static holds.
