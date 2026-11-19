@@ -75,6 +75,8 @@
 - Artist System and level-up overlays now block canvas/tool input behind the popup, preventing custom cursor and drawing interactions from leaking into background windows.
 
 ### What's new
+- Brush presets now have deliberately different rendering personalities instead of sharing nearly identical round strokes: watercolor has mottled wet grain, marker uses a broad chisel footprint, airbrush has a soft spray falloff, sketch tools have paper tooth, and the existing dry/chalk/charcoal/pastel/calligraphy families keep their own procedural masks.
+- Added a separate **Graphite Pencil / قلم رصاص** brush with broken graphite grain, lighter low-pressure opacity, darker high-pressure buildup, a narrower pencil footprint, and matching canvas/export rendering. The older Pencil preset is now labeled Sketch Pencil / سكتش so the two tools are clearly different.
 - Timeline action markers are consistent in OLD, NEW and New mine: a newly inserted empty cel is a green circle, a copied/current-pose keyframe is a red circle, and an explicit blank keyframe is a white circle with a black border. The marker type is saved with the project and old files default safely to legacy visuals.
 - Artist System has a cyan/gold cyber-HUD identity. Creating a new project shows the artist level, rank and XP progress for 4 seconds with animated electric border effects and System UI sounds.
 - General Settings can disable the new-project Artist System intro; the global sound-effects switch still controls its sound.
@@ -338,6 +340,8 @@
 - اتضاف ملف `ONLINE_ARCHITECTURE_REVIEW_2026-11-19.md` لمراجعة بنية الشبكات والخطوات المستقبلية. صيغة المشاريع وبروتوكول التعاون الحالي ما اتغيروش.
 
 ### إيه الجديد؟
+- الفرش بقت مختلفة فعلًا في الشكل والملمس بدل ما تبقى خطوط شبه بعض: المائية فيها حبيبات وبلل غير منتظم، الماركر بسن عريض مشطوف، البخاخ بتدرج رذاذ ناعم، وفرش السكتش فيها ملمس ورق، مع الحفاظ على خامة الفرشة الجافة والطباشير والفحم والباستيل والخطاط.
+- اتضافت فرشة جديدة مستقلة باسم **قلم رصاص** بتحاكي الجرافيت: حبيبات متقطعة، الضغط الخفيف أفتح والضغط القوي أغمق، سن أضيق، ونفس النتيجة في المعاينة والتصدير. وفرشة الرصاص القديمة بقى اسمها **سكتش** عشان يبقى الفرق واضح.
 - علامات إنشاء الفريم بقت موحّدة في OLD وNEW وNew mine: الفريم الفاضي الجديد دائرة خضرا، والكي فريم اللي بينسخ الوضع الحالي دائرة حمرا، والكي فريم الفاضي دائرة بيضا بحد أسود. النوع بيتحفظ جوه المشروع، والمشاريع القديمة بتفضل متوافقة.
 - نظام الفنان أخد شكل HUD جديد سماوي/ذهبي. مع كل مشروع جديد بتظهر نافذة المستوى والرتبة وتقدم XP لمدة 8 ثواني مع برق متحرك وصوت برق متولد جوه البرنامج.
 - في الإعدادات العامة تقدر تقفل نافذة نظام الفنان الخاصة بالمشروع الجديد، وزر الأصوات العام بيتحكم في صوتها.

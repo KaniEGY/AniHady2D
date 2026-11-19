@@ -9,8 +9,13 @@ use tiny_skia::{FilterQuality, Pixmap, PixmapPaint, Transform};
 const SIZE: usize = 32;
 const AREA: usize = SIZE * SIZE;
 
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, PartialEq, Debug)]
 pub enum TextureBrush {
+    Watercolor,
+    Marker,
+    Airbrush,
+    Sketch,
+    Graphite,
     Dry,
     Chalk,
     Charcoal,
@@ -25,6 +30,11 @@ impl TextureBrush {
             return None;
         }
         match stroke.brush_preset {
+            KritaBrushPreset::Watercolor => Some(Self::Watercolor),
+            KritaBrushPreset::ChiselMarker => Some(Self::Marker),
+            KritaBrushPreset::SoftAirbrush => Some(Self::Airbrush),
+            KritaBrushPreset::SketchPencil => Some(Self::Sketch),
+            KritaBrushPreset::GraphitePencil => Some(Self::Graphite),
             KritaBrushPreset::DryBrush => Some(Self::Dry),
             KritaBrushPreset::Chalk => Some(Self::Chalk),
             KritaBrushPreset::Charcoal => Some(Self::Charcoal),
@@ -36,7 +46,7 @@ impl TextureBrush {
     }
 
     fn mask(self, tip: BrushTipShape) -> &'static [u8; AREA] {
-        static MASKS: [OnceLock<[u8; AREA]>; 36] = [const { OnceLock::new() }; 36];
+        static MASKS: [OnceLock<[u8; AREA]>; 66] = [const { OnceLock::new() }; 66];
         MASKS[self as usize * 6 + tip as usize].get_or_init(|| self.make_mask(tip))
     }
 
@@ -60,12 +70,15 @@ impl TextureBrush {
             let v = (2.0 * y as f32 + 1.0) / SIZE as f32 - 1.0;
             // Clockwise vertices in canvas coordinates; signed distance to the
             // nearest side also gives polygon tips a naturally broken edge.
-            let inside = if self == Self::Calligraphy {
-                // A fixed 30-degree chisel nib, not the circular/stroke-
-                // tangent aligned tip used by the other brush presets.
-                let dx=u*0.866_025_4+v*0.5;
-                let dy=-u*0.5+v*0.866_025_4;
-                (1.0-dx.abs()).min(0.38-dy.abs())
+            // Marker and calligraphy deliberately own a chisel footprint so
+            // they cannot look like the ordinary round 2D pen.
+            let inside = if matches!(self, Self::Calligraphy | Self::Marker) {
+                let angle:f32=if self==Self::Calligraphy {0.50}else{0.34};
+                let (sin,cos)=angle.sin_cos();
+                let dx=u*cos+v*sin;
+                let dy=-u*sin+v*cos;
+                let half_h=if self==Self::Calligraphy {0.34}else{0.52};
+                (1.0-dx.abs()).min(half_h-dy.abs())
             } else if polygon.is_empty() {
                 1.0 - u.hypot(v)
             } else {
@@ -79,8 +92,46 @@ impl TextureBrush {
                     .fold(f32::INFINITY, f32::min)
             };
             let grain = noise(index as u32);
-            let edge = ((inside - 0.04) * 8.0 - grain * 0.65).clamp(0.0, 1.0);
+            let radial=(1.0-u.hypot(v)).clamp(0.0,1.0);
+            let edge = match self {
+                Self::Airbrush => radial.powf(1.9),
+                Self::Watercolor => {
+                    let wobble=noise((x*7+y*17+27_001) as u32);
+                    ((inside+0.10)*3.2-wobble*0.26).clamp(0.0,1.0)
+                }
+                Self::Marker | Self::Calligraphy =>
+                    ((inside-0.01)*18.0).clamp(0.0,1.0),
+                Self::Sketch | Self::Graphite | Self::SoftSketch =>
+                    ((inside-0.02)*7.0-grain*0.28).clamp(0.0,1.0),
+                _ => ((inside-0.04)*8.0-grain*0.65).clamp(0.0,1.0),
+            };
             let ink = match self {
+                Self::Watercolor => {
+                    let paper=noise((x*19+y*23+10_007) as u32);
+                    let bloom=noise((x/3+y/3*SIZE+55_001) as u32);
+                    (0.18+0.35*paper+0.17*bloom)*radial.max(0.45)
+                }
+                Self::Marker => {
+                    let fiber=noise((x*3+y*29+12_343) as u32);
+                    0.82+0.15*fiber
+                }
+                Self::Airbrush => {
+                    let spray=noise((x*41+y*67+80_003) as u32);
+                    (0.26+0.18*spray)*radial
+                }
+                Self::Sketch => {
+                    let graphite=noise((x*13+y*47+41_011) as u32);
+                    let tooth=noise((x*31+y*5+91_019) as u32);
+                    if graphite<0.18 {0.0}
+                    else {(0.16+0.42*graphite)*(0.62+0.38*tooth)}
+                }
+                Self::Graphite => {
+                    let graphite=noise((x*71+y*17+151_007) as u32);
+                    let paper=noise((x*11+y*83+190_027) as u32);
+                    let streak=noise((x/2+y*SIZE+220_009) as u32);
+                    if graphite<0.24 || paper<0.10 {0.0}
+                    else {(0.10+0.52*graphite)*(0.48+0.38*paper+0.14*streak)}
+                }
                 Self::Dry => {
                     let bristle = noise(y as u32 + 1024);
                     let split = noise((x / 5 + y * SIZE + AREA) as u32);
@@ -116,7 +167,13 @@ impl TextureBrush {
             };
             // Keep taps visible even when the tip is smaller than a pixel.
             let ink = if u.abs() < 0.07 && v.abs() < 0.07 {
-                ink.max(0.45)
+                let minimum=match self {
+                    Self::Airbrush=>0.12,
+                    Self::Watercolor=>0.22,
+                    Self::Sketch|Self::Graphite|Self::SoftSketch=>0.18,
+                    _=>0.45,
+                };
+                ink.max(minimum)
             } else {
                 ink
             };
@@ -125,31 +182,63 @@ impl TextureBrush {
     }
 
     fn stamps(self, stroke: &Stroke, mut emit: impl FnMut(Stamp)) {
-        let (wide, tall) = match stroke.tip_shape {
-            BrushTipShape::TallRectangle => (0.5, 1.5),
-            BrushTipShape::WideRectangle => (1.5, 0.5),
-            _ => (1.0, 1.0),
+        let (tip_wide,tip_tall)=match stroke.tip_shape {
+            BrushTipShape::TallRectangle=>(0.5,1.5),
+            BrushTipShape::WideRectangle=>(1.5,0.5),
+            _=>(1.0,1.0),
         };
+        let (preset_wide,preset_tall)=match self {
+            Self::Watercolor=>(1.18,1.10),
+            Self::Marker=>(1.28,0.62),
+            Self::Airbrush=>(1.55,1.55),
+            Self::Sketch=>(0.82,0.72),
+            Self::Graphite=>(0.72,0.62),
+            Self::Calligraphy=>(1.20,0.62),
+            Self::SoftSketch=>(0.95,0.82),
+            _=>(1.0,1.0),
+        };
+        let (wide,tall)=(tip_wide*preset_wide,tip_tall*preset_tall);
         let mut ordinal = 0u32;
         visit_pressure_dabs(&stroke.points, stroke.base_width, |dab, [dx, dy]| {
             let pressure = (2.0 * dab.radius / stroke.base_width).clamp(0.0, 1.0);
             let variation = noise(ordinal.wrapping_add(3201));
-            // Bristles follow the hand. Chalk rolls slightly about the center.
-            let (sin, cos) = if matches!(self, Self::Chalk | Self::Charcoal | Self::Pastel | Self::SoftSketch) {
-                ((variation - 0.5) * 0.8).sin_cos()
-            } else {
-                (0.0, 1.0)
+            // Grain brushes rotate slightly from stamp to stamp; marker follows
+            // travel while calligraphy keeps a fixed nib angle.
+            let jitter=match self {
+                Self::Chalk|Self::Charcoal|Self::Pastel=>0.80,
+                Self::Sketch|Self::Graphite|Self::SoftSketch=>0.28,
+                Self::Watercolor=>0.16,
+                _=>0.0,
             };
+            let (sin, cos) = ((variation - 0.5) * jitter).sin_cos();
             let (tx, ty) = if self == Self::Calligraphy {
-                (1.0,0.0) // nib angle is independent of travel direction
+                (1.0,0.0)
             } else {(dx * cos - dy * sin, dx * sin + dy * cos)};
-            let r = dab.radius;
+            let radius_scale=match self {
+                Self::Watercolor=>1.45,
+                Self::Airbrush=>1.55,
+                Self::Graphite=>0.88,
+                _=>1.0,
+            };
+            let r = dab.radius*radius_scale;
+            let flow=match self {
+                Self::Watercolor=>(0.13+0.24*pressure)*(0.82+0.18*variation),
+                Self::Marker=>(0.42+0.24*pressure)*(0.92+0.08*variation),
+                Self::Airbrush=>(0.05+0.16*pressure)*(0.82+0.18*variation),
+                Self::Sketch=>(0.15+0.40*pressure)*(0.72+0.28*variation),
+                Self::Graphite=>(0.08+0.62*pressure.powf(1.45))*(0.72+0.28*variation),
+                Self::Dry=>(0.28+0.54*pressure)*(0.70+0.30*variation),
+                Self::Chalk=>(0.18+0.44*pressure)*(0.68+0.32*variation),
+                Self::Charcoal=>(0.24+0.58*pressure)*(0.70+0.30*variation),
+                Self::Pastel=>(0.20+0.42*pressure)*(0.76+0.24*variation),
+                Self::Calligraphy=>0.90,
+                Self::SoftSketch=>(0.10+0.34*pressure)*(0.74+0.26*variation),
+            };
             emit(Stamp {
                 center: [dab.x, dab.y],
                 along: [tx * r * wide, ty * r * wide],
                 across: [-ty * r * tall, tx * r * tall],
-                flow: if self == Self::Calligraphy { 0.9 }
-                    else { (0.38 + 0.62 * pressure) * (0.72 + 0.28 * variation) },
+                flow,
             });
             ordinal = ordinal.wrapping_add(1);
         });
@@ -271,12 +360,77 @@ fn noise(mut seed: u32) -> f32 {
 mod tests {
     use super::*;
     #[test]
-    fn calligraphy_chisel_and_soft_sketch_are_distinct_real_masks() {
-        let chisel=TextureBrush::Calligraphy.make_mask(BrushTipShape::Round);
-        let pencil=TextureBrush::SoftSketch.make_mask(BrushTipShape::Round);
-        let normal=TextureBrush::Pastel.make_mask(BrushTipShape::Round);
-        assert_ne!(chisel,pencil);
-        assert_ne!(pencil,normal);
-        assert!(chisel.iter().any(|&px|px>0));
+    fn all_textured_brush_families_have_distinct_real_masks() {
+        let variants=[
+            TextureBrush::Watercolor,TextureBrush::Marker,TextureBrush::Airbrush,
+            TextureBrush::Sketch,TextureBrush::Graphite,TextureBrush::Dry,
+            TextureBrush::Chalk,TextureBrush::Charcoal,TextureBrush::Pastel,
+            TextureBrush::Calligraphy,TextureBrush::SoftSketch,
+        ];
+        let masks:Vec<_>=variants.iter()
+            .map(|brush|brush.make_mask(BrushTipShape::Round)).collect();
+        for (i,a) in masks.iter().enumerate() {
+            assert!(a.iter().any(|&px|px>0));
+            for b in masks.iter().skip(i+1) {
+                assert_ne!(a,b,"each brush family must keep a visibly distinct texture");
+            }
+        }
+    }
+
+    #[test]
+    fn graphite_mask_has_paper_tooth_and_lower_density_than_marker() {
+        let graphite=TextureBrush::Graphite.make_mask(BrushTipShape::Round);
+        let marker=TextureBrush::Marker.make_mask(BrushTipShape::Round);
+        let mut graphite_gaps=0usize;
+        let mut marker_gaps=0usize;
+        let mut graphite_sum=0u32;
+        let mut marker_sum=0u32;
+        let mut samples=0u32;
+        for y in 0..SIZE {
+            for x in 0..SIZE {
+                let u=(2.0*x as f32+1.0)/SIZE as f32-1.0;
+                let v=(2.0*y as f32+1.0)/SIZE as f32-1.0;
+                if u*u+v*v<=0.25 {
+                    let index=y*SIZE+x;
+                    graphite_gaps+=usize::from(graphite[index]==0);
+                    marker_gaps+=usize::from(marker[index]==0);
+                    graphite_sum+=u32::from(graphite[index]);
+                    marker_sum+=u32::from(marker[index]);
+                    samples+=1;
+                }
+            }
+        }
+        assert!(graphite_gaps>marker_gaps,
+            "graphite should expose more paper tooth inside the nib");
+        assert!(graphite_sum/samples<marker_sum/samples,
+            "graphite should be lighter than marker in the same central footprint");
+    }
+
+    #[test]
+    fn graphite_pressure_builds_from_light_to_dark() {
+        let stroke=Stroke {
+            points:vec![
+                crate::project::StrokePoint{x:0.0,y:0.0,pressure:0.15},
+                crate::project::StrokePoint{x:80.0,y:0.0,pressure:1.0},
+            ],
+            color:[0,0,0,255],fill_color:None,base_width:10.0,is_vector:false,
+            brush_preset:KritaBrushPreset::GraphitePencil,opacity:0.62,
+            brush_texture_id:None,tip_shape:BrushTipShape::Round,
+        };
+        let mut flows=Vec::new();
+        TextureBrush::Graphite.stamps(&stroke,|stamp|flows.push(stamp.flow));
+        assert!(flows.len()>3);
+        assert!(flows.last().copied().unwrap()>flows.first().copied().unwrap()*1.8,
+            "hard pressure must build visibly darker graphite");
+    }
+
+    #[test]
+    fn new_graphite_preset_routes_through_texture_engine() {
+        let stroke=Stroke {
+            points:Vec::new(),color:[0,0,0,255],fill_color:None,base_width:7.0,
+            is_vector:false,brush_preset:KritaBrushPreset::GraphitePencil,
+            opacity:0.62,brush_texture_id:None,tip_shape:BrushTipShape::Round,
+        };
+        assert_eq!(TextureBrush::for_stroke(&stroke),Some(TextureBrush::Graphite));
     }
 }

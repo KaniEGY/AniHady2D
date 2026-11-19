@@ -9801,6 +9801,17 @@ impl eframe::App for StickApp {
                                     p + egui::vec2(5.0, 5.0)],
                                     egui::Stroke::new(1.2, egui::Color32::from_rgb(240, 202, 75)));
                             }
+                            KritaBrushPreset::GraphitePencil if self.active_tool_ui == ActiveToolUI::Brush => {
+                                let graphite=egui::Color32::from_rgb(176,183,191);
+                                painter.circle_stroke(p,radius,egui::Stroke::new(1.2,graphite));
+                                painter.circle_filled(p,2.0,egui::Color32::from_gray(72));
+                                for offset in [-3.0_f32,3.0] {
+                                    painter.line_segment([
+                                        p+egui::vec2(-4.0,offset),
+                                        p+egui::vec2(4.0,offset*0.4)
+                                    ],egui::Stroke::new(0.8,graphite));
+                                }
+                            }
                             _ => {
                                 painter.circle_stroke(p, radius + 1.0,
                                     egui::Stroke::new(2.0, egui::Color32::WHITE));
