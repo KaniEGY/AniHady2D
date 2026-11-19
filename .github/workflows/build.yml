@@ -47,13 +47,33 @@ jobs:
           STICK_GOOGLE_CLIENT_ID: ${{ vars.STICK_GOOGLE_CLIENT_ID }}
         run: cargo build --release
 
+      - name: Test Optional Remote Bridge
+        run: cargo test --features remote-bridge --bin StickOnlineBridge -- --test-threads=1
+
+      - name: Build Optional Remote Bridge
+        run: cargo build --release --features remote-bridge --bin StickOnlineBridge
+
+      - name: Test Radmin VPN Assistant
+        run: cargo test --features radmin-assistant --bin StickRadminAssistant -- --test-threads=1
+
+      - name: Build Radmin VPN Assistant
+        run: cargo build --release --features radmin-assistant --bin StickRadminAssistant
+
       - name: Package Clean Folder
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path dist
           Copy-Item target/release/Stick.exe dist/Stick.exe
-          $hash = (Get-FileHash dist/Stick.exe -Algorithm SHA256).Hash.ToLowerInvariant()
-          "$hash  Stick.exe" | Set-Content dist/SHA256SUMS.txt -Encoding ascii
+          Copy-Item target/release/StickOnlineBridge.exe dist/StickOnlineBridge.exe
+          Copy-Item target/release/StickRadminAssistant.exe dist/StickRadminAssistant.exe
+          $stickHash = (Get-FileHash dist/Stick.exe -Algorithm SHA256).Hash.ToLowerInvariant()
+          $bridgeHash = (Get-FileHash dist/StickOnlineBridge.exe -Algorithm SHA256).Hash.ToLowerInvariant()
+          $radminHash = (Get-FileHash dist/StickRadminAssistant.exe -Algorithm SHA256).Hash.ToLowerInvariant()
+          @(
+            "$stickHash  Stick.exe"
+            "$bridgeHash  StickOnlineBridge.exe"
+            "$radminHash  StickRadminAssistant.exe"
+          ) | Set-Content dist/SHA256SUMS.txt -Encoding ascii
           "${{ steps.meta.outputs.version }}.${{ github.run_number }}" | Out-File -FilePath dist/version.txt -Encoding ascii -NoNewline
 
       - name: Upload Artifact
@@ -73,5 +93,7 @@ jobs:
           make_latest: true
           files: |
             dist/Stick.exe
+            dist/StickOnlineBridge.exe
+            dist/StickRadminAssistant.exe
             dist/version.txt
             dist/SHA256SUMS.txt

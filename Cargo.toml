@@ -27,6 +27,24 @@ sha2 = "0.10"
 base64 = "0.22"
 getrandom = "0.2"
 keyring = { version = "3.6", default-features = false, features = ["windows-native"] }
+anyhow = { version = "1.0", optional = true }
+tokio = { version = "1.48", features = ["rt-multi-thread", "macros", "net", "io-util", "signal"], optional = true }
+iroh = { version = "1.4.1", optional = true }
+
+[features]
+remote-bridge = ["dep:anyhow", "dep:tokio", "dep:iroh"]
+radmin-assistant = []
+
+[[bin]]
+name = "StickOnlineBridge"
+path = "src/bin/stick_online_bridge.rs"
+required-features = ["remote-bridge"]
+
+[[bin]]
+name = "StickRadminAssistant"
+path = "src/bin/stick_radmin_assistant.rs"
+required-features = ["radmin-assistant"]
+
 
 [build-dependencies]
 winres = "0.1"
