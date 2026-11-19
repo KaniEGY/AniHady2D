@@ -215,8 +215,8 @@ impl TextureBrush {
                 (1.0,0.0)
             } else {(dx * cos - dy * sin, dx * sin + dy * cos)};
             let radius_scale=match self {
-                Self::Watercolor=>1.08,
-                Self::Airbrush=>1.32,
+                Self::Watercolor=>1.45,
+                Self::Airbrush=>1.55,
                 Self::Graphite=>0.88,
                 _=>1.0,
             };
@@ -378,15 +378,50 @@ mod tests {
     }
 
     #[test]
-    fn graphite_mask_is_grainy_and_more_transparent_than_marker() {
+    fn graphite_mask_has_paper_tooth_and_lower_density_than_marker() {
         let graphite=TextureBrush::Graphite.make_mask(BrushTipShape::Round);
         let marker=TextureBrush::Marker.make_mask(BrushTipShape::Round);
-        let graphite_nonzero=graphite.iter().filter(|&&a|a>0).count();
-        let marker_nonzero=marker.iter().filter(|&&a|a>0).count();
-        let graphite_mean=graphite.iter().map(|&a|a as u32).sum::<u32>()/AREA as u32;
-        let marker_mean=marker.iter().map(|&a|a as u32).sum::<u32>()/AREA as u32;
-        assert!(graphite_nonzero<marker_nonzero);
-        assert!(graphite_mean<marker_mean);
+        let mut graphite_gaps=0usize;
+        let mut marker_gaps=0usize;
+        let mut graphite_sum=0u32;
+        let mut marker_sum=0u32;
+        let mut samples=0u32;
+        for y in 0..SIZE {
+            for x in 0..SIZE {
+                let u=(2.0*x as f32+1.0)/SIZE as f32-1.0;
+                let v=(2.0*y as f32+1.0)/SIZE as f32-1.0;
+                if u*u+v*v<=0.25 {
+                    let index=y*SIZE+x;
+                    graphite_gaps+=usize::from(graphite[index]==0);
+                    marker_gaps+=usize::from(marker[index]==0);
+                    graphite_sum+=u32::from(graphite[index]);
+                    marker_sum+=u32::from(marker[index]);
+                    samples+=1;
+                }
+            }
+        }
+        assert!(graphite_gaps>marker_gaps,
+            "graphite should expose more paper tooth inside the nib");
+        assert!(graphite_sum/samples<marker_sum/samples,
+            "graphite should be lighter than marker in the same central footprint");
+    }
+
+    #[test]
+    fn graphite_pressure_builds_from_light_to_dark() {
+        let stroke=Stroke {
+            points:vec![
+                crate::project::StrokePoint{x:0.0,y:0.0,pressure:0.15},
+                crate::project::StrokePoint{x:80.0,y:0.0,pressure:1.0},
+            ],
+            color:[0,0,0,255],fill_color:None,base_width:10.0,is_vector:false,
+            brush_preset:KritaBrushPreset::GraphitePencil,opacity:0.62,
+            brush_texture_id:None,tip_shape:BrushTipShape::Round,
+        };
+        let mut flows=Vec::new();
+        TextureBrush::Graphite.stamps(&stroke,|stamp|flows.push(stamp.flow));
+        assert!(flows.len()>3);
+        assert!(flows.last().copied().unwrap()>flows.first().copied().unwrap()*1.8,
+            "hard pressure must build visibly darker graphite");
     }
 
     #[test]
