@@ -3176,6 +3176,8 @@ impl StickApp {
                         let (dx, dy) = (text.x - pivot.x, text.y - pivot.y);
                         text.x = pivot.x + dx * cs - dy * sn;
                         text.y = pivot.y + dx * sn + dy * cs;
+                        text.rotation_deg = (text.rotation_deg + radians.to_degrees())
+                            .rem_euclid(360.0);
                     }
                 }
                 if let Some(index) = self.selected_media_idx {
@@ -5202,7 +5204,7 @@ impl eframe::App for StickApp {
                             text_color[3] = ((text_color[3] as f32)
                                 * self.text_opacity.clamp(0.0, 1.0)).round() as u8;
                             if let Some(l) = self.project.layers.get_mut(self.active_layer_idx) {
-                                l.keyframes.entry(self.current_frame).or_default().text_items.push(TextItem { content: self.text_input_buf.clone(), x: self.pending_text_pos.x, y: self.pending_text_pos.y, font_size: self.text_font_size, color: text_color });
+                                l.keyframes.entry(self.current_frame).or_default().text_items.push(TextItem { content: self.text_input_buf.clone(), x: self.pending_text_pos.x, y: self.pending_text_pos.y, font_size: self.text_font_size, color: text_color, rotation_deg: 0.0 });
                                 self.has_unsaved_changes = true;
                             }
                         }
@@ -8810,7 +8812,7 @@ impl eframe::App for StickApp {
                                     let frame = self.project.evaluate_layer_at_frame(layer, self.current_frame);
                                     self.selected_text_item_index = frame.text_items.iter()
                                         .enumerate().rev()
-                                        .find(|(_, text)| selection_tools::text_bounds(text).contains(stage_pos))
+                                        .find(|(_, text)| selection_tools::text_hit_test(text,stage_pos))
                                         .map(|(index, _)| index);
                                     if self.selected_text_item_index.is_none() {
                                         self.selected_media_idx = frame.media_items.iter().enumerate().rev()
@@ -9129,7 +9131,7 @@ impl eframe::App for StickApp {
                         );
                         let text_shape = egui::epaint::TextShape::new(
                             to_screen(egui::pos2(txt.x, txt.y)), galley, tint,
-                        ).with_angle(self.canvas_rotation_deg.to_radians());
+                        ).with_angle((self.canvas_rotation_deg + txt.rotation_deg).to_radians());
                         paper_painter.add(egui::Shape::Text(text_shape));
                     }
                     // Symbol instances are real visible artwork. Export paints
@@ -9187,11 +9189,10 @@ impl eframe::App for StickApp {
                 if let Some(layer) = self.project.layers.get(self.active_layer_idx) {
                     let frame = self.project.evaluate_layer_at_frame(layer, self.current_frame);
                     if let Some(txt) = frame.text_items.get(idx) {
-                        let bounds = selection_tools::text_bounds(txt);
-                        painter.add(egui::Shape::closed_line(vec![
-                            to_screen(bounds.left_top()),to_screen(bounds.right_top()),
-                            to_screen(bounds.right_bottom()),to_screen(bounds.left_bottom())
-                        ],egui::Stroke::new(1.4,egui::Color32::from_rgb(45,170,255))));
+                        let corners=selection_tools::text_corners(txt);
+                        painter.add(egui::Shape::closed_line(
+                            corners.into_iter().map(&to_screen).collect(),
+                            egui::Stroke::new(1.4,egui::Color32::from_rgb(45,170,255))));
                     }
                 }
             }
