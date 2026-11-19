@@ -178,13 +178,15 @@ pub fn clip_frame_source(
     explicit_keyframe: bool,
     exposure: Option<&FrameData>,
 ) -> ClipFrameSource {
-    if out_of_range || exposure.is_none() {
+    if out_of_range {
         return ClipFrameSource::None;
     }
+    let Some(exposure)=exposure else {
+        return ClipFrameSource::None;
+    };
     if explicit_keyframe {
         return ClipFrameSource::BorrowExposure;
     }
-    let exposure = exposure.expect("checked above");
     if exposure.tween_mode != TweenMode::None || exposure.motion_tween {
         ClipFrameSource::EvaluateTween
     } else {
