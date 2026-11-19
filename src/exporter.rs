@@ -407,6 +407,12 @@ fn draw_skia_stroke(pixmap: &mut Pixmap, s: &crate::project::Stroke, ts: Transfo
                             pb.move_to(x,y);
                             for &(x,y) in path.iter().skip(1) { pb.line_to(x,y); }
                         }
+                    } else if s.brush_preset == crate::project::KritaBrushPreset::GPenInk {
+                        let path=crate::brush_engine::smooth_krita_2d_points(&s.points,width);
+                        if let Some(first)=path.first() {
+                            pb.move_to(first.x,first.y);
+                            for p in path.iter().skip(1) {pb.line_to(p.x,p.y);}
+                        }
                     } else if s.brush_preset == crate::project::KritaBrushPreset::SmoothInk {
                         let path = crate::brush_engine::smooth_ink_points(&s.points, width);
                         if let Some(first) = path.first() {
