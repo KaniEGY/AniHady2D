@@ -95,7 +95,7 @@ mod tests {
             pos,
             button:egui::PointerButton::Primary,
             pressed,
-            modifiers:egui::Modifiers::NONE,
+            modifiers:egui::Modifiers::default(),
         }
     }
 
