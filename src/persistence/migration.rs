@@ -204,6 +204,8 @@ fn convert_legacy_v1(leg: LegacyProjectV1, label: &str) -> Result<(AniProject, M
             is_guide: false,
             xp_first_paint_rewarded: false,
             opacity: 1.0,
+
+            effect: LayerEffectPreset::None,
             keyframes: kf_map,
         });
     }
@@ -257,6 +259,8 @@ fn migrate_step_by_step(mut proj: AniProject, from_schema: u32) -> Result<AniPro
                         is_guide: false,
                         xp_first_paint_rewarded: false,
                         opacity: 1.0,
+
+                        effect: LayerEffectPreset::None,
                         keyframes: kf,
                     });
                 }
