@@ -400,6 +400,34 @@ pub struct SymbolInstance {
     pub anchor_offset_y: f32,
 }
 
+impl SymbolInstance {
+    /// Map a symbol-local point into stage coordinates using the same transform
+    /// order as raster/video export: pivot -> scale -> rotate -> translate.
+    /// Invalid numeric values are sanitized so a corrupt instance cannot poison
+    /// the editor/timeline painter with NaN coordinates.
+    pub fn transform_point(&self, x: f32, y: f32) -> (f32, f32) {
+        let finite_or = |value: f32, fallback: f32| {
+            if value.is_finite() { value } else { fallback }
+        };
+        let x = finite_or(x, 0.0);
+        let y = finite_or(y, 0.0);
+        let anchor_x = finite_or(self.anchor_offset_x, 0.0);
+        let anchor_y = finite_or(self.anchor_offset_y, 0.0);
+        let scale = finite_or(self.scale, 1.0);
+        let rotation = finite_or(self.rotation_deg, 0.0).to_radians();
+        let translate_x = finite_or(self.x, 0.0);
+        let translate_y = finite_or(self.y, 0.0);
+
+        let local_x = (x - anchor_x) * scale;
+        let local_y = (y - anchor_y) * scale;
+        let (sin_r, cos_r) = rotation.sin_cos();
+        (
+            local_x * cos_r - local_y * sin_r + translate_x + anchor_x,
+            local_x * sin_r + local_y * cos_r + translate_y + anchor_y,
+        )
+    }
+}
+
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum FrameMarkerKind {
     /// Existing projects and ordinary authored keyframes keep the legacy marker.
@@ -1015,6 +1043,37 @@ mod brush_tip_compat_tests {
         let restored: FrameData = serde_json::from_str(&json).unwrap();
         assert_eq!(restored.timeline_marker, FrameMarkerKind::CopiedPose);
     }
+    #[test]
+    fn symbol_instance_transform_matches_export_transform_order() {
+        let instance = SymbolInstance {
+            symbol_name: "bird".into(),
+            x: 10.0,
+            y: 20.0,
+            scale: 2.0,
+            rotation_deg: 90.0,
+            anchor_offset_x: 1.0,
+            anchor_offset_y: 1.0,
+        };
+        let (x, y) = instance.transform_point(2.0, 1.0);
+        assert!((x - 11.0).abs() < 0.001, "x={x}");
+        assert!((y - 23.0).abs() < 0.001, "y={y}");
+    }
+
+    #[test]
+    fn symbol_instance_transform_sanitizes_non_finite_values() {
+        let instance = SymbolInstance {
+            symbol_name: "bad".into(),
+            x: f32::NAN,
+            y: 0.0,
+            scale: f32::INFINITY,
+            rotation_deg: f32::NAN,
+            anchor_offset_x: 0.0,
+            anchor_offset_y: 0.0,
+        };
+        let point = instance.transform_point(f32::NAN, 5.0);
+        assert!(point.0.is_finite() && point.1.is_finite());
+    }
+
     #[test]
     fn old_media_and_audio_load_without_new_transform_fields() {
         let old_media: MediaItem = serde_json::from_str(
