@@ -1694,8 +1694,10 @@ struct StickApp {
     video_drag_origin: Option<(usize,usize)>,
     video_drag_pointer_x: Option<f32>,
     video_drag_undo_captured: bool,
+    image_drag_origin: Option<(usize,usize,usize,u8)>,
+    image_drag_pointer_x: Option<f32>,
+    image_drag_undo_captured: bool,
     right_panel_tab: u8,
-    vector_node_quick_edit: bool,
     timeline_scrub_active: bool,
     active_tool_ui: ActiveToolUI,
     active_krita_brush: KritaBrushPreset,
@@ -1889,8 +1891,10 @@ impl StickApp {
             video_drag_origin: None,
             video_drag_pointer_x: None,
             video_drag_undo_captured: false,
+            image_drag_origin: None,
+            image_drag_pointer_x: None,
+            image_drag_undo_captured: false,
             right_panel_tab: 0,
-            vector_node_quick_edit: false,
             timeline_scrub_active: false,
             active_tool_ui: ActiveToolUI::Brush,
             active_krita_brush: KritaBrushPreset::GPenInk,
@@ -3378,6 +3382,35 @@ impl StickApp {
             layer.keyframes.insert(end+1,blank);
         }
         true
+    }
+
+    fn set_image_layer_start(layer:&mut Layer,new_start:usize,timeline_length:usize)->bool {
+        let Some((start,end))=Self::image_layer_range(layer,timeline_length) else{return false};
+        let next=new_start.clamp(1,end.max(1));
+        if next==start{return false;}
+        let Some(source_key)=layer.keyframes.iter()
+            .filter(|(_,data)|data.media_items.iter().any(|m|m.media_type==MediaType::Image))
+            .map(|(&frame,_)|frame).min() else{return false};
+        let Some(data)=layer.keyframes.remove(&source_key) else{return false};
+        layer.keyframes.insert(next,data);
+        true
+    }
+
+    fn move_image_layer(
+        layer:&mut Layer,requested_start:usize,timeline_length:usize,max_frames:usize,
+    )->Option<usize> {
+        let (start,end)=Self::image_layer_range(layer,timeline_length)?;
+        let duration=end.saturating_sub(start);
+        if duration>=max_frames||max_frames==0{return None;}
+        let next_start=requested_start.clamp(1,max_frames-duration);
+        if next_start==start{return Some(end);}
+        let delta=next_start as i64-start as i64;
+        let moved:HashMap<usize,FrameData>=std::mem::take(&mut layer.keyframes)
+            .into_iter()
+            .map(|(frame,data)|(((frame as i64)+delta).max(1) as usize,data))
+            .collect();
+        layer.keyframes=moved;
+        Some(next_start+duration)
     }
 
     fn move_video_layer(layer: &mut Layer, requested_start: usize, max_frames: usize) -> bool {
@@ -7197,6 +7230,9 @@ impl eframe::App for StickApp {
         let mut video_move_request: Option<(usize, usize)> = None;
         let mut video_drag_started = false;
         let mut video_clip_action: Option<(usize,bool)> = None;
+        let mut image_move_request: Option<(usize,usize)> = None;
+        let mut image_trim_request: Option<(usize,usize,usize)> = None;
+        let mut image_drag_started=false;
         let mut timeline_seek = None;
         if !pointer_down {
             self.audio_drag_origin=None;
@@ -7205,6 +7241,9 @@ impl eframe::App for StickApp {
             self.video_drag_origin=None;
             self.video_drag_pointer_x=None;
             self.video_drag_undo_captured=false;
+            self.image_drag_origin=None;
+            self.image_drag_pointer_x=None;
+            self.image_drag_undo_captured=false;
             self.timeline_scrub_active=false;
         }
         let mut timeline_visibility_toggle: Option<usize> = None;
