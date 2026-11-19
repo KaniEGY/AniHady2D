@@ -4381,7 +4381,7 @@ impl StickApp {
             return;
         }
         match self.active_tool_ui {
-            ActiveToolUI::SelectNormal | ActiveToolUI::SelectLasso | ActiveToolUI::FreeTransform | ActiveToolUI::VectorDirectSelect => {
+            ActiveToolUI::SelectNormal | ActiveToolUI::SelectLasso | ActiveToolUI::FreeTransform => {
                 ui.strong(tr(lang, "Transform", "خصائص التحويل"));
                 if self.active_tool_ui == ActiveToolUI::FreeTransform {
                     ui.small(tr(lang,
@@ -4394,6 +4394,17 @@ impl StickApp {
                     if ui.button(" ↻ 15° ").clicked() { self.save_undo_state(); self.transform_selected_items(1.0, 15.0, false, false); }
                     if ui.button(" ↺ 15° ").clicked() { self.save_undo_state(); self.transform_selected_items(1.0, -15.0, false, false); }
                 });
+            }
+            ActiveToolUI::VectorDirectSelect => {
+                ui.strong(tr(lang,"Vector Nodes","نقاط الفيكتور"));
+                let mut density=vector_density_from_tolerance(self.vector_tolerance);
+                if ui.add(egui::Slider::new(&mut density,10.0..=100.0)
+                    .suffix("%").text(tr(lang,"Node density","نسبة النقاط"))).changed() {
+                    self.vector_tolerance=vector_tolerance_from_density(density);
+                }
+                ui.small(tr(lang,
+                    "Left-click and drag nodes. Right-click a node to delete it; right-click a selected segment to insert one.",
+                    "اسحب النقط بالكلك الشمال. كلك يمين على نقطة يحذفها، وعلى جزء من الخط المحدد يضيف نقطة."));
             }
             ActiveToolUI::Sculpt => {
                 ui.strong(tr(lang,"Sculpt / Finger (J)","النحت / الصباع (J)"));
