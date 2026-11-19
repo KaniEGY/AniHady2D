@@ -1222,6 +1222,19 @@ fn draw_symmetry_icon(
                 c+egui::vec2(-7.0,3.0),c+egui::vec2(-3.0,8.0),c+egui::vec2(5.0,5.0)
             ],shape));
         }
+        SymmetryMode::Quad => {
+            let size=7.0;
+            for offset in [
+                egui::vec2(-4.5,-4.5),egui::vec2(4.5,-4.5),
+                egui::vec2(-4.5,4.5),egui::vec2(4.5,4.5)
+            ] {
+                painter.rect_stroke(
+                    egui::Rect::from_center_size(c+offset,egui::vec2(size,size)),
+                    1.0,shape);
+            }
+            painter.line_segment([c+egui::vec2(0.0,-11.0),c+egui::vec2(0.0,11.0)],axis);
+            painter.line_segment([c+egui::vec2(-11.0,0.0),c+egui::vec2(11.0,0.0)],axis);
+        }
     }
 }
 
@@ -6722,6 +6735,7 @@ impl eframe::App for StickApp {
                     (SymmetryMode::Off, "Symmetry off", "إيقاف التماثل"),
                     (SymmetryMode::Horizontal, "Mirror left / right", "تماثل يمين / شمال"),
                     (SymmetryMode::Vertical, "Mirror top / bottom", "تماثل فوق / تحت"),
+                    (SymmetryMode::Quad, "Four-way quadrant symmetry", "تماثل الأربع مربعات"),
                 ] {
                     let active = self.symmetry_mode == mode;
                     let (rect, response) = ui.allocate_exact_size(
@@ -8140,6 +8154,14 @@ impl eframe::App for StickApp {
                             guide,
                         );
                     }
+                    SymmetryMode::Quad => {
+                        painter.line_segment(
+                            [to_screen(egui::pos2(stage_w * 0.5, 0.0)),
+                             to_screen(egui::pos2(stage_w * 0.5, stage_h))],guide);
+                        painter.line_segment(
+                            [to_screen(egui::pos2(0.0, stage_h * 0.5)),
+                             to_screen(egui::pos2(stage_w, stage_h * 0.5))],guide);
+                    }
                     SymmetryMode::Off => {}
                 }
             }
@@ -8282,9 +8304,24 @@ impl eframe::App for StickApp {
                                     egui::pos2(self.project.width as f32-stage_pos.x,stage_pos.y)),
                                 SymmetryMode::Vertical => seeds.push(
                                     egui::pos2(stage_pos.x,self.project.height as f32-stage_pos.y)),
+                                SymmetryMode::Quad => {
+                                    let x=self.project.width as f32-stage_pos.x;
+                                    let y=self.project.height as f32-stage_pos.y;
+                                    seeds.extend([
+                                        egui::pos2(x,stage_pos.y),
+                                        egui::pos2(stage_pos.x,y),
+                                        egui::pos2(x,y),
+                                    ]);
+                                }
                                 SymmetryMode::Off => {}
                             }
-                            if seeds.len()>1 && seeds[0].distance(seeds[1])<0.5 {seeds.truncate(1);}
+                            let mut unique=Vec::with_capacity(seeds.len());
+                            for seed in seeds {
+                                if unique.iter().all(|p:&egui::Pos2|p.distance(seed)>=0.5) {
+                                    unique.push(seed);
+                                }
+                            }
+                            let seeds=unique;
                             let mut solutions=Vec::new();
                             for seed in seeds {
                                 let fallback=fill_tools::flood_fill_polygon_with_options(
