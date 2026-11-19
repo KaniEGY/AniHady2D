@@ -7614,6 +7614,11 @@ impl eframe::App for StickApp {
                                         frame_menu_action = Some((l_idx, f, timeline_ops::FrameAction::Copy));
                                         ui.close_menu();
                                     }
+                                    if ui.add_enabled(!is_locked,
+                                        egui::Button::new(tr(lang,"Cut Frame","قص الفريم"))).clicked() {
+                                        frame_menu_action=Some((l_idx,f,timeline_ops::FrameAction::Cut));
+                                        ui.close_menu();
+                                    }
                                     if ui.add_enabled(!is_locked && self.clipboard_frame.is_some(),
                                         egui::Button::new(tr(lang, "Paste over cel", "الصق مكان الخلية"))).clicked() {
                                         frame_menu_action = Some((l_idx, f, timeline_ops::FrameAction::Paste));
@@ -7639,11 +7644,6 @@ impl eframe::App for StickApp {
                                     if ui.add_enabled(!is_locked, egui::Button::new(
                                         tr(lang, "Blank Keyframe", "كي فريم فاضي"))).clicked() {
                                         frame_menu_action = Some((l_idx, f, timeline_ops::FrameAction::BlankKeyframe));
-                                        ui.close_menu();
-                                    }
-                                    if ui.add_enabled(!is_locked, egui::Button::new(
-                                        tr(lang, "Clear Frame", "امسح محتوى الفريم"))).clicked() {
-                                        frame_menu_action = Some((l_idx, f, timeline_ops::FrameAction::Clear));
                                         ui.close_menu();
                                     }
                                     if ui.add_enabled(!is_locked && layer.keyframes.contains_key(&f),
@@ -8089,9 +8089,14 @@ impl eframe::App for StickApp {
         }
         if let Some((layer_index, frame_index, action)) = frame_menu_action {
             match action {
-                timeline_ops::FrameAction::Copy => self.copy_frame(layer_index, frame_index),
-                timeline_ops::FrameAction::Paste => self.paste_frame(layer_index, frame_index),
-                edit => { self.edit_timeline_frame(layer_index, frame_index, edit); }
+                timeline_ops::FrameAction::Copy => self.copy_frame(layer_index,frame_index),
+                timeline_ops::FrameAction::Cut => {
+                    self.copy_frame(layer_index,frame_index);
+                    let _=self.edit_timeline_frame(
+                        layer_index,frame_index,timeline_ops::FrameAction::BlankKeyframe);
+                }
+                timeline_ops::FrameAction::Paste => self.paste_frame(layer_index,frame_index),
+                edit => { self.edit_timeline_frame(layer_index,frame_index,edit); }
             }
         }
 
