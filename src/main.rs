@@ -4036,26 +4036,45 @@ impl StickApp {
     }
 
     fn preload_frame_textures(&mut self, ctx: &egui::Context) {
-        // Only retain textures needed on the *current* frame. Decoded video
-        // frames otherwise accumulate unbounded GPU memory while playing.
-        let mut wanted = std::collections::HashSet::new();
+        // Retain only textures needed on the current frame. Monochrome media
+        // gets a separate cached grayscale texture so the live canvas matches
+        // the exported black-and-white layer effect.
+        let mut wanted=std::collections::HashMap::<String,(String,bool)>::new();
         for layer in &self.project.layers {
-            if !layer.visible { continue; }
-            let Some(fd) = Self::get_effective_frame_data(layer,self.current_frame) else { continue };
-            for media in &fd.media_items { wanted.insert(media.path.clone()); }
+            if !layer.visible {continue;}
+            let Some(fd)=Self::get_effective_frame_data(layer,self.current_frame) else {continue};
+            for media in &fd.media_items {
+                if layer.effect==LayerEffectPreset::Monochrome {
+                    let key=format!("{}#stick_monochrome",media.path);
+                    wanted.insert(key,(media.path.clone(),true));
+                } else {
+                    wanted.insert(media.path.clone(),(media.path.clone(),false));
+                }
+            }
         }
-        self.texture_cache.retain(|path,_| wanted.contains(path));
-        for path in wanted {
-            if self.texture_cache.contains_key(&path) { continue; }
-            if let Ok(img) = image::open(&path) {
-                let reduced = if img.width() > 2048 || img.height() > 2048 {
+        self.texture_cache.retain(|key,_|wanted.contains_key(key));
+        for (key,(path,monochrome)) in wanted {
+            if self.texture_cache.contains_key(&key) {continue;}
+            if let Ok(img)=image::open(&path) {
+                let reduced=if img.width()>2048||img.height()>2048 {
                     img.thumbnail(2048,2048)
-                } else { img };
-                let rgba = reduced.to_rgba8();
-                let ci = egui::ColorImage::from_rgba_unmultiplied(
+                } else {img};
+                let mut rgba=reduced.to_rgba8();
+                if monochrome {
+                    for pixel in rgba.pixels_mut() {
+                        let gray=(pixel.0[0] as f32*0.2126
+                            +pixel.0[1] as f32*0.7152
+                            +pixel.0[2] as f32*0.0722)
+                            .round().clamp(0.0,255.0) as u8;
+                        pixel.0[0]=gray;
+                        pixel.0[1]=gray;
+                        pixel.0[2]=gray;
+                    }
+                }
+                let ci=egui::ColorImage::from_rgba_unmultiplied(
                     [rgba.width() as usize,rgba.height() as usize],rgba.as_raw());
-                self.texture_cache.insert(path.clone(),
-                    ctx.load_texture(&path,ci,egui::TextureOptions::LINEAR));
+                self.texture_cache.insert(key.clone(),
+                    ctx.load_texture(&key,ci,egui::TextureOptions::LINEAR));
             }
         }
     }
@@ -9390,7 +9409,10 @@ impl eframe::App for StickApp {
                     let fd = self.project.evaluate_layer_at_frame(layer, self.current_frame);
                     for (media_index,m) in fd.media_items.iter().enumerate() {
                         let corners=media_transform::corners(m);
-                        if let Some(tex) = self.texture_cache.get(&m.path) {
+                        let texture_key=if layer.effect==LayerEffectPreset::Monochrome {
+                            format!("{}#stick_monochrome",m.path)
+                        } else {m.path.clone()};
+                        if let Some(tex) = self.texture_cache.get(&texture_key) {
                             let mut mesh = egui::Mesh::with_texture(tex.id());
                             let effect_white=layer.effect.apply_rgba([255,255,255,255]);
                             let tint=egui::Color32::from_rgba_unmultiplied(
