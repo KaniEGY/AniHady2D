@@ -4198,6 +4198,36 @@ impl StickApp {
                             item.rotation_deg=0.0; item.flip_h=false; item.flip_v=false;
                         }
                     });
+                    ui.separator();
+                    ui.label(tr(lang,"Opacity presets","فلاتر الشفافية"));
+                    let current_layer_opacity=self.project.layers.get(self.active_layer_idx)
+                        .map(|layer|layer.opacity).unwrap_or(1.0);
+                    ui.horizontal_wrapped(|ui| {
+                        for (label,value) in [
+                            ("100%",1.0f32),("75%",0.75),("50%",0.50),
+                            ("25%",0.25),("10%",0.10)
+                        ] {
+                            let selected=(current_layer_opacity-value).abs()<0.005;
+                            if ui.selectable_label(selected,label).clicked()
+                                && !self.is_active_layer_locked() {
+                                self.save_undo_state();
+                                if let Some(layer)=self.project.layers.get_mut(self.active_layer_idx) {
+                                    layer.opacity=value;
+                                    self.has_unsaved_changes=true;
+                                }
+                            }
+                        }
+                    });
+                    let mut media_opacity=current_layer_opacity;
+                    if ui.add(egui::Slider::new(&mut media_opacity,0.0..=1.0)
+                        .text(tr(lang,"Media opacity","شفافية الصورة/الفيديو"))).changed()
+                        && !self.is_active_layer_locked() {
+                        if let Some(layer)=self.project.layers.get_mut(self.active_layer_idx) {
+                            layer.opacity=media_opacity;
+                            self.has_unsaved_changes=true;
+                        }
+                    }
+
                     if item != previous && !self.is_active_layer_locked() {
                         self.save_undo_state();
                         self.ensure_editable_keyframe();
@@ -7070,14 +7100,19 @@ impl eframe::App for StickApp {
                             self.layer_rename_index = None;
                         }
                         if ui.button(tr(lang, "Rename", "غيّر الاسم")).clicked() {
-                            let new_name = self.layer_rename_buffer.trim().to_owned();
-                            if !new_name.is_empty() && new_name.chars().count() <= 80 {
+                            let new_name=self.layer_rename_buffer.trim().to_owned();
+                            if !new_name.is_empty() && new_name.chars().count()<=80 {
                                 self.save_undo_state();
-                                if let Some(layer) = self.project.layers.get_mut(idx) {
-                                    layer.name = new_name;
-                                    self.has_unsaved_changes = true;
+                                match layer_ops::rename_layer(&mut self.project,idx,&new_name) {
+                                    Ok(()) => {
+                                        self.has_unsaved_changes=true;
+                                        self.layer_rename_index=None;
+                                    }
+                                    Err(reason) => {
+                                        self.undo_stack.pop();
+                                        self.status_message=reason.to_string();
+                                    }
                                 }
-                                self.layer_rename_index = None;
                             }
                         }
                     });
