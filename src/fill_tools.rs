@@ -17,6 +17,105 @@ fn distance_sq_to_segment(x: f32, y: f32, a: &StrokePoint, b: &StrokePoint) -> f
     dx * dx + dy * dy
 }
 
+const FILL_RING_BREAK_PRESSURE: f32 = -1000.0;
+
+pub fn split_fill_rings(points: &[StrokePoint]) -> Vec<&[StrokePoint]> {
+    let mut rings=Vec::new();
+    let mut start=0usize;
+    for (index,point) in points.iter().enumerate() {
+        if point.pressure<=FILL_RING_BREAK_PRESSURE {
+            if index>start {rings.push(&points[start..index]);}
+            start=index+1;
+        }
+    }
+    if start<points.len() {rings.push(&points[start..]);}
+    rings.into_iter().filter(|ring|ring.len()>=3).collect()
+}
+
+fn raw_ring_contains(points:&[StrokePoint],x:f32,y:f32)->bool {
+    if points.len()<3 {return false;}
+    let mut inside=false;
+    let mut prev=&points[points.len()-1];
+    for point in points {
+        if (point.y>y)!=(prev.y>y) {
+            let dy=prev.y-point.y;
+            if dy.abs()>0.000001 {
+                let crossing_x=(prev.x-point.x)*(y-point.y)/dy+point.x;
+                if x<crossing_x {inside=!inside;}
+            }
+        }
+        prev=point;
+    }
+    inside
+}
+
+fn ring_area(points:&[StrokePoint])->f32 {
+    if points.len()<3 {return 0.0;}
+    let mut area=0.0;
+    for i in 0..points.len() {
+        let a=&points[i];
+        let b=&points[(i+1)%points.len()];
+        area+=a.x*b.y-b.x*a.y;
+    }
+    area.abs()*0.5
+}
+
+fn closed_outline(stroke:&Stroke)->Option<&[StrokePoint]> {
+    let points=&stroke.points;
+    if points.len()<4 || points.iter().any(|p|!p.x.is_finite()||!p.y.is_finite()) {
+        return None;
+    }
+    let first=&points[0];
+    let last=&points[points.len()-1];
+    let tolerance=(stroke.base_width.abs()*2.5).clamp(8.0,30.0);
+    ((first.x-last.x).hypot(first.y-last.y)<=tolerance).then_some(points)
+}
+
+/// Preserve immediate closed contours inside the solved Bucket region as real
+/// holes. This keeps a circle inside another circle independently paintable:
+/// filling the outer annulus no longer paints through the inner contour.
+pub fn preserve_nested_holes(
+    mut outer: Vec<StrokePoint>, strokes:&[Stroke], seed:(f32,f32),
+)->Vec<StrokePoint> {
+    if outer.len()<4 {return outer;}
+    let mut candidates:Vec<(Vec<StrokePoint>,f32,(f32,f32))>=Vec::new();
+    for stroke in strokes {
+        if stroke.color[3]==0 {continue;}
+        let Some(ring)=closed_outline(stroke) else {continue};
+        if contour_contains(stroke,seed.0,seed.1) {continue;}
+        let unique=if ring.len()>1
+            && (ring[0].x-ring[ring.len()-1].x).hypot(ring[0].y-ring[ring.len()-1].y)<=0.001 {
+            &ring[..ring.len()-1]
+        } else {ring};
+        if unique.len()<3 {continue;}
+        let center=(
+            unique.iter().map(|p|p.x).sum::<f32>()/unique.len() as f32,
+            unique.iter().map(|p|p.y).sum::<f32>()/unique.len() as f32,
+        );
+        if !raw_ring_contains(&outer,center.0,center.1) {continue;}
+        let area=ring_area(unique);
+        if area>4.0 {candidates.push((ring.to_vec(),area,center));}
+    }
+    let mut keep=vec![true;candidates.len()];
+    for i in 0..candidates.len() {
+        for j in 0..candidates.len() {
+            if i==j || candidates[j].1<=candidates[i].1 {continue;}
+            let center=candidates[i].2;
+            if raw_ring_contains(&candidates[j].0,center.0,center.1) {
+                keep[i]=false;
+                break;
+            }
+        }
+    }
+    for (index,(ring,_,_)) in candidates.into_iter().enumerate() {
+        if !keep[index] {continue;}
+        let anchor=&ring[0];
+        outer.push(StrokePoint{x:anchor.x,y:anchor.y,pressure:FILL_RING_BREAK_PRESSURE});
+        outer.extend(ring);
+    }
+    outer
+}
+
 pub fn contour_contains(stroke: &Stroke, x: f32, y: f32) -> bool {
     // Support both closed vector contours and clearly closed freehand
     // brush paths. Open brush lines must never fill.
@@ -26,6 +125,13 @@ pub fn contour_contains(stroke: &Stroke, x: f32, y: f32) -> bool {
     }
     if points.iter().any(|p| !p.x.is_finite() || !p.y.is_finite()) {
         return false;
+    }
+    if points.iter().any(|p|p.pressure<=FILL_RING_BREAK_PRESSURE) {
+        let mut inside=false;
+        for ring in split_fill_rings(points) {
+            if raw_ring_contains(ring,x,y) {inside=!inside;}
+        }
+        return inside;
     }
     let first = &points[0];
     let last = &points[points.len() - 1];
@@ -737,6 +843,29 @@ mod tests {
         assert!(contour_contains(&fill,55.,65.));
         assert!(!contour_contains(&fill,120.,65.),
             "fill must stay on the canvas-edge-bounded side");
+    }
+
+    #[test]
+    fn nested_circle_outer_fill_keeps_inner_circle_independent() {
+        let circle=|cx:f32,cy:f32,r:f32| -> Stroke {
+            let points:Vec<_>=(0..=64).map(|i| {
+                let a=i as f32*std::f32::consts::TAU/64.0;
+                StrokePoint{x:cx+r*a.cos(),y:cy+r*a.sin(),pressure:1.0}
+            }).collect();
+            Stroke {
+                points,color:[0,0,0,255],fill_color:None,base_width:4.0,is_vector:true,
+                brush_preset:KritaBrushPreset::GPenInk,opacity:1.0,
+                brush_texture_id:None,tip_shape:crate::project::BrushTipShape::Round,
+            }
+        };
+        let outlines=vec![circle(100.,100.,80.),circle(100.,100.,30.)];
+        let outer=flood_fill_polygon(&outlines,(150.,100.),(220.,220.),1.5).unwrap();
+        let encoded=preserve_nested_holes(outer,&outlines,(150.,100.));
+        assert!(split_fill_rings(&encoded).len()>=2);
+        let fill=polygon_fill_stroke(encoded,[220,80,20,255]);
+        assert!(contour_contains(&fill,150.,100.));
+        assert!(!contour_contains(&fill,100.,100.),
+            "inner circle must remain a separate unfilled region");
     }
 
     #[test]
