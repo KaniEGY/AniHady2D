@@ -5275,10 +5275,6 @@ impl eframe::App for StickApp {
                         ui.small(tr(lang,
                             "The intro uses separate system boot and dismiss sounds plus one of 100 rotating System words.",
                             "النافذة لها صوت ظهور واختفاء مختلفين، وبتعرض كلمة مميزة من 100 كلمة كل مرة."));
-                        if ui.checkbox(&mut self.config.show_grid,
-                            tr(lang, "Show Grid", "إظهار شبكة الرسم")).changed() {
-                            self.config.save();
-                        }
                         let mut appearance_changed = false;
                         egui::CollapsingHeader::new(tr(lang, "Canvas Appearance", "مظهر الكانفا"))
                             .default_open(true).show(ui, |ui| {
@@ -7137,8 +7133,13 @@ impl eframe::App for StickApp {
                 if handle.dragged() {
                     let delta = ui.input(|i| i.pointer.delta().y);
                     if delta.abs() > 0.1 {
+                        let old_height=self.config.timeline_dock_height;
                         self.config.timeline_dock_height =
                             (self.config.timeline_dock_height - delta).clamp(140.0,available);
+                        let applied=self.config.timeline_dock_height-old_height;
+                        // The CentralPanel loses/gains this height, moving its
+                        // center by half. Compensate pan so the paper stays put.
+                        self.pan_offset.y += applied*0.5;
                         self.config.save();
                     }
                 }
@@ -7187,6 +7188,33 @@ impl eframe::App for StickApp {
                     {
                         self.has_unsaved_changes = true;
                     }
+                    ui.separator();
+                    ui.group(|ui|{
+                        ui.horizontal(|ui|{
+                            ui.label("FPS");
+                            let fps_response=ui.add_enabled(
+                                !self.config.timeline_fps_locked,
+                                egui::DragValue::new(&mut self.project.fps)
+                                    .range(1..=120).speed(1.0));
+                            if fps_response.changed() {
+                                self.has_unsaved_changes=true;
+                                if self.is_playing {
+                                    self.stop_audio_playback();
+                                    self.is_playing=false;
+                                }
+                            }
+                            let lock_icon=if self.config.timeline_fps_locked {"🔒"} else {"🔓"};
+                            if ui.small_button(lock_icon)
+                                .on_hover_text(if self.config.timeline_fps_locked {
+                                    tr(lang,"Unlock FPS editing","افتح تعديل الفريمات في الثانية")
+                                } else {
+                                    tr(lang,"Lock FPS editing","اقفل تعديل الفريمات في الثانية")
+                                }).clicked() {
+                                self.config.timeline_fps_locked=!self.config.timeline_fps_locked;
+                                self.config.save();
+                            }
+                        });
+                    });
                 });
                 if self.loop_enabled {
                     ui.horizontal(|ui| {
@@ -7229,12 +7257,17 @@ impl eframe::App for StickApp {
                 });
                 let modern = self.config.timeline_style != 0;
                 let advanced = self.config.timeline_style == 2;
-                let cell_w = if modern {
+                let clip_style = self.config.timeline_style == 3;
+                let cell_w = if clip_style {
+                    self.config.timeline_new_cell_width.clamp(64.0, 140.0)
+                } else if modern {
                     self.config.timeline_new_cell_width.clamp(28.0, 110.0)
                 } else { self.timeline_cell_width };
                 let label_w = if modern { 218.0 } else { 198.0 };
                 let header_h = if modern { 39.0 } else { 30.0 };
-                let row_h = if modern {
+                let row_h = if clip_style {
+                    self.config.timeline_new_row_height.clamp(58.0, 112.0)
+                } else if modern {
                     self.config.timeline_new_row_height.clamp(36.0, 76.0)
                 } else { 34.0 };
                 let cols = self.timeline_length.max(30);
@@ -7807,22 +7840,29 @@ impl eframe::App for StickApp {
                             "NEW Timeline").changed();
                         changed |= ui.selectable_value(&mut self.config.timeline_style, 2,
                             "New mine").changed();
+                        changed |= ui.selectable_value(&mut self.config.timeline_style, 3,
+                            "Clip Timeline").changed();
                     });
                     ui.small(if self.config.timeline_style == 0 {
-                        tr(lang, "Legacy Stick frame grid: unchanged.",
-                            "OLD: نفس شبكة الفريمات الحالية بدون أي تغيير.")
+                        tr(lang, "Legacy Stick frame grid with stable frame-state colors.",
+                            "OLD: شبكة Stick التقليدية مع ألوان حالة الفريم الثابتة.")
                     } else if self.config.timeline_style == 2 {
                         tr(lang,
                             "NEW MINE: multi-select and drag-edit keyframes on independent layer tracks; audio waveform lanes are retained.",
                             "New mine: تحديد ونقل ونسخ مجموعة كي فريمات بين مسارات الليرز، مع الاحتفاظ بموجات الصوت.")
+                    } else if self.config.timeline_style == 3 {
+                        tr(lang,
+                            "CLIP: thumbnail-first cells show the actual drawing in each keyframe; state colors are intentionally hidden.",
+                            "Clip: الفريمات بتعرض معاينة الرسم نفسه، ومن غير نظام ألوان حالة الفريمات.")
                     } else {
                         tr(lang,
-                            "NEW: exposure-sheet tracks, keyframe diamonds and a time ruler. Both layouts edit the same project.",
-                            "NEW: صفوف أوضح، كي فريمات ملوّنة ومسطرة توقيت. الشكلين بيعدلوا نفس المشروع.")
+                            "NEW: exposure-sheet tracks and a time ruler using the same stable frame-state colors.",
+                            "NEW: صفوف أوضح ومسطرة توقيت بنفس ألوان حالة الفريمات الثابتة.")
                     });
                     if self.config.timeline_style != 0 {
+                        let row_range=if self.config.timeline_style==3 {58.0..=112.0} else {36.0..=76.0};
                         changed |= ui.add(egui::Slider::new(
-                            &mut self.config.timeline_new_row_height, 36.0..=76.0)
+                            &mut self.config.timeline_new_row_height, row_range)
                             .text(tr(lang, "Track row height", "ارتفاع صف اللير"))).changed();
                         changed |= ui.checkbox(&mut self.config.timeline_show_timecodes,
                             tr(lang, "Timecode labels", "عرض التوقيت بدل رقم الفريم")).changed();
@@ -7844,6 +7884,12 @@ impl eframe::App for StickApp {
                         self.project.onion_skin.color_before[3] = (prev_alpha * 255.0).round() as u8;
                         self.has_unsaved_changes = true;
                     }
+                    if ui.add(egui::Slider::new(
+                        &mut self.project.onion_skin.fade_before_percent,0.0..=95.0)
+                        .suffix("%").text(tr(lang,
+                            "Fade per extra frame","نقص الشفافية مع كل فريم أبعد"))).changed() {
+                        self.has_unsaved_changes=true;
+                    }
                     ui.label(tr(lang, "Ghost tint", "لون الفريمات القديمة"));
                     if ui.color_edit_button_srgba_unmultiplied(&mut self.project.onion_skin.color_before).changed() {
                         self.has_unsaved_changes = true;
@@ -7857,6 +7903,12 @@ impl eframe::App for StickApp {
                         .text(tr(lang, "Opacity", "الشفافية"))).changed() {
                         self.project.onion_skin.color_after[3] = (next_alpha * 255.0).round() as u8;
                         self.has_unsaved_changes = true;
+                    }
+                    if ui.add(egui::Slider::new(
+                        &mut self.project.onion_skin.fade_after_percent,0.0..=95.0)
+                        .suffix("%").text(tr(lang,
+                            "Fade per extra frame","نقص الشفافية مع كل فريم أبعد"))).changed() {
+                        self.has_unsaved_changes=true;
                     }
                     ui.label(tr(lang, "Ghost tint", "لون الفريمات الجاية"));
                     if ui.color_edit_button_srgba_unmultiplied(&mut self.project.onion_skin.color_after).changed() {
@@ -8413,13 +8465,22 @@ impl eframe::App for StickApp {
                             }
                         }
                         ActiveToolUI::Sculpt if pointer_down => {
-                            if pointer_pressed { self.save_undo_state(); }
-                            if !pointer_pressed && !self.is_active_layer_locked() {
-                                if let Some(previous)=self.last_pointer_pos {
+                            if !self.is_active_layer_locked() {
+                                if pointer_pressed {
+                                    self.save_undo_state();
+                                    self.ensure_editable_keyframe();
+                                    if let Some(layer)=self.project.layers.get_mut(self.active_layer_idx) {
+                                        if let Some(frame)=layer.keyframes.get_mut(&self.current_frame) {
+                                            sculpt_tools::prepare_sculpt(
+                                                &mut frame.strokes,
+                                                (stage_pos.x,stage_pos.y),
+                                                self.sculpt_radius);
+                                        }
+                                    }
+                                } else if let Some(previous)=self.last_pointer_pos {
                                     let previous=to_stage(previous);
                                     let movement=stage_pos-previous;
                                     if movement.length_sq()>0.00001 {
-                                        self.ensure_editable_keyframe();
                                         if let Some(layer)=self.project.layers.get_mut(self.active_layer_idx){
                                             if let Some(frame)=layer.keyframes.get_mut(&self.current_frame){
                                                 if sculpt_tools::sculpt(
@@ -8868,11 +8929,14 @@ impl eframe::App for StickApp {
                     settings.frames_before,
                     settings.frames_after,
                 ) {
-                    let base_tint = match ghost.side {
-                        onion_skin::GhostSide::Previous => settings.color_before,
-                        onion_skin::GhostSide::Next => settings.color_after,
+                    let (base_tint,fade_percent) = match ghost.side {
+                        onion_skin::GhostSide::Previous =>
+                            (settings.color_before,settings.fade_before_percent),
+                        onion_skin::GhostSide::Next =>
+                            (settings.color_after,settings.fade_after_percent),
                     };
-                    let tint = onion_skin::ghost_color(base_tint, ghost.distance);
+                    let tint = onion_skin::ghost_color(
+                        base_tint,ghost.distance,fade_percent);
                     for layer in self.project.layers.iter().rev() {
                         if !layer.visible || layer.is_guide { continue; }
                         let layer_opacity = layer.opacity.clamp(0.0, 1.0);
