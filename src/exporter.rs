@@ -170,13 +170,21 @@ pub fn render_frame_pixmap(project: &AniProject, frame_idx: usize, transparent_b
 
         for m in &fd.media_items {
             if let Ok(img) = image::open(&m.path) {
-                let resized = img
+                let mut resized = img
                     .resize_exact(
                         m.width.max(1.0) as u32,
                         m.height.max(1.0) as u32,
                         image::imageops::FilterType::Triangle,
                     )
                     .to_rgba8();
+                if layer.effect!=crate::project::LayerEffectPreset::None {
+                    let multiplier=layer.effect.rgb_multiplier();
+                    for pixel in resized.pixels_mut() {
+                        pixel.0[0]=(pixel.0[0] as f32*multiplier[0]).round().clamp(0.0,255.0) as u8;
+                        pixel.0[1]=(pixel.0[1] as f32*multiplier[1]).round().clamp(0.0,255.0) as u8;
+                        pixel.0[2]=(pixel.0[2] as f32*multiplier[2]).round().clamp(0.0,255.0) as u8;
+                    }
+                }
                 if let Some(mut sub_pix) = Pixmap::new(resized.width(), resized.height()) {
                     sub_pix.data_mut().copy_from_slice(resized.as_raw());
                     let w = resized.width() as f32;
@@ -200,12 +208,25 @@ pub fn render_frame_pixmap(project: &AniProject, frame_idx: usize, transparent_b
         }
 
         for s in &fd.strokes {
-            draw_skia_stroke(&mut layer_pixmap, s, Transform::identity());
+            if layer.effect==crate::project::LayerEffectPreset::None {
+                draw_skia_stroke(&mut layer_pixmap,s,Transform::identity());
+            } else {
+                let mut effected=s.clone();
+                effected.color=layer.effect.apply_rgba(effected.color);
+                effected.fill_color=effected.fill_color.map(|c|layer.effect.apply_rgba(c));
+                draw_skia_stroke(&mut layer_pixmap,&effected,Transform::identity());
+            }
         }
 
         // Text must be present in every export, not only in the editor preview.
         for item in &fd.text_items {
-            draw_export_text(&mut layer_pixmap, item);
+            if layer.effect==crate::project::LayerEffectPreset::None {
+                draw_export_text(&mut layer_pixmap,item);
+            } else {
+                let mut effected=item.clone();
+                effected.color=layer.effect.apply_rgba(effected.color);
+                draw_export_text(&mut layer_pixmap,&effected);
+            }
         }
 
         for inst in &fd.symbol_instances {
@@ -216,7 +237,14 @@ pub fn render_frame_pixmap(project: &AniProject, frame_idx: usize, transparent_b
                     .post_rotate(inst.rotation_deg)
                     .post_translate(inst.x + inst.anchor_offset_x, inst.y + inst.anchor_offset_y);
                 for s in sym_strokes {
-                    draw_skia_stroke(&mut layer_pixmap, s, ts);
+                    if layer.effect==crate::project::LayerEffectPreset::None {
+                        draw_skia_stroke(&mut layer_pixmap,s,ts);
+                    } else {
+                        let mut effected=s.clone();
+                        effected.color=layer.effect.apply_rgba(effected.color);
+                        effected.fill_color=effected.fill_color.map(|c|layer.effect.apply_rgba(c));
+                        draw_skia_stroke(&mut layer_pixmap,&effected,ts);
+                    }
                 }
             }
         }
