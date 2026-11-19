@@ -1,5 +1,14 @@
 # Stick Studio — Session Handoff / سجل استكمال المشروع
 
+## 19 November 2026 — Clip Timeline thumbnail parity and rendering audit
+- Branch `fix/clip-timeline-thumbnails-audit-20261119` starts from released main `78cc00a47390f62e6398f974b38254ffb40bbcf3` / `v4.1.0.280`.
+- Root cause of intermittent blank Clip cells: the Clip Timeline passed frame data only for explicit keyframes. Held exposures were intentionally replaced by `None`, and tween in-betweens were never evaluated. Clip cells now borrow static visible exposures and evaluate only tween frames that need a real in-between pose, avoiding unnecessary cloning in static holds.
+- Thumbnail rendering now keeps one-point dabs, fills, layer opacity and actual Symbol strokes. Media receives its transformed footprint and text indicators are placed at their real stage positions.
+- Added `SymbolInstance::transform_point` with finite-value sanitization and the same pivot -> scale -> rotate -> translate order used by the exporter.
+- Audit found a second real rendering mismatch: Symbol instances were exported but omitted from the normal canvas; Onion Skin used translation only. Canvas, Onion Skin and Clip Timeline now render Symbols with the same full transform semantics. Canvas compositing order matches export.
+- Regression coverage checks Clip source selection for static holds/tweens/out-of-range cells plus Symbol transform order and non-finite safety.
+- Static audit covered the high-risk timeline, persistence, layer, selection, fill, media, audio and export modules. Runtime unwraps inspected in fill are guarded by prior validation; test-only unwraps remain in tests. Final acceptance still requires Windows tests, Clippy and release build on the latest PR head plus manual Clip Timeline visual QA.
+
 ## 19 November 2026 — canvas input capture and freehand brush smoothing (PR #60)
 - Branch `fix/canvas-input-brush-smoothing-20261119` starts from released main `a9300f84ff1e66330838115afa8a86aa6b2f68ea` / `v4.1.0.277`.
 - Fixed the timeline/dock drag leak at the input-routing level: primary canvas tool gestures are captured only when the original MouseDown occurred on the canvas. Crossing into the canvas while still holding a drag that began on the timeline cannot start Brush/Eraser/Sculpt work.
