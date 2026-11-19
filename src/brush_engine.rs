@@ -103,28 +103,57 @@ pub fn visit_round_marks(stroke: &Stroke, mut paint: impl FnMut(RoundMark, f32))
     }
 }
 
-/// Smooth only shallow accidental deviations, not corners and node landmarks.
-pub(crate) fn smooth_ink_points(points: &[StrokePoint], width: f32) -> Vec<StrokePoint> {
+/// Corner-preserving smoothing shared by raster line brushes. It runs only on
+/// shallow local deviations, keeps endpoints/pressure untouched and never
+/// smooths across a real corner or reversal. Multiple light passes remove the
+/// mouse/tablet micro-zigzag without the overshoot of Catmull-Rom subdivision.
+fn corner_preserving_smooth(
+    points: &[StrokePoint],
+    width: f32,
+    weight: f32,
+    passes: usize,
+    tolerance_scale: f32,
+) -> Vec<StrokePoint> {
+    if points.len() < 3 || !width.is_finite() || width <= 0.0 {
+        return points.to_vec();
+    }
     let mut result = points.to_vec();
-    let tolerance = (width * 0.18).clamp(0.35, 2.2);
-    for i in 1..points.len().saturating_sub(1) {
-        let a = &points[i - 1];
-        let b = &points[i];
-        let c = &points[i + 1];
-        let prev = (b.x-a.x,b.y-a.y);
-        let next = (c.x-b.x,c.y-b.y);
-        let l1=prev.0.hypot(prev.1);
-        let l2=next.0.hypot(next.1);
-        let chord=(c.x-a.x).hypot(c.y-a.y);
-        if l1<=0.001 || l2<=0.001 || chord<=0.001 {continue;}
-        let cos=(prev.0*next.0+prev.1*next.1)/(l1*l2);
-        let offset=((b.x-a.x)*(c.y-a.y)-(b.y-a.y)*(c.x-a.x)).abs()/chord;
-        if cos>0.62 && offset<=tolerance {
-            result[i].x=0.2*a.x+0.6*b.x+0.2*c.x;
-            result[i].y=0.2*a.y+0.6*b.y+0.2*c.y;
+    let weight = weight.clamp(0.0, 0.24);
+    let tolerance = (width * tolerance_scale).clamp(0.30, 2.8);
+    for _ in 0..passes.clamp(1, 3) {
+        let source = result.clone();
+        for i in 1..source.len() - 1 {
+            let a = &source[i - 1];
+            let b = &source[i];
+            let c = &source[i + 1];
+            let prev = (b.x - a.x, b.y - a.y);
+            let next = (c.x - b.x, c.y - b.y);
+            let l1 = prev.0.hypot(prev.1);
+            let l2 = next.0.hypot(next.1);
+            let chord = (c.x - a.x).hypot(c.y - a.y);
+            if l1 <= 0.001 || l2 <= 0.001 || chord <= 0.001 {
+                continue;
+            }
+            let cos = (prev.0 * next.0 + prev.1 * next.1) / (l1 * l2);
+            let offset = ((b.x-a.x)*(c.y-a.y)-(b.y-a.y)*(c.x-a.x)).abs()/chord;
+            if cos > 0.62 && offset <= tolerance {
+                result[i].x = weight * a.x + (1.0 - 2.0 * weight) * b.x + weight * c.x;
+                result[i].y = weight * a.y + (1.0 - 2.0 * weight) * b.y + weight * c.y;
+            }
         }
     }
     result
+}
+
+/// General freehand cleanup for round raster line brushes (G-Pen, watercolor,
+/// marker, airbrush and pencil). It is intentionally lighter than Smooth Ink.
+pub(crate) fn smooth_freehand_points(points: &[StrokePoint], width: f32) -> Vec<StrokePoint> {
+    corner_preserving_smooth(points, width, 0.14, 2, 0.14)
+}
+
+/// Smooth Ink deliberately uses a stronger version of the same safe filter.
+pub(crate) fn smooth_ink_points(points: &[StrokePoint], width: f32) -> Vec<StrokePoint> {
+    corner_preserving_smooth(points, width, 0.20, 2, 0.20)
 }
 
 /// Detect turns likely to make a filled pressure outline self-intersect.
@@ -405,6 +434,18 @@ mod tests {
         let smooth=smooth_ink_points(&j,12.);
         assert!(smooth[1].y<j[1].y);
     }
+    #[test]
+    fn general_freehand_smoothing_reduces_micro_jitter_without_rounding_corner() {
+        let jitter=[point(0.,0.,1.),point(8.,0.9,1.),point(16.,0.,1.),point(24.,0.8,1.),point(32.,0.,1.)];
+        let smooth=smooth_freehand_points(&jitter,10.);
+        assert!(smooth[1].y<jitter[1].y);
+        assert!(smooth[3].y<jitter[3].y);
+        assert_eq!(smooth.first(),jitter.first());
+        assert_eq!(smooth.last(),jitter.last());
+        let corner=[point(0.,0.,1.),point(20.,0.,1.),point(20.,20.,1.)];
+        assert_eq!(smooth_freehand_points(&corner,12.),corner);
+    }
+
     #[test]
     fn invalid_or_empty_input_is_safe() {
         assert!(sample_pressure_dabs(&[], 7.0).is_empty());
