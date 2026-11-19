@@ -4,6 +4,16 @@
 
 ## English (US)
 
+### Bugs fixed
+- Vector Nodes cursor now uses the exact real pointer hotspot instead of the old generic down/right icon offset.
+- Vector-node selection/right-click hit areas are larger and remain screen-size consistent while zooming.
+- Right-click insertion now hit-tests the same smoothed vector curve that is actually rendered; right-clicking the inserted/selected node again removes it.
+- Layer Effects now opens as a movable, closable floating window instead of a fixed popup menu.
+- Added a true **Black & White** layer effect for strokes, text and media; canvas preview and export use the same grayscale conversion.
+- Bucket fills now preserve immediate nested closed contours as holes. A circle inside another circle can be colored independently without the outer fill bleeding through the inner region.
+
+
+
 ### Quick color controls, customizable gestures and Online UI
 - The radial color wheel now has a **Custom Color** center action. It opens an exact color picker instead of showing the old COLOR label.
 - The quick color wheel now works with **Brush, Vector Pen and Bucket**. Its default keyboard shortcut is **Z**, and it can be rebound from Settings → Shortcuts.
@@ -297,6 +307,16 @@
 - Added an unsaved-work guard to avoid restarting with an unfinished project.
 
 ## العربية (المصري)
+
+### المشاكل اللي اتصلحت
+- مؤشر أداة نقاط الفيكتور بقى فوق مكان الماوس الحقيقي من غير الإزاحة القديمة.
+- كبّرنا Hitbox تحديد النقاط وكلك يمين، وبيفضل ثابت بصريًا مع الزوم.
+- كلك يمين لإضافة نقطة بقى بيختبر نفس المنحنى الناعم الظاهر على الشاشة؛ وكلك يمين مرة تانية على النقطة المضافة/المحددة بيحذفها.
+- مؤثرات اللير بقت نافذة مستقلة تقدر تحركها وتقفلها بدل القائمة الثابتة.
+- اتضاف تأثير **أبيض وأسود** حقيقي للخطوط والنص والصور والفيديو، في المعاينة والتصدير.
+- الدلو بقى يحافظ على الدوائر/الأشكال المقفولة اللي جوه بعضها كمساحات مستقلة؛ تعبئة الدائرة الخارجية مش هتلوّن اللي جوه الدائرة الداخلية.
+
+ (المصري)
 
 ### عجلة الألوان والاختصارات وواجهة الأونلاين
 - نص **COLOR** اللي في نص عجلة الألوان اتبدل بزر **لون مخصص**؛ الضغط عليه بيفتح منتقي لون دقيق.

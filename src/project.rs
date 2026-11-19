@@ -475,6 +475,7 @@ pub enum LayerEffectPreset {
     Mint,
     Night,
     Vintage,
+    Monochrome,
 }
 impl Default for LayerEffectPreset {
     fn default()->Self { Self::None }
@@ -482,7 +483,7 @@ impl Default for LayerEffectPreset {
 impl LayerEffectPreset {
     pub fn rgb_multiplier(self)->[f32;3] {
         match self {
-            Self::None => [1.0,1.0,1.0],
+            Self::None | Self::Monochrome => [1.0,1.0,1.0],
             Self::Warm => [1.0,0.90,0.78],
             Self::Cool => [0.78,0.90,1.0],
             Self::Rose => [1.0,0.78,0.88],
@@ -492,6 +493,12 @@ impl LayerEffectPreset {
         }
     }
     pub fn apply_rgba(self,color:[u8;4])->[u8;4] {
+        if self==Self::Monochrome {
+            let gray=(color[0] as f32*0.2126
+                +color[1] as f32*0.7152
+                +color[2] as f32*0.0722).round().clamp(0.0,255.0) as u8;
+            return [gray,gray,gray,color[3]];
+        }
         let m=self.rgb_multiplier();
         [
             (color[0] as f32*m[0]).round().clamp(0.0,255.0) as u8,
@@ -1053,6 +1060,15 @@ mod brush_tip_compat_tests {
         assert_eq!(c[3],77);
         assert_eq!(c[0],100);
         assert!(c[1]<120 && c[2]<140);
+    }
+
+    #[test]
+    fn monochrome_layer_effect_preserves_alpha_and_equalizes_rgb() {
+        let c=LayerEffectPreset::Monochrome.apply_rgba([220,80,20,91]);
+        assert_eq!(c[3],91);
+        assert_eq!(c[0],c[1]);
+        assert_eq!(c[1],c[2]);
+        assert!(c[0]>80 && c[0]<220);
     }
 
     #[test]

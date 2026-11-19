@@ -1712,6 +1712,7 @@ struct StickApp {
     layer_rename_index: Option<usize>,
     layer_rename_buffer: String,
     layer_filter: String,
+    layer_effect_window: Option<usize>,
     layer_clipboard: Option<Layer>,
     symmetry_mode: SymmetryMode,
     stabilizer_strength: f32,
@@ -1909,6 +1910,7 @@ impl StickApp {
             layer_rename_index: None,
             layer_rename_buffer: String::new(),
             layer_filter: String::new(),
+            layer_effect_window: None,
             layer_clipboard: None,
             symmetry_mode: SymmetryMode::Off,
             stabilizer_strength: 0.38,
@@ -4034,26 +4036,45 @@ impl StickApp {
     }
 
     fn preload_frame_textures(&mut self, ctx: &egui::Context) {
-        // Only retain textures needed on the *current* frame. Decoded video
-        // frames otherwise accumulate unbounded GPU memory while playing.
-        let mut wanted = std::collections::HashSet::new();
+        // Retain only textures needed on the current frame. Monochrome media
+        // gets a separate cached grayscale texture so the live canvas matches
+        // the exported black-and-white layer effect.
+        let mut wanted=std::collections::HashMap::<String,(String,bool)>::new();
         for layer in &self.project.layers {
-            if !layer.visible { continue; }
-            let Some(fd) = Self::get_effective_frame_data(layer,self.current_frame) else { continue };
-            for media in &fd.media_items { wanted.insert(media.path.clone()); }
+            if !layer.visible {continue;}
+            let Some(fd)=Self::get_effective_frame_data(layer,self.current_frame) else {continue};
+            for media in &fd.media_items {
+                if layer.effect==LayerEffectPreset::Monochrome {
+                    let key=format!("{}#stick_monochrome",media.path);
+                    wanted.insert(key,(media.path.clone(),true));
+                } else {
+                    wanted.insert(media.path.clone(),(media.path.clone(),false));
+                }
+            }
         }
-        self.texture_cache.retain(|path,_| wanted.contains(path));
-        for path in wanted {
-            if self.texture_cache.contains_key(&path) { continue; }
-            if let Ok(img) = image::open(&path) {
-                let reduced = if img.width() > 2048 || img.height() > 2048 {
+        self.texture_cache.retain(|key,_|wanted.contains_key(key));
+        for (key,(path,monochrome)) in wanted {
+            if self.texture_cache.contains_key(&key) {continue;}
+            if let Ok(img)=image::open(&path) {
+                let reduced=if img.width()>2048||img.height()>2048 {
                     img.thumbnail(2048,2048)
-                } else { img };
-                let rgba = reduced.to_rgba8();
-                let ci = egui::ColorImage::from_rgba_unmultiplied(
+                } else {img};
+                let mut rgba=reduced.to_rgba8();
+                if monochrome {
+                    for pixel in rgba.pixels_mut() {
+                        let gray=(pixel.0[0] as f32*0.2126
+                            +pixel.0[1] as f32*0.7152
+                            +pixel.0[2] as f32*0.0722)
+                            .round().clamp(0.0,255.0) as u8;
+                        pixel.0[0]=gray;
+                        pixel.0[1]=gray;
+                        pixel.0[2]=gray;
+                    }
+                }
+                let ci=egui::ColorImage::from_rgba_unmultiplied(
                     [rgba.width() as usize,rgba.height() as usize],rgba.as_raw());
-                self.texture_cache.insert(path.clone(),
-                    ctx.load_texture(&path,ci,egui::TextureOptions::LINEAR));
+                self.texture_cache.insert(key.clone(),
+                    ctx.load_texture(&key,ci,egui::TextureOptions::LINEAR));
             }
         }
     }
@@ -6685,6 +6706,7 @@ impl eframe::App for StickApp {
         let mut paste_layer_index: Option<usize> = None;
         let mut rename_layer_index: Option<usize> = None;
         let mut layer_effect_request: Option<(usize,LayerEffectPreset)> = None;
+        let mut layer_effect_window_request: Option<usize> = None;
         if self.config.show_right_dock {
         egui::SidePanel::right("right_panel").resizable(true).default_width(376.0)
             .min_width(285.0).show(ctx, |ui| {
@@ -6995,31 +7017,14 @@ impl eframe::App for StickApp {
                     if lock_resp.on_hover_text(tr(lang, "Lock or unlock layer", "اقفل أو افتح قفل اللير")).clicked() {
                         dock_lock_toggle = Some(idx);
                     }
-                    ui.menu_button(
-                        egui::RichText::new("✦").color(if layer.effect==LayerEffectPreset::None {
+                    let effect_icon=egui::RichText::new("✦").color(
+                        if layer.effect==LayerEffectPreset::None {
                             egui::Color32::from_gray(150)
-                        } else {egui::Color32::from_rgb(255,205,63)}),
-                        |ui| {
-                            ui.strong(tr(lang,"Layer Effects","مؤثرات اللير"));
-                            ui.small(tr(lang,
-                                "Applies only to this layer and is saved with the project.",
-                                "بتتطبق على اللير ده بس وبتتحفظ مع المشروع."));
-                            ui.separator();
-                            for (preset,en,ar) in [
-                                (LayerEffectPreset::None,"None","بدون"),
-                                (LayerEffectPreset::Warm,"Warm","دافئ"),
-                                (LayerEffectPreset::Cool,"Cool","بارد"),
-                                (LayerEffectPreset::Rose,"Rose","وردي"),
-                                (LayerEffectPreset::Mint,"Mint","نعناعي"),
-                                (LayerEffectPreset::Night,"Night","ليلي"),
-                                (LayerEffectPreset::Vintage,"Vintage","فينتاج"),
-                            ] {
-                                if ui.selectable_label(layer.effect==preset,tr(lang,en,ar)).clicked() {
-                                    layer_effect_request=Some((idx,preset));
-                                    ui.close_menu();
-                                }
-                            }
-                        });
+                        } else {egui::Color32::from_rgb(255,205,63)});
+                    if ui.add(egui::Button::new(effect_icon).frame(false))
+                        .on_hover_text(tr(lang,"Layer Effects","مؤثرات اللير")).clicked() {
+                        layer_effect_window_request=Some(idx);
+                    }
                     let layer_response = ui.vertical(|ui| {
                         let response = ui.selectable_label(selected_row,
                             egui::RichText::new(&layer.name).strong().size(14.0));
@@ -7100,6 +7105,62 @@ impl eframe::App for StickApp {
                 }
                 }); // scrollable layer dock
         });
+        }
+        if let Some(idx)=layer_effect_window_request {
+            self.layer_effect_window=Some(idx);
+        }
+        if let Some(idx)=self.layer_effect_window {
+            if let Some(layer)=self.project.layers.get(idx) {
+                let current=layer.effect;
+                let locked=layer.locked;
+                let layer_name=layer.name.clone();
+                let mut open=true;
+                let mut close_requested=false;
+                let mut chosen=None;
+                egui::Window::new(tr(lang,"Layer Effects","مؤثرات اللير"))
+                    .id(egui::Id::new(("layer_effects_window",idx)))
+                    .open(&mut open)
+                    .collapsible(false)
+                    .resizable(false)
+                    .default_width(270.0)
+                    .show(ctx,|ui| {
+                        ui.strong(layer_name);
+                        ui.small(tr(lang,
+                            "Drag this window from its title bar. Effects apply only to this layer.",
+                            "اسحب النافذة من شريط العنوان. التأثير بيتطبق على اللير ده بس."));
+                        if locked {
+                            ui.colored_label(egui::Color32::from_rgb(255,190,90),
+                                tr(lang,"Unlock the layer to change its effect.",
+                                    "افتح قفل اللير عشان تغيّر التأثير."));
+                        }
+                        ui.separator();
+                        for (preset,en,ar) in [
+                            (LayerEffectPreset::None,"None","بدون"),
+                            (LayerEffectPreset::Monochrome,"Black & White","أبيض وأسود"),
+                            (LayerEffectPreset::Warm,"Warm","دافئ"),
+                            (LayerEffectPreset::Cool,"Cool","بارد"),
+                            (LayerEffectPreset::Rose,"Rose","وردي"),
+                            (LayerEffectPreset::Mint,"Mint","نعناعي"),
+                            (LayerEffectPreset::Night,"Night","ليلي"),
+                            (LayerEffectPreset::Vintage,"Vintage","فينتاج"),
+                        ] {
+                            if ui.add_enabled(!locked,
+                                egui::SelectableLabel::new(current==preset,tr(lang,en,ar))).clicked() {
+                                chosen=Some(preset);
+                            }
+                        }
+                        ui.separator();
+                        if ui.button(tr(lang,"Close","إغلاق")).clicked() {
+                            close_requested=true;
+                        }
+                    });
+                if let Some(preset)=chosen {
+                    layer_effect_request=Some((idx,preset));
+                }
+                if !open || close_requested {self.layer_effect_window=None;}
+            } else {
+                self.layer_effect_window=None;
+            }
         }
         if let Some((width,height)) = canvas_resize_request {
             if canvas_sizes::may_hide_artwork(
@@ -8764,6 +8825,8 @@ impl eframe::App for StickApp {
                                     if let Some(frame)=layer.keyframes.get_mut(&self.current_frame) {
                                         for (seed,fallback,can_fill) in solutions {
                                             if let Some(points)=fallback {
+                                                let points=fill_tools::preserve_nested_holes(
+                                                    points,&reference_strokes,(seed.x,seed.y));
                                                 let insert_at=frame.strokes.iter().rposition(|stroke|
                                                     stroke.color[3]==0 && stroke.fill_color.is_some())
                                                     .map(|i|i+1).unwrap_or(0);
@@ -8909,7 +8972,7 @@ impl eframe::App for StickApp {
                                     .and_then(|layer|layer.keyframes.get_mut(&self.current_frame))
                                     .and_then(|frame|vector_path::quick_edit_node_in_selection(
                                         &mut frame.strokes,&selected,stage_pos.x,stage_pos.y,
-                                        (18.0/scale).max(2.0)));
+                                        (24.0/scale).max(3.0)));
                                 match edit {
                                     Some(vector_path::QuickNodeEdit::Inserted{stroke,point}) => {
                                         self.selected_vector_node=Some((stroke,point));
@@ -8954,7 +9017,7 @@ impl eframe::App for StickApp {
                                         let frame=self.project.evaluate_layer_at_frame(
                                             layer,self.current_frame);
                                         selection_tools::nearest_vector_node(
-                                            &frame.strokes,stage_pos,(13.0/scale).max(2.0))
+                                            &frame.strokes,stage_pos,(18.0/scale).max(3.0))
                                     });
                                 let extend=ctx.input(|i|i.modifiers.shift);
                                 if let Some(node)=picked {
@@ -9346,7 +9409,10 @@ impl eframe::App for StickApp {
                     let fd = self.project.evaluate_layer_at_frame(layer, self.current_frame);
                     for (media_index,m) in fd.media_items.iter().enumerate() {
                         let corners=media_transform::corners(m);
-                        if let Some(tex) = self.texture_cache.get(&m.path) {
+                        let texture_key=if layer.effect==LayerEffectPreset::Monochrome {
+                            format!("{}#stick_monochrome",m.path)
+                        } else {m.path.clone()};
+                        if let Some(tex) = self.texture_cache.get(&texture_key) {
                             let mut mesh = egui::Mesh::with_texture(tex.id());
                             let effect_white=layer.effect.apply_rgba([255,255,255,255]);
                             let tint=egui::Color32::from_rgba_unmultiplied(
@@ -9701,7 +9767,8 @@ impl eframe::App for StickApp {
                     // Eyedropper used to render its nib ~30px BELOW the real
                     // mouse hotspot while hiding the system cursor. Align the
                     // nib (icon local -10,+10) exactly with pointer_pos.
-                    let rect = if self.active_tool_ui == ActiveToolUI::FreeTransform {
+                    let rect = if matches!(self.active_tool_ui,
+                        ActiveToolUI::FreeTransform | ActiveToolUI::VectorDirectSelect) {
                         // Free Transform is a symmetric gizmo. Its visible center
                         // MUST be the same screen coordinate used by selection,
                         // resize/rotate handles and drag hit-testing. The old
