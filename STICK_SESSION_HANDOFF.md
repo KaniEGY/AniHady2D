@@ -1,5 +1,15 @@
 # Stick Studio — Session Handoff / سجل استكمال المشروع
 
+## 19 November 2026 — canvas input capture and freehand brush smoothing (PR #60)
+- Branch `fix/canvas-input-brush-smoothing-20261119` starts from released main `a9300f84ff1e66330838115afa8a86aa6b2f68ea` / `v4.1.0.277`.
+- Fixed the timeline/dock drag leak at the input-routing level: primary canvas tool gestures are captured only when the original MouseDown occurred on the canvas. Crossing into the canvas while still holding a drag that began on the timeline cannot start Brush/Eraser/Sculpt work.
+- Canvas pointer history is isolated from non-canvas drags, preventing a timeline resize gesture from contaminating the next brush stabilizer sample.
+- Brush and Vector Pen live stabilization is speed-aware: slow micro-movement receives stronger de-jittering while fast motion catches up toward the real pointer to reduce rubber-band lag.
+- Ordinary raster freehand brushes share a light corner-preserving centerline cleanup; Smooth Ink keeps its stronger variant. Deliberate sharp corners, endpoints and stored pressure samples remain intact.
+- Canvas preview and raster/video export call the corresponding shared smoothing functions so visual behavior stays consistent without changing the .stick schema or rewriting saved raw stroke points.
+- Regression tests cover timeline-origin capture, adaptive stabilizer slow/fast behavior, non-finite safety, micro-jitter reduction and hard-corner preservation.
+- PR #60 must be judged only by Windows CI on its latest head after documentation changes. Manual mouse/tablet feel and GUI timeline-drag acceptance remain separate hands-on QA and must not be inferred from CI.
+
 ## 19 November 2026 — quick color shortcuts, configurable gestures and Online UI
 - Branch `feat/quick-color-shortcuts-online-ui-20261119` is based on released main build 271 (`aec8a9f56ea833c74b18184c78edfa67058d6f7d`).
 - Radial Colors center is now a clickable Custom Color action using the current selected color. It opens the exact color picker and closes the radial menu.

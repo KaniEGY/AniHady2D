@@ -282,7 +282,8 @@ pub fn draw_stroke_pro<F: Fn(egui::Pos2) -> egui::Pos2>(
                 crate::brush_engine::smooth_ink_points(&stroke.points, width)
                     .into_iter().map(|p| screen(p.x,p.y)).collect()
             } else {
-                stroke.points.iter().map(|p| screen(p.x,p.y)).collect()
+                crate::brush_engine::smooth_freehand_points(&stroke.points, width)
+                    .into_iter().map(|p| screen(p.x,p.y)).collect()
             }
         };
         let points = if flow == 1.0 {

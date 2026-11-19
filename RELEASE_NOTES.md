@@ -34,6 +34,10 @@
 - Frame provenance is now preserved through next-key creation, clipboard paste and New mine multi-copy: inserted empty = green circle, copied pose = red circle, explicit blank = white circle with black outline, authored/drawn legacy content keeps its drawn-frame marker.
 
 ### Bugs fixed
+- Timeline/dock drags no longer leak into canvas tools: a Brush, Eraser or Sculpt gesture can start only when the primary-button press itself began on the canvas.
+- Normal freehand raster brushes now use light corner-preserving centerline cleanup plus a speed-aware live stabilizer, reducing mouse/tablet micro-jitter while keeping deliberate sharp corners and catching up during fast strokes.
+- Canvas preview and raster/video export share the same freehand smoothing path so ordinary line brushes do not change shape unexpectedly on export.
+
 - Free Transform handle hit testing now uses the exact painted screen positions, fixing cursor/hitbox offsets after zoom, pan, rotation or canvas flips.
 - Selection/marquee outlines are drawn from transformed corner points so visible bounds stay aligned with the canvas transform.
 - Artist System and level-up overlays now block canvas/tool input behind the popup, preventing custom cursor and drawing interactions from leaking into background windows.
@@ -294,6 +298,10 @@
 - أيقونة أداة التحويل بقت أصغر ومختلفة وواضحة عن أداة التحديد.
 
 ### المشاكل اللي اتصلحت
+- سحب التايم لاين أو أي Dock مبقاش يتسرّب لأدوات الكانفا: الفرشة أو الممحاة أو النحت مش بيبدأوا حركة إلا لو ضغطة الماوس الأساسية نفسها بدأت جوه الكانفا.
+- الفرش الحرة العادية بقت تستخدم تنعيم خفيف يحافظ على الزوايا مع Stabilizer متكيّف مع سرعة الحركة، عشان يقلّل رعشة الماوس/القلم من غير ما يعمل تأخير مطاطي في السحبات السريعة.
+- معاينة الكانفا والتصدير Raster/Video بقوا يستخدموا نفس مسار تنعيم الفرش الحرة، عشان شكل الخط مايتغيّرش بشكل مفاجئ وقت التصدير.
+
 - الحبر الناعم بقى يرسم بخط مركزي ناعم وثابت مع الضغط الثابت، وبيستخدم مسار آمن لو الحركة فيها رجوع حاد بدل ما ينتج شكل أسود متداخل.
 - القلم المدبب حافظ على بداية ونهاية مدببة، ومع الانعطافات الخطرة بيستخدم رسم ضغط آمن بدل Polygon ممكن يلف على نفسه.
 - أداة التحديد والتحديد الحر مبقوش يعرضوا أو يشغلوا مقابض محور X/Y الخاصة بالتحويل؛ التدوير والتكبير والمحاور بقوا لأداة التحويل بس.

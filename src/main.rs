@@ -738,6 +738,20 @@ fn default_tablet_min_pressure() -> f32 { 0.02 }
 fn default_quick_color_key() -> String { "Z".to_string() }
 fn default_size_gesture_key() -> String { "Alt".to_string() }
 fn default_opacity_gesture_key() -> String { "Ctrl".to_string() }
+fn update_canvas_primary_capture(
+    current: bool,
+    pointer_pressed: bool,
+    pointer_down: bool,
+    press_started_on_canvas: bool,
+) -> bool {
+    if pointer_pressed {
+        press_started_on_canvas
+    } else if !pointer_down {
+        false
+    } else {
+        current
+    }
+}
 // Public Desktop OAuth identifier for the Stick Studio Google Cloud project.
 // Not a client secret. A valid build-time override is still supported.
 const OFFICIAL_GOOGLE_CLIENT_ID: &str =
@@ -1789,6 +1803,10 @@ struct StickApp {
     audio_scrub_output: Option<(OutputStream, OutputStreamHandle)>,
     audio_scrub_sinks: Vec<Sink>,
     last_pointer_pos: Option<egui::Pos2>,
+    /// True only when the current primary-button gesture started on the canvas.
+    /// This prevents timeline/dock drags from leaking into drawing tools when
+    /// the pointer crosses into the CentralPanel while the button is held.
+    canvas_primary_capture: bool,
     last_secondary_pointer_pos: Option<egui::Pos2>,
     alt_size_drag_origin: Option<(egui::Pos2, f32)>,
     ctrl_opacity_drag_origin: Option<(egui::Pos2, f32)>,
@@ -1877,8 +1895,8 @@ impl StickApp {
             layer_filter: String::new(),
             layer_clipboard: None,
             symmetry_mode: SymmetryMode::Off,
-            stabilizer_strength: 0.30,
-            vector_stabilizer_strength: 0.30,
+            stabilizer_strength: 0.38,
+            vector_stabilizer_strength: 0.36,
             stabilized_cursor: None,
             shape_drag_start: None,
             shape_drag_current: None,
@@ -1980,6 +1998,7 @@ impl StickApp {
             audio_scrub_output: None,
             audio_scrub_sinks: Vec::new(),
             last_pointer_pos: None,
+            canvas_primary_capture: false,
             last_secondary_pointer_pos: None,
             alt_size_drag_origin: None,
             ctrl_opacity_drag_origin: None,
@@ -4734,7 +4753,7 @@ impl eframe::App for StickApp {
         let (
             now, ctrl_z, ctrl_y, ctrl_s, ctrl_shift_s, ctrl_c, ctrl_v, ctrl_k, del_pressed, f10_pressed,
             space_down, ctrl_down, alt_down, zoom_in_nav, zoom_out_nav, pan_right_nav, pan_left_nav,
-            scroll_y, close_req, pointer_down, pointer_pressed, pointer_released, pointer_pos,
+            scroll_y, close_req, pointer_down, pointer_pressed, pointer_released, pointer_pos, primary_press_pos,
             sc_select, sc_lasso, sc_free_tr, sc_vec_sel, sc_sculpt, sc_pen, sc_brush, sc_eraser, sc_eraser_partial,
             sc_bucket, sc_eyedropper, sc_text, sc_shape, sc_hand, sc_del_frame, sc_f6, sc_f7, sc_f8,
             sc_play, sc_prev, sc_next, sc_smaller, sc_larger, sc_reset_canvas, pressed_key_name,
@@ -4748,6 +4767,10 @@ impl eframe::App for StickApp {
             if captured_key.is_none() && i.modifiers.alt { captured_key = Some("Alt".to_string()); }
             if captured_key.is_none() && i.modifiers.ctrl { captured_key = Some("Ctrl".to_string()); }
             if captured_key.is_none() && i.modifiers.shift { captured_key = Some("Shift".to_string()); }
+            let primary_press_pos = i.events.iter().rev().find_map(|event| match event {
+                egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: true, .. } => Some(*pos),
+                _ => None,
+            });
             let z_in = (i.modifiers.ctrl && i.key_down(egui::Key::ArrowUp)) || (!i.modifiers.ctrl && !i.modifiers.alt && i.key_down(egui::Key::W));
             let z_out = (i.modifiers.ctrl && i.key_down(egui::Key::ArrowDown)) || (!i.modifiers.ctrl && !i.modifiers.alt && i.key_down(egui::Key::S));
             let p_right = (i.modifiers.ctrl && i.key_down(egui::Key::ArrowRight)) || (!i.modifiers.ctrl && !i.modifiers.alt && i.key_down(egui::Key::D));
@@ -4773,6 +4796,7 @@ impl eframe::App for StickApp {
                 i.pointer.primary_pressed(),
                 i.pointer.primary_released(),
                 i.pointer.interact_pos(),
+                primary_press_pos,
                 is_shortcut_pressed(i, &self.config.tool_select),
                 is_shortcut_pressed(i, &self.config.tool_lasso),
                 is_shortcut_pressed(i, &self.config.tool_free_transform),
@@ -8032,6 +8056,21 @@ impl eframe::App for StickApp {
             ctx.set_cursor_icon(tool_cursor);
 
             let is_over_canvas = pointer_on_canvas_layer;
+
+            // Capture the gesture at its real PointerButton-down position, not
+            // merely at the current pointer location. A timeline resize/scroll
+            // can move the panel boundary underneath a held pointer; without
+            // this origin gate Brush/Eraser/Sculpt used to start on the canvas
+            // halfway through a gesture that actually began on the timeline.
+            let press_origin = primary_press_pos.or(pointer_pos.filter(|_| pointer_pressed));
+            let press_started_on_canvas = press_origin.is_some_and(|press| {
+                canvas_rect.contains(press)
+                    && ctx.layer_id_at(press).is_some_and(|layer| layer == ui.layer_id())
+                    && !any_modal_open
+            });
+            self.canvas_primary_capture = update_canvas_primary_capture(
+                self.canvas_primary_capture, pointer_pressed, pointer_down, press_started_on_canvas);
+
             let secondary_clicked=ctx.input(|i|i.pointer.secondary_clicked());
             if (secondary_clicked || quick_color_pressed) && is_over_canvas && !any_modal_open {
                 if let Some(center)=pointer_pos {
@@ -8349,6 +8388,7 @@ impl eframe::App for StickApp {
             if !space_down && !size_gesture_down && !opacity_gesture
                 && self.canvas_quick_menu.is_none()
                 && self.active_tool_ui != ActiveToolUI::HandCanvas
+                && self.canvas_primary_capture
                 && is_over_canvas && !any_modal_open && can_use_tool {
                 if let Some(pos) = pointer_pos {
                     let stage_pos = to_stage(pos);
@@ -8523,10 +8563,14 @@ impl eframe::App for StickApp {
                         }
                         ActiveToolUI::VectorPen if pointer_down => {
                             let stab = self.vector_stabilizer_strength.clamp(0.0, 0.70);
-                            let smooth = if let Some(previous) = self.stabilized_cursor {
-                                egui::pos2(previous.x * stab + stage_pos.x * (1.0 - stab),
-                                    previous.y * stab + stage_pos.y * (1.0 - stab))
-                            } else { stage_pos };
+                            let raw_previous=self.last_pointer_pos.map(|p|to_stage(p));
+                            let smooth = self.stabilized_cursor.map_or(stage_pos, |previous| {
+                                let (x,y)=stroke_geometry::adaptive_stabilized_xy(
+                                    (previous.x,previous.y),
+                                    raw_previous.map(|p|(p.x,p.y)),
+                                    (stage_pos.x,stage_pos.y),stab);
+                                egui::pos2(x,y)
+                            });
                             self.stabilized_cursor = Some(smooth);
                             if let Some(stroke) = &mut self.current_stroke {
                                 if let Some(last) = stroke.points.last() {
@@ -8541,10 +8585,15 @@ impl eframe::App for StickApp {
                             }
                         }
                         ActiveToolUI::Brush if pointer_down => {
-                            let stab = self.stabilizer_strength.clamp(0.0, 0.70);
-                            let virt = if let Some(pv) = self.stabilized_cursor {
-                                egui::pos2(pv.x * stab + stage_pos.x * (1.0 - stab), pv.y * stab + stage_pos.y * (1.0 - stab))
-                            } else { stage_pos };
+                            let stab = self.stabilizer_strength.clamp(0.0, 0.75);
+                            let raw_previous=self.last_pointer_pos.map(|p|to_stage(p));
+                            let virt = self.stabilized_cursor.map_or(stage_pos, |previous| {
+                                let (x,y)=stroke_geometry::adaptive_stabilized_xy(
+                                    (previous.x,previous.y),
+                                    raw_previous.map(|p|(p.x,p.y)),
+                                    (stage_pos.x,stage_pos.y),stab);
+                                egui::pos2(x,y)
+                            });
                             self.stabilized_cursor = Some(virt);
                             if let Some(stroke) = &mut self.current_stroke {
                                 if let Some(last) = stroke.points.last() {
@@ -8930,7 +8979,7 @@ impl eframe::App for StickApp {
                 }
             }
 
-            self.last_pointer_pos = if pointer_down { pointer_pos } else { None };
+            self.last_pointer_pos = if pointer_down && self.canvas_primary_capture { pointer_pos } else { None };
 
             // Keep artwork, ghosts and media inside the paper bounds when the
             // view is axis-aligned. This is a display-only clip and never
@@ -9387,6 +9436,22 @@ fn main() -> eframe::Result<()> {
 #[cfg(test)]
 mod tool_discovery_tests {
     use super::*;
+
+    #[test]
+    fn canvas_primary_capture_never_starts_from_timeline_drag() {
+        let mut captured=false;
+        captured=update_canvas_primary_capture(captured,true,true,false);
+        assert!(!captured);
+        captured=update_canvas_primary_capture(captured,false,true,true);
+        assert!(!captured);
+        captured=update_canvas_primary_capture(captured,false,false,false);
+        assert!(!captured);
+        captured=update_canvas_primary_capture(captured,true,true,true);
+        assert!(captured);
+        captured=update_canvas_primary_capture(captured,false,true,false);
+        assert!(captured);
+        assert!(!update_canvas_primary_capture(captured,false,false,false));
+    }
 
     #[test]
     fn canvas_size_mode_is_undoable_and_rejects_unsafe_sizes() {
