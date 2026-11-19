@@ -73,7 +73,7 @@ impl TextureBrush {
             // Marker and calligraphy deliberately own a chisel footprint so
             // they cannot look like the ordinary round 2D pen.
             let inside = if matches!(self, Self::Calligraphy | Self::Marker) {
-                let angle=if self==Self::Calligraphy {0.50}else{0.34};
+                let angle:f32=if self==Self::Calligraphy {0.50}else{0.34};
                 let (sin,cos)=angle.sin_cos();
                 let dx=u*cos+v*sin;
                 let dy=-u*sin+v*cos;
