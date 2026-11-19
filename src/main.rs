@@ -9147,7 +9147,10 @@ impl eframe::App for StickApp {
                         let corners=media_transform::corners(m);
                         if let Some(tex) = self.texture_cache.get(&m.path) {
                             let mut mesh = egui::Mesh::with_texture(tex.id());
-                            let tint = egui::Color32::from_white_alpha((255.0 * l_op) as u8);
+                            let effect_white=layer.effect.apply_rgba([255,255,255,255]);
+                            let tint=egui::Color32::from_rgba_unmultiplied(
+                                effect_white[0],effect_white[1],effect_white[2],
+                                (255.0*l_op) as u8);
                             let (u0,u1) = if m.flip_h { (1.0,0.0) } else { (0.0,1.0) };
                             let (v0,v1) = if m.flip_v { (1.0,0.0) } else { (0.0,1.0) };
                             let uvs = [egui::pos2(u0,v0),egui::pos2(u1,v0),egui::pos2(u1,v1),egui::pos2(u0,v1)];
@@ -9190,11 +9193,20 @@ impl eframe::App for StickApp {
                         }
                     }
                     for s in &fd.strokes {
-                        draw_stroke_pro(&painter, s, None, l_op, scale, 0.0, 0.0, &to_screen);
+                        if layer.effect==LayerEffectPreset::None {
+                            draw_stroke_pro(&painter,s,None,l_op,scale,0.0,0.0,&to_screen);
+                        } else {
+                            let mut effected=s.clone();
+                            effected.color=layer.effect.apply_rgba(effected.color);
+                            effected.fill_color=effected.fill_color.map(|c|layer.effect.apply_rgba(c));
+                            draw_stroke_pro(&painter,&effected,None,l_op,scale,0.0,0.0,&to_screen);
+                        }
                     }
                     for txt in &fd.text_items {
-                        let tint = egui::Color32::from_rgba_unmultiplied(txt.color[0], txt.color[1],
-                            txt.color[2], (txt.color[3] as f32 * l_op) as u8);
+                        let effect_color=layer.effect.apply_rgba(txt.color);
+                        let tint=egui::Color32::from_rgba_unmultiplied(
+                            effect_color[0],effect_color[1],effect_color[2],
+                            (effect_color[3] as f32*l_op) as u8);
                         let galley = paper_painter.layout_no_wrap(
                             fix_ar(&txt.content),
                             egui::FontId::proportional(txt.font_size * scale),
@@ -9218,9 +9230,16 @@ impl eframe::App for StickApp {
                                 to_screen(egui::pos2(x,y))
                             };
                             for stroke in self.project.evaluate_symbol_strokes(symbol,self.current_frame) {
-                                draw_stroke_pro(
-                                    &painter,stroke,None,l_op,scale*instance_scale,
-                                    0.0,0.0,&symbol_to_screen);
+                                if layer.effect==LayerEffectPreset::None {
+                                    draw_stroke_pro(&painter,stroke,None,l_op,scale*instance_scale,
+                                        0.0,0.0,&symbol_to_screen);
+                                } else {
+                                    let mut effected=stroke.clone();
+                                    effected.color=layer.effect.apply_rgba(effected.color);
+                                    effected.fill_color=effected.fill_color.map(|c|layer.effect.apply_rgba(c));
+                                    draw_stroke_pro(&painter,&effected,None,l_op,scale*instance_scale,
+                                        0.0,0.0,&symbol_to_screen);
+                                }
                             }
                         }
                     }
