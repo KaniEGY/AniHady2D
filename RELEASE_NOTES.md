@@ -5,6 +5,10 @@
 ## English (US)
 
 ### Bugs fixed
+- Fast Brush and Vector Pen strokes now consume the real intra-frame pointer path instead of only the frame's final cursor position. Hover moves before the initial press are excluded, near-duplicate samples are dropped, and a 96-sample safety cap preserves the first/last points without allowing a stalled frame to enqueue unbounded work.
+- Tablet pressure now latches per contact: once a real pressure sample proves the current contact is a pen, a missing/zero pressure reading during lift stays at zero instead of falling back to a full-pressure mouse dab. The next mouse contact resets normally to 100% pressure.
+- Pointer-up catch-up is pressure-aware, preventing a synthetic thick endpoint/blob after a pressure-capable stylus leaves the surface.
+- Added `RUST_DRAWING_APPS_REVIEW_2026_11_19.md`, a source-level review of Rnote, Graphite, JFPainter, rusty-painter, Umber, rustcreate, TraceDraw and KiPaint, including licenses, adopted ideas and larger renderer changes deliberately deferred for compatibility.
 - Added one-click collapse/restore arrows for both the left Drawing Tools dock and the right Properties/Layers dock; collapsed docks leave a narrow edge handle so they can be brought back without opening Settings.
 - Vector Nodes right-click editing is no longer gated by the left-mouse canvas capture. Right-click on a visible node removes it; right-click on a visible vector segment inserts a new editable node, with selected strokes preferred but never blocking another visible path.
 - The normal **2D Pen** (formerly G-Pen label) now uses stronger corner-preserving smoothing, clean round pressure dabs for stylus width changes, and a safe line fallback on risky hairpins. Canvas preview and raster/video export share the same geometry.
@@ -316,6 +320,10 @@
 ## العربية (المصري)
 
 ### المشاكل اللي اتصلحت
+- الفرشة وقلم الفيكتور بقوا ياخدوا **كل حركات المؤشر اللي وصلت جوه نفس الفريم** بدل آخر مكان بس، فالحركة السريعة بالقلم أو الماوس تبقى أنعم ومايتفقدش منها نقط. حركات الـHover قبل بداية الضغطة بتترفض، والنقط شبه المكررة بتتشال، وفي حد أمان 96 عينة لكل فريم عشان أي تهنيج ما يعملش backlog ضخم.
+- ضغط التابلت بقى مربوط بكل ضغطة لوحدها: أول ما البرنامج يتأكد إن الضغطة جاية من قلم بضغط حقيقي، لو قراءة الضغط اختفت أو وصلت صفر وقت رفع القلم مش هترجع فجأة لضغط ماوس 100% وتعمل بقعة في آخر الخط. الضغطة الجديدة بالماوس بترجع طبيعي لضغط كامل.
+- إكمال نهاية الخط عند رفع المؤشر بقى واعي بالضغط، عشان مايتضافش طرف تخين صناعي بعد ما سن القلم يسيب السطح.
+- اتضاف ملف `RUST_DRAWING_APPS_REVIEW_2026_11_19.md` بمراجعة فعلية لسورس Rnote وGraphite وJFPainter وrusty-painter وUmber وrustcreate وTraceDraw وKiPaint، مع التراخيص والأفكار اللي طبقناها والحاجات الكبيرة اللي اتأجلت عشان ما نكسرش توافق Stick.
 - اتضاف سهم لإخفاء وإرجاع شريط أدوات الرسم على الشمال، وسهم تاني لشريط الخصائص والطبقات على اليمين. لما الشريط يستخبى بيفضل زر صغير على حافة البرنامج ترجعه منه فورًا من غير ما تدخل الإعدادات.
 - كلك يمين في **نقاط الفيكتور** بقى مستقل تمامًا عن كلك الشمال: كلك يمين على النقطة يحذفها، وعلى أي جزء ظاهر من خط الفيكتور يضيف نقطة جديدة قابلة للتحكم، حتى لو كان فيه Stroke تاني متحدد قبلها.
 - الفرشة الأساسية بقت **قلم عادي 2D** بسلوك أنعم قريب من قلم الرسم ثنائي الأبعاد: تنعيم محافظ على الزوايا، ضغط قلم دائري من غير تكتلات، ونفس الشكل في المعاينة والتصدير.
