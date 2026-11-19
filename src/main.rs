@@ -3294,6 +3294,16 @@ impl StickApp {
         }
     }
 
+    fn cut_frame(&mut self, layer_idx:usize, frame_idx:usize)->bool {
+        if !(1..=self.project.total_frames).contains(&frame_idx)
+            || !self.project.layers.get(layer_idx).is_some_and(|layer|!layer.locked) {
+            return false;
+        }
+        let Some(layer)=self.project.layers.get(layer_idx) else{return false};
+        self.clipboard_frame=Some(self.project.evaluate_layer_at_frame(layer,frame_idx));
+        self.edit_timeline_frame(layer_idx,frame_idx,timeline_ops::FrameAction::BlankKeyframe)
+    }
+
     fn paste_frame(&mut self, layer_idx: usize, frame_idx: usize) {
         if !(1..=self.project.total_frames).contains(&frame_idx)
             || !self.project.layers.get(layer_idx).is_some_and(|layer| !layer.locked)
@@ -7136,7 +7146,8 @@ impl eframe::App for StickApp {
             }
         }
         if let Some((idx,preset))=layer_effect_request {
-            let changed=self.project.layers.get(idx).is_some_and(|layer|layer.effect!=preset);
+            let changed=self.project.layers.get(idx)
+                .is_some_and(|layer|!layer.locked && layer.effect!=preset);
             if changed {
                 self.save_undo_state();
                 if let Some(layer)=self.project.layers.get_mut(idx) {
@@ -7765,7 +7776,8 @@ impl eframe::App for StickApp {
                                 ui.painter().text(clip.center(),egui::Align2::CENTER_CENTER,
                                     format!("{}–{}",image_start,image_end),
                                     egui::FontId::monospace(10.0),egui::Color32::WHITE);
-                                if pointer_pressed && pointer_pos.is_some_and(|p|clip.contains(p)) {
+                                if !layer.locked && pointer_pressed
+                                    && pointer_pos.is_some_and(|p|clip.contains(p)) {
                                     if let Some(p)=pointer_pos {
                                         let mode=if p.x<=clip.left()+12.0 {1}
                                             else if p.x>=clip.right()-12.0 {2}else{0};
@@ -7871,7 +7883,8 @@ impl eframe::App for StickApp {
                                     egui::Align2::LEFT_CENTER,
                                     format!("{}–{}",video_start,video_end),
                                     egui::FontId::monospace(10.0),egui::Color32::WHITE);
-                                if pointer_pressed && pointer_pos.is_some_and(|p|clip.contains(p)) {
+                                if !layer.locked && pointer_pressed
+                                    && pointer_pos.is_some_and(|p|clip.contains(p)) {
                                     self.video_drag_origin=Some((video_layer,video_start));
                                     self.video_drag_pointer_x=pointer_pos.map(|p|p.x);
                                     self.video_drag_undo_captured=false;
@@ -8273,9 +8286,7 @@ impl eframe::App for StickApp {
             match action {
                 timeline_ops::FrameAction::Copy => self.copy_frame(layer_index,frame_index),
                 timeline_ops::FrameAction::Cut => {
-                    self.copy_frame(layer_index,frame_index);
-                    let _=self.edit_timeline_frame(
-                        layer_index,frame_index,timeline_ops::FrameAction::BlankKeyframe);
+                    let _=self.cut_frame(layer_index,frame_index);
                 }
                 timeline_ops::FrameAction::Paste => self.paste_frame(layer_index,frame_index),
                 edit => { self.edit_timeline_frame(layer_index,frame_index,edit); }
@@ -9851,6 +9862,23 @@ mod tool_discovery_tests {
         assert_eq!(StickApp::image_layer_range(&layer,30),Some((3,12)));
         assert!(layer.keyframes.get(&3).is_some_and(|f|!f.media_items.is_empty()));
         assert!(layer.keyframes.get(&13).is_some_and(|f|f.media_items.is_empty()));
+    }
+
+    #[test]
+    fn cut_frame_copies_visible_pose_and_leaves_blank_key() {
+        let mut app=StickApp::new(&egui::Context::default());
+        app.config.sound_effects_enabled=false;
+        app.project.layers[0].keyframes.get_mut(&1).unwrap().strokes.push(Stroke {
+            points:vec![StrokePoint{x:10.,y:20.,pressure:1.}],
+            color:[1,2,3,255],fill_color:None,base_width:5.,is_vector:false,
+            brush_preset:KritaBrushPreset::GPenInk,opacity:1.0,
+            brush_texture_id:None,tip_shape:BrushTipShape::Round,
+        });
+        assert!(app.cut_frame(0,1));
+        assert_eq!(app.clipboard_frame.as_ref().unwrap().strokes.len(),1);
+        assert!(app.project.layers[0].keyframes[&1].strokes.is_empty());
+        assert_eq!(app.project.layers[0].keyframes[&1].timeline_marker,FrameMarkerKind::Blank);
+        assert!(app.has_unsaved_changes);
     }
 
     #[test]
