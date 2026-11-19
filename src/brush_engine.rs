@@ -461,16 +461,22 @@ mod tests {
     }
 
     #[test]
-    fn meaningful_pressure_gpen_still_uses_pressure_outline() {
+    fn meaningful_pressure_gpen_uses_clean_round_pressure_dabs() {
         let s=Stroke {
             points:vec![point(0.,0.,0.25),point(20.,0.,0.7),point(40.,5.,1.0)],
             color:[0,0,0,255],fill_color:None,base_width:8.,is_vector:false,
             brush_preset:KritaBrushPreset::GPenInk,opacity:1.,brush_texture_id:None,
             tip_shape:BrushTipShape::Round,
         };
+        let mut dots=0;
         let mut outlines=0;
-        visit_round_marks(&s,|mark,_|if matches!(mark,RoundMark::Outline(_)){outlines+=1});
-        assert_eq!(outlines,1);
+        visit_round_marks(&s,|mark,_|match mark {
+            RoundMark::Dot(_)=>dots+=1,
+            RoundMark::Outline(_)=>outlines+=1,
+            RoundMark::Line{..}=>{}
+        });
+        assert!(dots>2);
+        assert_eq!(outlines,0);
     }
 
     #[test]
