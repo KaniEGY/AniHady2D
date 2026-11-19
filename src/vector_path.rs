@@ -229,14 +229,37 @@ pub fn quick_edit_node_in_selection(
         return Some(QuickNodeEdit::Removed{stroke:si,point:pi});
     }
 
+    // Hit-test the same smoothed curve the user actually sees. The previous
+    // code tested only the straight control-point chords, so a right click on
+    // a visibly curved section could miss even though the cursor was on ink.
     let mut nearest_segment: Option<(usize,usize,f32,f32,f32,f32)> = None;
     for (si,stroke) in strokes.iter().enumerate()
         .filter(|(si,s)|s.is_vector && (selected_strokes.is_empty() || selected_strokes.contains(si))) {
-        for (segment,pair) in stroke.points.windows(2).enumerate() {
-            let Some((px,py,t,d))=segment_projection(&pair[0],&pair[1],x,y) else {continue};
-            if d<=tolerance && nearest_segment.is_none_or(|(_,_,_,_,_,best)|d<best) {
-                nearest_segment=Some((si,segment,px,py,t,d));
+        let rendered=smoothed_path(&stroke.points);
+        let mut nearest_visible:Option<(f32,f32,f32)>=None;
+        for pair in rendered.windows(2) {
+            let a=StrokePoint{x:pair[0].0,y:pair[0].1,pressure:1.0};
+            let b=StrokePoint{x:pair[1].0,y:pair[1].1,pressure:1.0};
+            let Some((px,py,_,d))=segment_projection(&a,&b,x,y) else {continue};
+            if nearest_visible.is_none_or(|(_,_,best)|d<best) {
+                nearest_visible=Some((px,py,d));
             }
+        }
+        let Some((vx,vy,visible_distance))=nearest_visible else {continue};
+        if visible_distance>tolerance {continue;}
+        // Map the visible hit back to its nearest editable control segment.
+        // The new node is placed exactly on the rendered curve at the click,
+        // while pressure is interpolated from that owning control segment.
+        let mut raw_owner:Option<(usize,f32,f32)>=None;
+        for (segment,pair) in stroke.points.windows(2).enumerate() {
+            let Some((_,_,t,d))=segment_projection(&pair[0],&pair[1],vx,vy) else {continue};
+            if raw_owner.is_none_or(|(_,_,best)|d<best) {
+                raw_owner=Some((segment,t,d));
+            }
+        }
+        let Some((segment,t,_))=raw_owner else {continue};
+        if nearest_segment.is_none_or(|(_,_,_,_,_,best)|visible_distance<best) {
+            nearest_segment=Some((si,segment,vx,vy,t,visible_distance));
         }
     }
     let (si,segment,px,py,t,_)=nearest_segment?;
@@ -312,6 +335,27 @@ mod tests {
         let edit=quick_edit_node(&mut strokes,50.,0.,5.).unwrap();
         assert!(matches!(edit,QuickNodeEdit::Removed{stroke:0,point:1}));
         assert_eq!(strokes[0].points.len(),3);
+    }
+
+    #[test]
+    fn quick_node_edit_hits_the_visible_smoothed_curve_not_only_raw_chords() {
+        let mut strokes=vec![vector(&[(0.,0.),(70.,0.),(120.,45.),(190.,45.)])];
+        let rendered=smoothed_path(&strokes[0].points);
+        let mut chosen=None;
+        for &(x,y) in rendered.iter().skip(2).take(rendered.len().saturating_sub(4)) {
+            let raw_distance=strokes[0].points.windows(2)
+                .filter_map(|pair|segment_projection(&pair[0],&pair[1],x,y).map(|v|v.3))
+                .fold(f32::INFINITY,f32::min);
+            if raw_distance>1.0 {chosen=Some((x,y,raw_distance));break;}
+        }
+        let (x,y,raw_distance)=chosen.expect("curve must deviate from at least one raw chord");
+        let tolerance=(raw_distance*0.6).max(0.4);
+        assert!(strokes[0].points.windows(2).all(|pair|
+            segment_projection(&pair[0],&pair[1],x,y).is_none_or(|v|v.3>tolerance)));
+        let before=strokes[0].points.len();
+        assert!(matches!(quick_edit_node(&mut strokes,x,y,tolerance),
+            Some(QuickNodeEdit::Inserted{..})));
+        assert_eq!(strokes[0].points.len(),before+1);
     }
 
     #[test]
