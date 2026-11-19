@@ -1098,6 +1098,16 @@ mod brush_tip_compat_tests {
     }
 
     #[test]
+    fn graphite_pencil_is_a_new_serializable_preset_without_reordering_old_ones() {
+        let json=serde_json::to_string(&KritaBrushPreset::GraphitePencil).unwrap();
+        let restored:KritaBrushPreset=serde_json::from_str(&json).unwrap();
+        assert_eq!(restored,KritaBrushPreset::GraphitePencil);
+        assert_eq!(KritaBrushPreset::MENU.len(),15);
+        assert!(KritaBrushPreset::MENU.iter().any(|(preset,_,ar)|
+            *preset==KritaBrushPreset::GraphitePencil && *ar=="قلم رصاص"));
+    }
+
+    #[test]
     fn old_onion_skin_settings_get_fade_defaults() {
         let settings: OnionSkinSettings = serde_json::from_str(
             r#"{"enabled":true,"frames_before":2,"frames_after":2,"color_before":[255,80,80,90],"color_after":[80,255,100,90]}"#
