@@ -96,6 +96,18 @@ pub fn visit_round_marks(stroke: &Stroke, mut paint: impl FnMut(RoundMark, f32))
                 // Canvas/export renderers substitute this preset's smoothed centerline.
             }
             if varying {
+                if has_risky_turn(&stroke.points) {
+                    // Ordinary translucent/soft brushes must never explode into
+                    // a folded pressure polygon on a tight reversal. Preserve a
+                    // continuous stroke for that rare geometry instead.
+                    paint(
+                        RoundMark::Line {
+                            width:(width*pressure).max(0.5),
+                        },
+                        flow,
+                    );
+                    continue;
+                }
                 let outline = crate::stroke_geometry::pressure_outline(&stroke.points, width);
                 if !outline.is_empty() {
                     paint(RoundMark::Outline(outline), flow);
@@ -407,6 +419,25 @@ mod tests {
         let corner=vec![point(0.,0.,1.),point(20.,0.,1.),point(20.,20.,1.)];
         let smooth=smooth_krita_2d_points(&corner,10.);
         assert_eq!((smooth[1].x,smooth[1].y),(20.,0.));
+    }
+
+    #[test]
+    fn ordinary_brush_hairpin_never_uses_folded_pressure_outline() {
+        let s=Stroke {
+            points:vec![point(0.,0.,0.3),point(20.,0.,1.0),point(1.,1.,0.5)],
+            color:[0,0,0,255],fill_color:None,base_width:14.,is_vector:false,
+            brush_preset:KritaBrushPreset::Watercolor,opacity:0.7,brush_texture_id:None,
+            tip_shape:BrushTipShape::Round,
+        };
+        let mut lines=0;
+        let mut outlines=0;
+        visit_round_marks(&s,|mark,_|match mark {
+            RoundMark::Line{..}=>lines+=1,
+            RoundMark::Outline(_)=>outlines+=1,
+            RoundMark::Dot(_)=>{}
+        });
+        assert!(lines>0);
+        assert_eq!(outlines,0);
     }
 
     #[test]
