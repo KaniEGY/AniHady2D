@@ -1,6 +1,6 @@
 use crate::persistence::sniff::{DetectedFormat, SniffResult};
 use crate::project::{
-    AniProject, FrameData, Layer, OnionSkinSettings, PROJECT_SCHEMA_VERSION,
+    AniProject, FrameData, Layer, LayerEffectPreset, OnionSkinSettings, PROJECT_SCHEMA_VERSION,
 };
 use serde::Deserialize;
 use std::collections::HashMap;
