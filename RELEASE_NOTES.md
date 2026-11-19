@@ -34,6 +34,16 @@
 - Frame provenance is now preserved through next-key creation, clipboard paste and New mine multi-copy: inserted empty = green circle, copied pose = red circle, explicit blank = white circle with black outline, authored/drawn legacy content keeps its drawn-frame marker.
 
 ### Bugs fixed
+- Level-up celebrations now last 4 seconds, can be disabled independently from General Settings, and Egyptian Arabic gains 100 new hand-written motivational/joke lines in addition to the existing message combinations.
+- Vector Nodes right-click editing is now always active: right-click a node to remove it or a selected vector segment to insert a node. The old enable/disable checkbox and duplicate simplify action were removed; the tool now exposes a 10–100% Node Density control and uses a larger screen-consistent edit hit radius.
+- Text objects now support persistent Free Transform rotation. Rotated text selection/hit-testing follows the visible text, and PNG/video export preserves the same text angle.
+- Image/video properties now include opacity presets (100/75/50/25/10%) plus a continuous media-opacity slider.
+- Layer rename is isolated to the layer name only; image/video media paths and keyframes are regression-tested to remain unchanged when a layer is renamed.
+- Every layer now has a ✦ effects menu with non-destructive None/Warm/Cool/Rose/Mint/Night/Vintage presets. Effects are saved per layer and applied consistently to canvas media, strokes, fills, text, symbols and exports.
+- The frame context menu now includes Cut Frame. Cut copies the visible pose to the frame clipboard and leaves a blank keyframe at the source; the redundant Clear Frame entry was removed because Blank Keyframe already performs the same content-clearing operation.
+- Imported still images now get a dedicated timeline clip lane: drag the body to move the image exposure, drag the left grip to change its start, and drag the right grip to extend/shorten its end. The image end is stored explicitly so later timeline growth cannot accidentally extend it.
+- Imported video clips remain fixed-duration but can be moved left/right as one unit. Image/video clip dragging and layer effects respect layer locks.
+
 - Free Transform's custom cursor is now centered exactly on the real mouse hotspot. The previous generic tool-icon offset drew the visible transform cursor about 20 pixels down/right from the actual click/drag coordinate, making selection rectangles and handle interactions look misaligned.
 - Transform selection, resize, rotate and X/Y axis hit-testing continue to use the same exact screen-space pointer coordinate, including after zoom, pan, canvas rotation or flips.
 
@@ -305,6 +315,16 @@
 - أيقونة أداة التحويل بقت أصغر ومختلفة وواضحة عن أداة التحديد.
 
 ### المشاكل اللي اتصلحت
+- رسالة ارتفاع المستوى بقت تظهر 4 ثواني، وتقدر تقفلها لوحدها من الإعدادات العامة، وضفنا 100 جملة وإفيه تحفيزي جديد بالمصري بجانب الرسائل الموجودة.
+- أداة نقاط الفيكتور: الكلك اليمين بقى شغال تلقائيًا من غير Checkbox؛ على نقطة يحذفها، وعلى جزء من خط فيكتور محدد يضيف نقطة. شيلنا الخيارات المكررة وبقت الخصائص فيها شريط كثافة نقاط من 10% لـ100%، وكبّرنا مساحة الالتقاط بشكل ثابت مع الزوم.
+- النص بقى يلف فعلًا بأداة Free Transform، والزاوية بتتحفظ في المشروع، والتحديد والـHit Test بيتبعوا النص الملفوف، والتصدير بيحافظ على نفس الزاوية.
+- خصائص الصورة والفيديو فيها دلوقتي فلاتر شفافية سريعة 100/75/50/25/10% مع Slider حر.
+- تغيير اسم اللير بقى يغيّر الاسم فقط؛ مسار الصورة/الفيديو والكي فريمات ما بيتلمسوش، ومعاه اختبار يمنع رجوع مشكلة اختفاء الميديا بعد إعادة التسمية.
+- اتضافت علامة ✦ لكل لير للمؤثرات: بدون / دافئ / بارد / وردي / نعناعي / ليلي / فينتاج. المؤثر محفوظ على اللير فقط وبيظهر بنفس الشكل في الكانفا والتصدير على الصور والخطوط والتعبئة والنص والـSymbols.
+- قائمة كلك يمين على الفريم بقت أرتب واتضاف «قص الفريم». القص يحط الوضع المرئي في الحافظة ويسيّب مكانه كي فريم فاضي؛ وشيلنا «امسح محتوى الفريم» من القائمة لأنه كان بيكرر وظيفة «كي فريم فاضي».
+- الصور المستوردة بقى لها Clip lane مستقل: اسحب من المنتصف لتحريكها يمين/شمال، من الحافة الشمال لتغيير البداية، ومن الحافة اليمين لمد أو تقصير النهاية. نهاية الصورة بتتحفظ صراحة عشان ما تتمدش لو طول التايم لاين زاد بعدين.
+- الفيديو يفضل بمدته الأصلية من غير Stretch، لكن تقدر تحركه يمين وشمال ككتلة واحدة. سحب الصورة/الفيديو والمؤثرات يحترموا قفل اللير.
+
 - مؤشر أداة التحويل بقى في نفس مكان نقطة الماوس الحقيقية بالظبط. الإزاحة القديمة بتاعة أيقونات الأدوات كانت بتخلّي شكل مؤشر Transform ظاهر حوالي 20 بكسل يمين وتحت مكان الضغط، وده كان بيخلي مربع التحديد والـHitbox يبانوا بعيد عن الماوس.
 - التحديد والتكبير/التصغير والتدوير ومحاور X/Y في Transform بيستخدموا نفس إحداثيات الشاشة الدقيقة حتى مع الزوم والتحريك وتدوير أو عكس الكانفا.
 
