@@ -715,6 +715,10 @@ struct AppConfig {
     brush_smaller: String,
     brush_larger: String,
     reset_canvas: String,
+    #[serde(default = "default_flip_canvas_h_key")]
+    flip_canvas_h_key: String,
+    #[serde(default = "default_flip_canvas_v_key")]
+    flip_canvas_v_key: String,
 }
 
 fn default_true_val() -> bool { true }
@@ -741,6 +745,9 @@ fn default_tablet_min_pressure() -> f32 { 0.02 }
 fn default_quick_color_key() -> String { "Z".to_string() }
 fn default_size_gesture_key() -> String { "Alt".to_string() }
 fn default_opacity_gesture_key() -> String { "Ctrl".to_string() }
+fn default_flip_canvas_h_key() -> String { "V".to_string() }
+fn default_flip_canvas_v_key() -> String { "F".to_string() }
+fn default_select_compat_key() -> String { "M".to_string() }
 fn update_canvas_primary_capture(
     current: bool,
     pointer_pressed: bool,
@@ -854,7 +861,7 @@ impl Default for AppConfig {
             cloud_google_client_id: default_google_client_id(),
             cloud_email: String::new(),
             cloud_auto_backup: false,
-            tool_select: "V".to_string(),
+            tool_select: default_select_compat_key(),
             tool_lasso: "L".to_string(),
             tool_free_transform: "Q".to_string(),
             tool_vector_select: "G".to_string(),
@@ -881,6 +888,8 @@ impl Default for AppConfig {
             brush_smaller: "OpenBracket".to_string(),
             brush_larger: "CloseBracket".to_string(),
             reset_canvas: "R".to_string(),
+            flip_canvas_h_key: default_flip_canvas_h_key(),
+            flip_canvas_v_key: default_flip_canvas_v_key(),
         }
     }
 }
@@ -911,6 +920,13 @@ impl AppConfig {
                     // embedded in updated official releases.
                     parsed.cloud_google_client_id =
                         resolve_saved_google_client_id(&parsed.cloud_google_client_id);
+                    // V is now the requested horizontal-canvas mirror shortcut.
+                    // Old installs used V only as a retired Transform alias,
+                    // so migrate that legacy default out of the way.
+                    if parsed.tool_select.eq_ignore_ascii_case("V")
+                        && parsed.flip_canvas_h_key.eq_ignore_ascii_case("V") {
+                        parsed.tool_select = default_select_compat_key();
+                    }
                     return parsed;
                 }
             }
@@ -1316,6 +1332,25 @@ fn draw_layer_status_icon(painter: &egui::Painter, rect: egui::Rect, visible: bo
 
 // Cohesive two-tone vector icons adapted to the colorful toolbar reference.
 // They stay crisp at high-DPI scaling and at the smaller mouse-cursor size.
+fn tool_cursor_rect_at_hotspot(
+    tool: ActiveToolUI,
+    pointer: egui::Pos2,
+    icon_size: f32,
+) -> egui::Rect {
+    let scale=(icon_size/26.0).clamp(0.6,2.0);
+    // Local point inside each icon that visually represents the actual click.
+    // Most tools act from their center. Arrow selection and eyedropper have
+    // obvious tips, while Lasso acts from the center of its loop.
+    let local_hotspot=match tool {
+        ActiveToolUI::SelectNormal => egui::vec2(-7.0,-10.0),
+        ActiveToolUI::SelectLasso => egui::vec2(-2.5,-3.5),
+        ActiveToolUI::Eyedropper => egui::vec2(-10.0,10.0),
+        _ => egui::Vec2::ZERO,
+    };
+    let center=pointer-local_hotspot*scale;
+    egui::Rect::from_center_size(center,egui::vec2(icon_size,icon_size))
+}
+
 fn draw_tool_ui_icon(painter: &egui::Painter, rect: egui::Rect, tool: ActiveToolUI, active: bool) {
     let c = rect.center();
     let primary = get_tool_ui_color(tool);
@@ -4881,7 +4916,8 @@ impl eframe::App for StickApp {
             scroll_y, close_req, pointer_down, pointer_pressed, pointer_released, pointer_pos, primary_press_pos,
             sc_select, sc_lasso, sc_free_tr, sc_vec_sel, sc_sculpt, sc_pen, sc_brush, sc_eraser, sc_eraser_partial,
             sc_bucket, sc_eyedropper, sc_text, sc_shape, sc_hand, sc_del_frame, sc_f6, sc_f7, sc_f8,
-            sc_play, sc_prev, sc_next, sc_smaller, sc_larger, sc_reset_canvas, pressed_key_name,
+            sc_play, sc_prev, sc_next, sc_smaller, sc_larger, sc_reset_canvas,
+            sc_flip_canvas_h, sc_flip_canvas_v, pressed_key_name,
         ) = ctx.input(|i| {
             let mut captured_key = None;
             for event in &i.events {
@@ -4946,6 +4982,8 @@ impl eframe::App for StickApp {
                 is_shortcut_pressed(i, &self.config.brush_smaller),
                 is_shortcut_pressed(i, &self.config.brush_larger),
                 is_shortcut_pressed(i, &self.config.reset_canvas),
+                is_shortcut_pressed(i, &self.config.flip_canvas_h_key),
+                is_shortcut_pressed(i, &self.config.flip_canvas_v_key),
                 captured_key,
             )
         });
@@ -5008,6 +5046,8 @@ impl eframe::App for StickApp {
                 100 => self.config.quick_color_key = k_name,
                 101 => self.config.size_gesture_key = k_name,
                 102 => self.config.opacity_gesture_key = k_name,
+                103 => self.config.flip_canvas_h_key = k_name,
+                104 => self.config.flip_canvas_v_key = k_name,
                 _ => {}
             }
             self.config.save();
@@ -5078,6 +5118,8 @@ impl eframe::App for StickApp {
             }
 
             if sc_reset_canvas { self.pan_offset = egui::Vec2::ZERO; self.zoom_level = 0.75; self.canvas_rotation_deg = 0.0; self.canvas_flip_h = false; self.canvas_flip_v = false; }
+            if sc_flip_canvas_h { self.canvas_flip_h = !self.canvas_flip_h; ctx.request_repaint(); }
+            if sc_flip_canvas_v { self.canvas_flip_v = !self.canvas_flip_v; ctx.request_repaint(); }
             // The retired Selection shortcut remains a compatibility alias for Transform.
             if sc_select || sc_free_tr { self.active_tool_ui = ActiveToolUI::FreeTransform; }
             if sc_lasso { self.active_tool_ui = ActiveToolUI::SelectLasso; }
@@ -5374,6 +5416,8 @@ impl eframe::App for StickApp {
                             ("Quick color wheel","عجلة الألوان السريعة",self.config.quick_color_key.as_str()),
                             ("Adjust tool size (hold + move mouse)","تغيير حجم الأداة (ضغط مطول + حركة الماوس)",self.config.size_gesture_key.as_str()),
                             ("Adjust opacity (hold + move mouse)","تغيير الشفافية (ضغط مطول + حركة الماوس)",self.config.opacity_gesture_key.as_str()),
+                            ("Mirror canvas horizontally","عكس الكانفا يمين/شمال",self.config.flip_canvas_h_key.as_str()),
+                            ("Flip canvas vertically","قلب الكانفا فوق/تحت",self.config.flip_canvas_v_key.as_str()),
                         ] {
                             ui.horizontal(|ui| {
                                 ui.label(tr(lang,en,ar));
@@ -5613,6 +5657,8 @@ impl eframe::App for StickApp {
                                 (100usize,"Quick color wheel","عجلة الألوان السريعة",self.config.quick_color_key.clone()),
                                 (101usize,"Adjust tool size (hold)","تغيير حجم الأداة بالضغط المطول",self.config.size_gesture_key.clone()),
                                 (102usize,"Adjust opacity (hold)","تغيير الشفافية بالضغط المطول",self.config.opacity_gesture_key.clone()),
+                                (103usize,"Mirror canvas horizontally","عكس الكانفا يمين/شمال",self.config.flip_canvas_h_key.clone()),
+                                (104usize,"Flip canvas vertically","قلب الكانفا فوق/تحت",self.config.flip_canvas_v_key.clone()),
                             ] {
                                 ui.horizontal(|ui| {
                                     ui.label(tr(lang,en,ar));
@@ -5649,6 +5695,8 @@ impl eframe::App for StickApp {
                             self.config.quick_color_key = d.quick_color_key;
                             self.config.size_gesture_key = d.size_gesture_key;
                             self.config.opacity_gesture_key = d.opacity_gesture_key;
+                            self.config.flip_canvas_h_key = d.flip_canvas_h_key;
+                            self.config.flip_canvas_v_key = d.flip_canvas_v_key;
                             self.listening_shortcut_idx = None;
                             self.config.save();
                         }
@@ -9871,28 +9919,10 @@ impl eframe::App for StickApp {
             } else if show_tool_icon {
                 if let Some(p) = pointer_pos {
                     let icon_size=(26.0*self.config.tool_icon_scale.clamp(0.6,2.0)).max(16.0);
-                    // Eyedropper used to render its nib ~30px BELOW the real
-                    // mouse hotspot while hiding the system cursor. Align the
-                    // nib (icon local -10,+10) exactly with pointer_pos.
-                    let rect = if matches!(self.active_tool_ui,
-                        ActiveToolUI::FreeTransform | ActiveToolUI::VectorDirectSelect) {
-                        // Free Transform is a symmetric gizmo. Its visible center
-                        // MUST be the same screen coordinate used by selection,
-                        // resize/rotate handles and drag hit-testing. The old
-                        // generic +8/+7 icon offset hid the OS cursor and made
-                        // the apparent mouse sit ~20px down/right from the real
-                        // pointer, exactly like the reported marquee mismatch.
-                        transform_handles::cursor_rect_at_hotspot(p,icon_size)
-                    } else {
-                        let icon_center = if self.active_tool_ui == ActiveToolUI::Eyedropper {
-                            let s=icon_size/26.0;
-                            p + egui::vec2(10.0*s,-10.0*s)
-                        } else {
-                            p + egui::vec2(8.0+icon_size*0.5,7.0+icon_size*0.5)
-                        };
-                        egui::Rect::from_center_size(icon_center,
-                            egui::vec2(icon_size, icon_size))
-                    };
+                    // The visible cursor icon and the coordinate used for
+                    // hit-testing must share exactly the same hotspot.
+                    let rect=tool_cursor_rect_at_hotspot(
+                        self.active_tool_ui,p,icon_size);
                     let tool_color = self.online_participants.iter()
                         .find(|participant| self.online_session.is_some()
                             && participant.name == self.user_profile.username)
@@ -9957,6 +9987,26 @@ fn main() -> eframe::Result<()> {
 #[cfg(test)]
 mod tool_discovery_tests {
     use super::*;
+
+    #[test]
+    fn tool_cursor_hotspots_land_on_real_pointer() {
+        let pointer=egui::pos2(300.0,200.0);
+        let size=26.0;
+        let select=tool_cursor_rect_at_hotspot(ActiveToolUI::SelectNormal,pointer,size);
+        assert_eq!(select.center()+egui::vec2(-7.0,-10.0),pointer);
+        let eyedropper=tool_cursor_rect_at_hotspot(ActiveToolUI::Eyedropper,pointer,size);
+        assert_eq!(eyedropper.center()+egui::vec2(-10.0,10.0),pointer);
+        let transform=tool_cursor_rect_at_hotspot(ActiveToolUI::FreeTransform,pointer,size);
+        assert_eq!(transform.center(),pointer);
+    }
+
+    #[test]
+    fn canvas_flip_shortcuts_default_to_requested_v_and_f() {
+        let c=AppConfig::default();
+        assert_eq!(c.flip_canvas_h_key,"V");
+        assert_eq!(c.flip_canvas_v_key,"F");
+        assert_ne!(c.tool_select,c.flip_canvas_h_key);
+    }
 
     #[test]
     fn canvas_primary_capture_never_starts_from_timeline_drag() {
