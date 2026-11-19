@@ -7398,7 +7398,14 @@ impl eframe::App for StickApp {
                                 } else {
                                     egui::Color32::from_rgb(cell[0], cell[1], cell[2])
                                 };
-                                if advanced {
+                                if clip_style {
+                                    timeline_styles::draw_clip_cell(
+                                        ui.painter(),cr,
+                                        if is_kf {key} else {None},
+                                        (self.project.width as f32,self.project.height as f32),
+                                        self.current_frame==f,selected_key,
+                                        layer.locked || is_b);
+                                } else if advanced {
                                     advanced_timeline::render_exposure_cell(ui.painter(),cr,is_kf,
                                         has_d && !is_b,marker,tw,self.current_frame==f,
                                         selected_key,
@@ -7422,7 +7429,7 @@ impl eframe::App for StickApp {
                                 }
                                 if !is_b { draw_stick_timeline_cell(ui.painter(), cr, is_kf, has_d, tw, marker); }
                                 }
-                                if selected_key && !advanced {
+                                if selected_key && !advanced && !clip_style {
                                     ui.painter().rect_stroke(
                                         cr.shrink(1.5),4.0,
                                         egui::Stroke::new(2.0,egui::Color32::from_rgb(75,210,255)));
@@ -7931,16 +7938,26 @@ impl eframe::App for StickApp {
         if let Some((selected,layer_delta,frame_delta,mode))=advanced_relocate_request {
             // Rejected drags must not create an Undo snapshot.
             let mut next=self.project.clone();
-            match advanced_timeline::relocate_keyframes(
-                &mut next,&selected,layer_delta,frame_delta,mode) {
+            let result=if mode==advanced_timeline::RelocateMode::Move
+                && layer_delta==0 && selected.len()==1 {
+                let source=selected[0];
+                let target=(source.frame as i64+i64::from(frame_delta)) as usize;
+                advanced_timeline::move_keyframe_with_push(&mut next,source,target)
+                    .map(|cell|vec![cell])
+            } else {
+                advanced_timeline::relocate_keyframes(
+                    &mut next,&selected,layer_delta,frame_delta,mode)
+            };
+            match result {
                 Ok(destination) => {
                     self.save_undo_state();
                     self.project=next;
+                    self.timeline_length=self.timeline_length.max(self.project.total_frames);
                     self.advanced_selected_cels=destination;
                     self.has_unsaved_changes=true;
                     self.status_message=tr(lang,
-                        "Keyframes moved to the new timeline position.",
-                        "تم نقل الكي فريمات للمكان الجديد في التايم لاين.").to_string();
+                        "Keyframe moved; an occupied destination is pushed forward.",
+                        "تم نقل الكي فريم، ولو المكان مشغول الفريمات بتتزق لقدّام.").to_string();
                 }
                 Err(reason) => {self.status_message=reason.to_string();}
             }
