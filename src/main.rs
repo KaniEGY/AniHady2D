@@ -113,6 +113,7 @@ enum SymmetryMode {
     Off,
     Horizontal,
     Vertical,
+    Quad,
 }
 
 #[derive(Clone, PartialEq)]
@@ -625,6 +626,8 @@ struct AppConfig {
     #[serde(default = "default_true_val")]
     timeline_show_timecodes: bool,
     #[serde(default = "default_true_val")]
+    timeline_fps_locked: bool,
+    #[serde(default = "default_true_val")]
     show_top_bar: bool,
     #[serde(default = "default_true_val")]
     show_left_dock: bool,
@@ -800,6 +803,7 @@ impl Default for AppConfig {
             timeline_new_cell_width: default_new_timeline_cell_width(),
             timeline_new_row_height: default_new_timeline_row_height(),
             timeline_show_timecodes: true,
+            timeline_fps_locked: true,
             show_top_bar: true,
             show_left_dock: true,
             show_right_dock: true,
@@ -2847,30 +2851,57 @@ impl StickApp {
     fn ensure_editable_keyframe(&mut self) {
         if let Some(layer) = self.project.layers.get_mut(self.active_layer_idx) {
             if !layer.keyframes.contains_key(&self.current_frame) {
-                let mut inherited = Self::get_effective_keyframe_index(layer, self.current_frame)
+                let inherited = Self::get_effective_keyframe_index(layer, self.current_frame)
                     .and_then(|k| layer.keyframes.get(&k).cloned())
                     .unwrap_or_default();
-                inherited.timeline_marker = FrameMarkerKind::Legacy;
                 layer.keyframes.insert(self.current_frame, inherited);
+            }
+            // Any actual editing path calls this helper. Once a copied/blank
+            // frame is edited it becomes an authored frame (white marker).
+            if let Some(frame)=layer.keyframes.get_mut(&self.current_frame) {
+                frame.timeline_marker=FrameMarkerKind::Legacy;
             }
         }
     }
 
-    fn mirrored_stroke(&self, stroke: &Stroke) -> Option<Stroke> {
-        let (stage_w, stage_h) = (self.project.width as f32, self.project.height as f32);
-        let mut mirrored = stroke.clone();
+    fn symmetry_strokes(&self, stroke: Stroke) -> Vec<Stroke> {
+        let (stage_w,stage_h)=(self.project.width as f32,self.project.height as f32);
+        let mirror_x=|source:&Stroke| {
+            let mut s=source.clone();
+            for p in &mut s.points {p.x=stage_w-p.x;}
+            s
+        };
+        let mirror_y=|source:&Stroke| {
+            let mut s=source.clone();
+            for p in &mut s.points {p.y=stage_h-p.y;}
+            s
+        };
+        let different=|a:&Stroke,b:&Stroke| a.points.iter().zip(&b.points)
+            .any(|(p,q)|(p.x-q.x).abs()>0.001||(p.y-q.y).abs()>0.001);
+
+        let mut result=vec![stroke.clone()];
         match self.symmetry_mode {
+            SymmetryMode::Off => {}
             SymmetryMode::Horizontal => {
-                for p in &mut mirrored.points { p.x = stage_w - p.x; }
+                let x=mirror_x(&stroke);
+                if different(&stroke,&x){result.push(x);}
             }
             SymmetryMode::Vertical => {
-                for p in &mut mirrored.points { p.y = stage_h - p.y; }
+                let y=mirror_y(&stroke);
+                if different(&stroke,&y){result.push(y);}
             }
-            SymmetryMode::Off => return None,
+            SymmetryMode::Quad => {
+                let x=mirror_x(&stroke);
+                let y=mirror_y(&stroke);
+                let xy=mirror_y(&x);
+                for candidate in [x,y,xy] {
+                    if result.iter().all(|existing|different(existing,&candidate)) {
+                        result.push(candidate);
+                    }
+                }
+            }
         }
-        let changed = stroke.points.iter().zip(&mirrored.points)
-            .any(|(a,b)| (a.x-b.x).abs() > 0.001 || (a.y-b.y).abs() > 0.001);
-        changed.then_some(mirrored)
+        result
     }
 
     fn active_sizable_tool_size(&self) -> Option<f32> {
@@ -2955,9 +2986,7 @@ impl StickApp {
                 return;
             }
         }
-        let mirrored = self.mirrored_stroke(&stroke);
-        let mut strokes_to_add = vec![stroke];
-        if let Some(m) = mirrored { strokes_to_add.push(m); }
+        let strokes_to_add=self.symmetry_strokes(stroke);
         self.ensure_editable_keyframe();
         if let Some(layer) = self.project.layers.get_mut(self.active_layer_idx) {
             layer.keyframes.entry(self.current_frame).or_default().strokes.extend(strokes_to_add);
