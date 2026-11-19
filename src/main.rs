@@ -6,6 +6,7 @@ mod texture_brush;
 mod stroke_geometry;
 mod sculpt_tools;
 mod stylus;
+mod input_sampling;
 mod updater;
 mod changelog;
 mod exporter;
@@ -4956,17 +4957,27 @@ impl eframe::App for StickApp {
         let opacity_gesture_down=ctx.input(|i|
             is_hold_shortcut_active(i,&self.config.opacity_gesture_key));
 
+        // Keep every pointer move delivered in this frame. Reading only
+        // interact_pos() drops intermediate pen/mouse samples on busy frames.
+        let pointer_samples=ctx.input(|i| input_sampling::primary_pointer_samples(
+            &i.events,pointer_pressed,pointer_down,pointer_pos));
+
         // Best-effort tablet pressure delivered by egui Touch events.
-        // Regular mouse input and unsupported tablets safely use 1.0.
+        // A pressure-capable pen that reports zero/missing pressure on lift
+        // stays at zero for that contact instead of becoming a 100% mouse dab.
         let raw_drawing_pressure =
             ctx.input(|i| self.stylus_tracker.update(&i.events, pointer_pos, pointer_down));
         let pressure_available = self.stylus_tracker.pressure_is_available();
         let drawing_pressure = if self.config.tablet_pressure_enabled && pressure_available {
-            let minimum = self.config.tablet_min_pressure.clamp(0.0, 0.35);
-            let sensitivity = self.config.tablet_pressure_sensitivity.clamp(0.25, 3.0);
-            raw_drawing_pressure.max(minimum)
-                .powf(1.0 / sensitivity)
-                .clamp(0.02, 1.0)
+            if raw_drawing_pressure <= 0.001 {
+                0.0
+            } else {
+                let minimum = self.config.tablet_min_pressure.clamp(0.0, 0.35);
+                let sensitivity = self.config.tablet_pressure_sensitivity.clamp(0.25, 3.0);
+                raw_drawing_pressure.max(minimum)
+                    .powf(1.0 / sensitivity)
+                    .clamp(0.02, 1.0)
+            }
         } else {
             1.0
         };
@@ -8994,47 +9005,82 @@ impl eframe::App for StickApp {
                         }
                         ActiveToolUI::VectorPen if pointer_down => {
                             let stab = self.vector_stabilizer_strength.clamp(0.0, 0.70);
-                            let raw_previous=self.last_pointer_pos.map(|p|to_stage(p));
-                            let smooth = self.stabilized_cursor.map_or(stage_pos, |previous| {
-                                let (x,y)=stroke_geometry::adaptive_stabilized_xy(
-                                    (previous.x,previous.y),
-                                    raw_previous.map(|p|(p.x,p.y)),
-                                    (stage_pos.x,stage_pos.y),stab);
-                                egui::pos2(x,y)
-                            });
-                            self.stabilized_cursor = Some(smooth);
-                            if let Some(stroke) = &mut self.current_stroke {
-                                if let Some(last) = stroke.points.last() {
-                                    if stroke.points.len() < 20_000 &&
-                                        (last.x - smooth.x).hypot(last.y - smooth.y) >= 1.5 {
-                                        stroke.points.push(StrokePoint { x: smooth.x, y: smooth.y, pressure: 1.0 });
+                            let mut raw_previous=self.last_pointer_pos.map(|p|to_stage(p));
+                            for sample_screen in pointer_samples.iter().copied()
+                                .filter(|sample|canvas_rect.contains(*sample)) {
+                                let sample=to_stage(sample_screen);
+                                let smooth=self.stabilized_cursor.map_or(sample,|previous|{
+                                    let (x,y)=stroke_geometry::adaptive_stabilized_xy(
+                                        (previous.x,previous.y),
+                                        raw_previous.map(|p|(p.x,p.y)),
+                                        (sample.x,sample.y),stab);
+                                    egui::pos2(x,y)
+                                });
+                                self.stabilized_cursor=Some(smooth);
+                                if let Some(stroke)=&mut self.current_stroke {
+                                    if let Some(last)=stroke.points.last() {
+                                        if stroke.points.len()<20_000
+                                            && (last.x-smooth.x).hypot(last.y-smooth.y)>=1.5 {
+                                            stroke.points.push(StrokePoint{
+                                                x:smooth.x,y:smooth.y,pressure:1.0
+                                            });
+                                        }
                                     }
+                                } else {
+                                    self.save_undo_state();
+                                    self.current_stroke=Some(Stroke{
+                                        points:vec![StrokePoint{x:smooth.x,y:smooth.y,pressure:1.0}],
+                                        color:self.brush_color,fill_color:None,
+                                        base_width:self.vector_pen_size,is_vector:true,
+                                        brush_preset:KritaBrushPreset::GPenInk,
+                                        opacity:self.vector_pen_opacity,brush_texture_id:None,
+                                        tip_shape:self.vector_pen_cap
+                                    });
                                 }
-                            } else {
-                                self.save_undo_state();
-                                self.current_stroke = Some(Stroke { points: vec![StrokePoint { x: smooth.x, y: smooth.y, pressure: 1.0 }], color: self.brush_color, fill_color: None, base_width: self.vector_pen_size, is_vector: true, brush_preset: KritaBrushPreset::GPenInk, opacity: self.vector_pen_opacity, brush_texture_id: None, tip_shape: self.vector_pen_cap });
+                                raw_previous=Some(sample);
                             }
                         }
                         ActiveToolUI::Brush if pointer_down => {
-                            let stab = self.stabilizer_strength.clamp(0.0, 0.75);
-                            let raw_previous=self.last_pointer_pos.map(|p|to_stage(p));
-                            let virt = self.stabilized_cursor.map_or(stage_pos, |previous| {
-                                let (x,y)=stroke_geometry::adaptive_stabilized_xy(
-                                    (previous.x,previous.y),
-                                    raw_previous.map(|p|(p.x,p.y)),
-                                    (stage_pos.x,stage_pos.y),stab);
-                                egui::pos2(x,y)
-                            });
-                            self.stabilized_cursor = Some(virt);
-                            if let Some(stroke) = &mut self.current_stroke {
-                                if let Some(last) = stroke.points.last() {
-                                    if ((last.x - virt.x).powi(2) + (last.y - virt.y).powi(2)).sqrt() >= 1.5 {
-                                        stroke.points.push(StrokePoint { x: virt.x, y: virt.y, pressure: drawing_pressure });
+                            let stab=self.stabilizer_strength.clamp(0.0,0.75);
+                            let mut raw_previous=self.last_pointer_pos.map(|p|to_stage(p));
+                            // Zero pressure after a real pressure-capable sample
+                            // means lift-off. Do not turn it into a full-width dab.
+                            if drawing_pressure>0.001 {
+                                for sample_screen in pointer_samples.iter().copied()
+                                    .filter(|sample|canvas_rect.contains(*sample)) {
+                                    let sample=to_stage(sample_screen);
+                                    let virt=self.stabilized_cursor.map_or(sample,|previous|{
+                                        let (x,y)=stroke_geometry::adaptive_stabilized_xy(
+                                            (previous.x,previous.y),
+                                            raw_previous.map(|p|(p.x,p.y)),
+                                            (sample.x,sample.y),stab);
+                                        egui::pos2(x,y)
+                                    });
+                                    self.stabilized_cursor=Some(virt);
+                                    if let Some(stroke)=&mut self.current_stroke {
+                                        if let Some(last)=stroke.points.last() {
+                                            if stroke.points.len()<20_000
+                                                && (last.x-virt.x).hypot(last.y-virt.y)>=1.5 {
+                                                stroke.points.push(StrokePoint{
+                                                    x:virt.x,y:virt.y,pressure:drawing_pressure
+                                                });
+                                            }
+                                        }
+                                    } else {
+                                        self.save_undo_state();
+                                        self.current_stroke=Some(Stroke{
+                                            points:vec![StrokePoint{
+                                                x:virt.x,y:virt.y,pressure:drawing_pressure
+                                            }],
+                                            color:self.brush_color,fill_color:None,
+                                            base_width:self.brush_size,is_vector:false,
+                                            brush_preset:self.active_krita_brush,
+                                            opacity:self.brush_opacity,brush_texture_id:None,
+                                            tip_shape:self.brush_tip_shape
+                                        });
                                     }
+                                    raw_previous=Some(sample);
                                 }
-                            } else {
-                                self.save_undo_state();
-                                self.current_stroke = Some(Stroke { points: vec![StrokePoint { x: virt.x, y: virt.y, pressure: drawing_pressure }], color: self.brush_color, fill_color: None, base_width: self.brush_size, is_vector: false, brush_preset: self.active_krita_brush, opacity: self.brush_opacity, brush_texture_id: None, tip_shape: self.brush_tip_shape });
                             }
                         }
                         ActiveToolUI::VectorDirectSelect => {
@@ -9357,15 +9403,15 @@ impl eframe::App for StickApp {
                 if let Some(mut stroke) = self.current_stroke.take() {
                     // Keep the actual pointer-up endpoint so stabilized brush
                     // strokes don't visibly stop short or leave a tiny loop gap.
-                    if !stroke.is_vector {
+                    if !stroke.is_vector && drawing_pressure>0.001 {
                         if let Some(pointer) = pointer_pos.filter(|p| canvas_rect.contains(*p)) {
                             let last_stage = to_stage(pointer);
                             if stroke.points.last().is_some_and(|p|
                                 (p.x-last_stage.x).hypot(p.y-last_stage.y)>0.75) {
-                                let pressure = stroke.points.last()
-                                    .map(|p| p.pressure).unwrap_or(1.0);
-                                stroke.points.push(StrokePoint {
-                                    x: last_stage.x, y: last_stage.y, pressure
+                                let pressure=stroke.points.last()
+                                    .map(|p|p.pressure).unwrap_or(1.0);
+                                stroke.points.push(StrokePoint{
+                                    x:last_stage.x,y:last_stage.y,pressure
                                 });
                             }
                         }
