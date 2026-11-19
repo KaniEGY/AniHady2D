@@ -789,6 +789,15 @@ fn default_shape_key() -> String { "U".to_string() }
 fn default_hand_key() -> String { "H".to_string() }
 fn default_del_frame_key() -> String { "F4".to_string() }
 
+fn vector_density_from_tolerance(tolerance:f32)->f32 {
+    let t=tolerance.clamp(0.4,8.0);
+    (100.0-(t-0.4)/(8.0-0.4)*90.0).clamp(10.0,100.0)
+}
+fn vector_tolerance_from_density(density:f32)->f32 {
+    let d=density.clamp(10.0,100.0);
+    (0.4+(100.0-d)/90.0*(8.0-0.4)).clamp(0.4,8.0)
+}
+
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
@@ -6490,42 +6499,22 @@ impl eframe::App for StickApp {
                                     ui.add(egui::Slider::new(&mut self.sculpt_strength,0.05..=1.0)
                                         .text(tr(lang,"Strength","القوة")));
                                 }
-                                ActiveToolUI::VectorDirectSelect | ActiveToolUI::VectorPen => {
-                                    ui.label(tr(lang,"Editable Vector Nodes","نقاط الفيكتور القابلة للتعديل"));
-                                    if tool==ActiveToolUI::VectorDirectSelect {
-                                        ui.checkbox(&mut self.vector_node_quick_edit,
-                                            tr(lang,
-                                                "Right-click inserts/removes nodes",
-                                                "الكلك اليمين يضيف/يحذف النقاط"));
-                                        ui.small(if self.vector_node_quick_edit {
-                                            tr(lang,
-                                                "Right-click a node to remove it; right-click a vector segment to insert a node.",
-                                                "كلك يمين على نقطة يحذفها، وعلى جزء من خط الفيكتور يضيف نقطة.")
-                                        } else {
-                                            tr(lang,
-                                                "Normal mode: click/select and drag nodes.",
-                                                "الوضع العادي: حدد النقاط واسحبها.")
-                                        });
+                                ActiveToolUI::VectorDirectSelect => {
+                                    ui.strong(tr(lang,"Vector node density","كثافة نقاط الفيكتور"));
+                                    let mut density=vector_density_from_tolerance(self.vector_tolerance);
+                                    if ui.add(egui::Slider::new(&mut density,10.0..=100.0)
+                                        .suffix("%").text(tr(lang,"Node density","نسبة النقاط"))).changed() {
+                                        self.vector_tolerance=vector_tolerance_from_density(density);
                                     }
-                                    ui.add(egui::Slider::new(&mut self.vector_tolerance,0.4..=8.0)
-                                        .text(tr(lang,"Simplify amount","تقليل النقط")));
-                                    if ui.button(tr(lang,"Simplify selected strokes","قلل نقاط الخطوط المحددة")).clicked(){
-                                        self.save_undo_state();
-                                        self.ensure_editable_keyframe();
-                                        if let Some(layer)=self.project.layers.get_mut(self.active_layer_idx){
-                                            if let Some(frame)=layer.keyframes.get_mut(&self.current_frame){
-                                                for (idx,stroke) in frame.strokes.iter_mut().enumerate(){
-                                                    if stroke.is_vector && (self.selected_stroke_indices.is_empty()
-                                                        || self.selected_stroke_indices.contains(&idx)){
-                                                        stroke.simplify_vector_nodes(self.vector_tolerance);
-                                                        self.has_unsaved_changes=true;
-                                                    }
-                                                }
-                                            }
-                                        }
-                                        self.selected_vector_nodes.clear();
-                                        self.selected_vector_node=None;
-                                        ui.close_menu();
+                                    ui.small(tr(lang,
+                                        "Right-click a node to delete it, or right-click a selected vector segment to insert a node.",
+                                        "كلك يمين على نقطة يحذفها، أو كلك يمين على خط فيكتور محدد يضيف نقطة."));
+                                }
+                                ActiveToolUI::VectorPen => {
+                                    let mut density=vector_density_from_tolerance(self.vector_tolerance);
+                                    if ui.add(egui::Slider::new(&mut density,10.0..=100.0)
+                                        .suffix("%").text(tr(lang,"Node density","نسبة النقاط"))).changed() {
+                                        self.vector_tolerance=vector_tolerance_from_density(density);
                                     }
                                 }
                                 ActiveToolUI::ShapeLine => {
@@ -8638,15 +8627,15 @@ impl eframe::App for StickApp {
                             }
                         }
                         ActiveToolUI::VectorDirectSelect => {
-                            if self.vector_node_quick_edit
-                                && ctx.input(|i|i.pointer.secondary_clicked()) {
+                            if ctx.input(|i|i.pointer.secondary_clicked()) {
                                 self.save_undo_state();
                                 self.ensure_editable_keyframe();
+                                let selected=self.selected_stroke_indices.clone();
                                 let edit=self.project.layers.get_mut(self.active_layer_idx)
                                     .and_then(|layer|layer.keyframes.get_mut(&self.current_frame))
-                                    .and_then(|frame|vector_path::quick_edit_node(
-                                        &mut frame.strokes,stage_pos.x,stage_pos.y,
-                                        (12.0/scale).max(2.0)));
+                                    .and_then(|frame|vector_path::quick_edit_node_in_selection(
+                                        &mut frame.strokes,&selected,stage_pos.x,stage_pos.y,
+                                        (18.0/scale).max(2.0)));
                                 match edit {
                                     Some(vector_path::QuickNodeEdit::Inserted{stroke,point}) => {
                                         self.selected_vector_node=Some((stroke,point));
@@ -9725,6 +9714,14 @@ mod tool_discovery_tests {
         let mut config = AppConfig::default();
         config.tool_brush = "J".to_string();
         assert_eq!(tool_shortcut(ActiveToolUI::Brush, &config), "J");
+    }
+
+    #[test]
+    fn vector_density_mapping_is_stable_and_inverted() {
+        assert!((vector_tolerance_from_density(100.0)-0.4).abs()<0.001);
+        assert!((vector_tolerance_from_density(10.0)-8.0).abs()<0.001);
+        assert!((vector_density_from_tolerance(0.4)-100.0).abs()<0.001);
+        assert!((vector_density_from_tolerance(8.0)-10.0).abs()<0.001);
     }
 
     #[test]
