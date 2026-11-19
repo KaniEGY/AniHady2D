@@ -5,6 +5,11 @@
 ## English (US)
 
 ### Bugs fixed
+- Added one-click collapse/restore arrows for both the left Drawing Tools dock and the right Properties/Layers dock; collapsed docks leave a narrow edge handle so they can be brought back without opening Settings.
+- Vector Nodes right-click editing is no longer gated by the left-mouse canvas capture. Right-click on a visible node removes it; right-click on a visible vector segment inserts a new editable node, with selected strokes preferred but never blocking another visible path.
+- The normal **2D Pen** (formerly G-Pen label) now uses stronger corner-preserving smoothing, clean round pressure dabs for stylus width changes, and a safe line fallback on risky hairpins. Canvas preview and raster/video export share the same geometry.
+- Ordinary round brushes no longer build a folded pressure polygon on a sharp reversal; risky hairpins fall back to a continuous line instead of producing wedges/blobs.
+- Paint Bucket underpaint now accounts for Boundary Thickness and real stroke width, preventing the temporary solver mask from creating a white halo. Nested closed regions are inset slightly under their black outline so they stay independently paintable without a white ring.
 - Vector Nodes cursor now uses the exact real pointer hotspot instead of the old generic down/right icon offset.
 - Vector-node selection/right-click hit areas are larger and remain screen-size consistent while zooming.
 - Right-click insertion now hit-tests the same smoothed vector curve that is actually rendered; right-clicking the inserted/selected node again removes it.
@@ -309,6 +314,11 @@
 ## العربية (المصري)
 
 ### المشاكل اللي اتصلحت
+- اتضاف سهم لإخفاء وإرجاع شريط أدوات الرسم على الشمال، وسهم تاني لشريط الخصائص والطبقات على اليمين. لما الشريط يستخبى بيفضل زر صغير على حافة البرنامج ترجعه منه فورًا من غير ما تدخل الإعدادات.
+- كلك يمين في **نقاط الفيكتور** بقى مستقل تمامًا عن كلك الشمال: كلك يمين على النقطة يحذفها، وعلى أي جزء ظاهر من خط الفيكتور يضيف نقطة جديدة قابلة للتحكم، حتى لو كان فيه Stroke تاني متحدد قبلها.
+- الفرشة الأساسية بقت **قلم عادي 2D** بسلوك أنعم قريب من قلم الرسم ثنائي الأبعاد: تنعيم محافظ على الزوايا، ضغط قلم دائري من غير تكتلات، ونفس الشكل في المعاينة والتصدير.
+- الفرش الدائرية العادية بقت تتجنب الـpressure outline لو المسار عمل لفة حادة ممكن تكسره؛ بدل البقع والمثلثات السودا بيستخدم خط مستمر وآمن.
+- الدلو بقى يحسب سُمك حدود التعبئة وسُمك الخط الحقيقي وهو بيدخل اللون تحت الخط، فرفع Boundary Thickness مش هيسيب هالة بيضا. والحلقات الداخلية بتدخل التعبئة تحت حدها الأسود مسافة صغيرة مع بقاء المساحة الداخلية مستقلة للتلوين.
 - مؤشر أداة نقاط الفيكتور بقى فوق مكان الماوس الحقيقي من غير الإزاحة القديمة.
 - كبّرنا Hitbox تحديد النقاط وكلك يمين، وبيفضل ثابت بصريًا مع الزوم.
 - كلك يمين لإضافة نقطة بقى بيختبر نفس المنحنى الناعم الظاهر على الشاشة؛ وكلك يمين مرة تانية على النقطة المضافة/المحددة بيحذفها.
@@ -316,7 +326,6 @@
 - اتضاف تأثير **أبيض وأسود** حقيقي للخطوط والنص والصور والفيديو، في المعاينة والتصدير.
 - الدلو بقى يحافظ على الدوائر/الأشكال المقفولة اللي جوه بعضها كمساحات مستقلة؛ تعبئة الدائرة الخارجية مش هتلوّن اللي جوه الدائرة الداخلية.
 
- (المصري)
 
 ### عجلة الألوان والاختصارات وواجهة الأونلاين
 - نص **COLOR** اللي في نص عجلة الألوان اتبدل بزر **لون مخصص**؛ الضغط عليه بيفتح منتقي لون دقيق.

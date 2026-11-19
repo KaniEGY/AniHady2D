@@ -279,6 +279,9 @@ pub fn draw_stroke_pro<F: Fn(egui::Pos2) -> egui::Pos2>(
                     crate::vector_path::extend_square_caps(&mut path, width);
                 }
                 path.into_iter().map(|(x,y)| screen(x,y)).collect()
+            } else if stroke.brush_preset == KritaBrushPreset::GPenInk {
+                crate::brush_engine::smooth_krita_2d_points(&stroke.points,width)
+                    .into_iter().map(|p|screen(p.x,p.y)).collect()
             } else if stroke.brush_preset == KritaBrushPreset::SmoothInk {
                 crate::brush_engine::smooth_ink_points(&stroke.points, width)
                     .into_iter().map(|p| screen(p.x,p.y)).collect()

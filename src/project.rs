@@ -32,7 +32,7 @@ impl Default for KritaBrushPreset {
 
 impl KritaBrushPreset {
     pub const MENU: [(Self, &'static str, &'static str); 14] = [
-        (Self::GPenInk, "G-Pen", "حبر"),
+        (Self::GPenInk, "2D Pen", "قلم عادي"),
         (Self::Watercolor, "Watercolor", "مائية"),
         (Self::ChiselMarker, "Marker", "ماركر"),
         (Self::SoftAirbrush, "Airbrush", "بخاخ"),
@@ -50,7 +50,7 @@ impl KritaBrushPreset {
 
     pub fn label(&self) -> &'static str {
         match self {
-            KritaBrushPreset::GPenInk => "G-Pen (حبر ثابت بدون ذيل)",
+            KritaBrushPreset::GPenInk => "2D Pen (حبر دائري ناعم وثابت للرسم ثنائي الأبعاد)",
             KritaBrushPreset::Watercolor => "Watercolor (ألوان مائية متصلة)",
             KritaBrushPreset::ChiselMarker => "Marker (ماركر شفاف متراكم)",
             KritaBrushPreset::SoftAirbrush => "Airbrush (بخاخ ناعم)",

@@ -55,6 +55,15 @@ pub fn visit_round_marks(stroke: &Stroke, mut paint: impl FnMut(RoundMark, f32))
                 paint(RoundMark::Dot(dab), flow);
             }
         } else {
+            if !stroke.is_vector && stroke.brush_preset==KritaBrushPreset::GPenInk && varying {
+                // Krita-style basic 2D ink: pressure changes size through
+                // overlapping opaque round dabs rather than one fragile
+                // self-intersecting polygon. This keeps sharp reversals clean.
+                let smoothed=smooth_krita_2d_points(&stroke.points,width);
+                visit_pressure_dabs(&smoothed,width,
+                    |dab,_|paint(RoundMark::Dot(dab),flow));
+                continue;
+            }
             if !stroke.is_vector && stroke.brush_preset == KritaBrushPreset::TaperedPen {
                 let tapered = taper_pressure_profile(&stroke.points);
                 if has_risky_turn(&tapered) {
@@ -87,6 +96,18 @@ pub fn visit_round_marks(stroke: &Stroke, mut paint: impl FnMut(RoundMark, f32))
                 // Canvas/export renderers substitute this preset's smoothed centerline.
             }
             if varying {
+                if has_risky_turn(&stroke.points) {
+                    // Ordinary translucent/soft brushes must never explode into
+                    // a folded pressure polygon on a tight reversal. Preserve a
+                    // continuous stroke for that rare geometry instead.
+                    paint(
+                        RoundMark::Line {
+                            width:(width*pressure).max(0.5),
+                        },
+                        flow,
+                    );
+                    continue;
+                }
                 let outline = crate::stroke_geometry::pressure_outline(&stroke.points, width);
                 if !outline.is_empty() {
                     paint(RoundMark::Outline(outline), flow);
@@ -148,7 +169,14 @@ fn corner_preserving_smooth(
 /// General freehand cleanup for round raster line brushes (G-Pen, watercolor,
 /// marker, airbrush and pencil). It is intentionally lighter than Smooth Ink.
 pub(crate) fn smooth_freehand_points(points: &[StrokePoint], width: f32) -> Vec<StrokePoint> {
-    corner_preserving_smooth(points, width, 0.14, 2, 0.14)
+    corner_preserving_smooth(points, width, 0.15, 2, 0.15)
+}
+
+/// Basic opaque 2D ink gets a little more cleanup than the general brush
+/// family, matching the stable round Basic-5 style artists expect from Krita
+/// without introducing the rubber-band lag of a heavy stabilizer.
+pub(crate) fn smooth_krita_2d_points(points: &[StrokePoint], width: f32) -> Vec<StrokePoint> {
+    corner_preserving_smooth(points,width,0.18,2,0.18)
 }
 
 /// Smooth Ink deliberately uses a stronger version of the same safe filter.
@@ -365,6 +393,54 @@ mod tests {
         assert_eq!(widths,vec![8.]);
     }
     #[test]
+    fn variable_pressure_gpen_uses_round_dabs_instead_of_fragile_outline() {
+        let s=Stroke {
+            points:vec![point(0.,0.,0.25),point(20.,1.,0.8),point(40.,0.,1.0)],
+            color:[0,0,0,255],fill_color:None,base_width:10.,is_vector:false,
+            brush_preset:KritaBrushPreset::GPenInk,opacity:1.,brush_texture_id:None,
+            tip_shape:BrushTipShape::Round,
+        };
+        let mut dots=0;
+        let mut outlines=0;
+        visit_round_marks(&s,|mark,_|match mark {
+            RoundMark::Dot(_)=>dots+=1,
+            RoundMark::Outline(_)=>outlines+=1,
+            RoundMark::Line{..}=>{}
+        });
+        assert!(dots>2);
+        assert_eq!(outlines,0);
+    }
+
+    #[test]
+    fn krita_2d_smoothing_reduces_micro_jitter_but_keeps_corner() {
+        let jitter=vec![point(0.,0.,1.),point(10.,1.2,1.),point(20.,0.,1.)];
+        let smooth=smooth_krita_2d_points(&jitter,10.);
+        assert!(smooth[1].y<jitter[1].y);
+        let corner=vec![point(0.,0.,1.),point(20.,0.,1.),point(20.,20.,1.)];
+        let smooth=smooth_krita_2d_points(&corner,10.);
+        assert_eq!((smooth[1].x,smooth[1].y),(20.,0.));
+    }
+
+    #[test]
+    fn ordinary_brush_hairpin_never_uses_folded_pressure_outline() {
+        let s=Stroke {
+            points:vec![point(0.,0.,0.3),point(20.,0.,1.0),point(1.,1.,0.5)],
+            color:[0,0,0,255],fill_color:None,base_width:14.,is_vector:false,
+            brush_preset:KritaBrushPreset::Watercolor,opacity:0.7,brush_texture_id:None,
+            tip_shape:BrushTipShape::Round,
+        };
+        let mut lines=0;
+        let mut outlines=0;
+        visit_round_marks(&s,|mark,_|match mark {
+            RoundMark::Line{..}=>lines+=1,
+            RoundMark::Outline(_)=>outlines+=1,
+            RoundMark::Dot(_)=>{}
+        });
+        assert!(lines>0);
+        assert_eq!(outlines,0);
+    }
+
+    #[test]
     fn constant_pressure_gpen_uses_fast_line_not_filled_outline() {
         let s=Stroke {
             points:vec![point(0.,0.,1.0),point(10.,0.,1.0),point(10.,2.,1.0),
@@ -385,16 +461,22 @@ mod tests {
     }
 
     #[test]
-    fn meaningful_pressure_gpen_still_uses_pressure_outline() {
+    fn meaningful_pressure_gpen_uses_clean_round_pressure_dabs() {
         let s=Stroke {
             points:vec![point(0.,0.,0.25),point(20.,0.,0.7),point(40.,5.,1.0)],
             color:[0,0,0,255],fill_color:None,base_width:8.,is_vector:false,
             brush_preset:KritaBrushPreset::GPenInk,opacity:1.,brush_texture_id:None,
             tip_shape:BrushTipShape::Round,
         };
+        let mut dots=0;
         let mut outlines=0;
-        visit_round_marks(&s,|mark,_|if matches!(mark,RoundMark::Outline(_)){outlines+=1});
-        assert_eq!(outlines,1);
+        visit_round_marks(&s,|mark,_|match mark {
+            RoundMark::Dot(_)=>dots+=1,
+            RoundMark::Outline(_)=>outlines+=1,
+            RoundMark::Line{..}=>{}
+        });
+        assert!(dots>2);
+        assert_eq!(outlines,0);
     }
 
     #[test]

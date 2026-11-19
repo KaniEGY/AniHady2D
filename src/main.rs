@@ -6549,9 +6549,17 @@ impl eframe::App for StickApp {
         if self.config.show_left_dock {
         egui::SidePanel::left("tools_panel").resizable(true).default_width(210.0).min_width(180.0).show(ctx, |ui| {
             ui.vertical_centered(|ui| {
-                ui.add_space(5.0);
-                ui.strong(tr(lang, "Drawing Tools", "أدوات الرسم"));
-                ui.add_space(5.0);
+                ui.add_space(3.0);
+                ui.horizontal(|ui| {
+                    if ui.small_button("◀")
+                        .on_hover_text(tr(lang,"Collapse tools panel","إخفاء شريط الأدوات"))
+                        .clicked() {
+                        self.config.show_left_dock=false;
+                        self.config.save();
+                    }
+                    ui.strong(tr(lang, "Drawing Tools", "أدوات الرسم"));
+                });
+                ui.add_space(4.0);
                 egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
                     for tool in TOOLBAR_ITEMS {
                         let selected = self.active_tool_ui == tool;
@@ -6695,6 +6703,18 @@ impl eframe::App for StickApp {
             });
         });
 
+        } else {
+            egui::Area::new(egui::Id::new("restore_left_dock_edge"))
+                .anchor(egui::Align2::LEFT_CENTER,egui::vec2(0.0,0.0))
+                .order(egui::Order::Foreground)
+                .show(ctx,|ui| {
+                    if ui.add_sized([24.0,64.0],egui::Button::new("▶"))
+                        .on_hover_text(tr(lang,"Show tools panel","إظهار شريط الأدوات"))
+                        .clicked() {
+                        self.config.show_left_dock=true;
+                        self.config.save();
+                    }
+                });
         }
         // Split dock: tools keep their own scrolling upper section; layers
         // remain in a dedicated lower section, like a painting editor.
@@ -6715,6 +6735,12 @@ impl eframe::App for StickApp {
                 self.right_panel_tab=0;
             }
             ui.horizontal(|ui| {
+                if ui.small_button("▶")
+                    .on_hover_text(tr(lang,"Collapse properties panel","إخفاء شريط الخصائص والطبقات"))
+                    .clicked() {
+                    self.config.show_right_dock=false;
+                    self.config.save();
+                }
                 ui.selectable_value(&mut self.right_panel_tab,0,
                     tr(lang,"Properties","الخصائص"));
                 ui.selectable_value(&mut self.right_panel_tab,1,
@@ -7105,6 +7131,18 @@ impl eframe::App for StickApp {
                 }
                 }); // scrollable layer dock
         });
+        } else {
+            egui::Area::new(egui::Id::new("restore_right_dock_edge"))
+                .anchor(egui::Align2::RIGHT_CENTER,egui::vec2(0.0,0.0))
+                .order(egui::Order::Foreground)
+                .show(ctx,|ui| {
+                    if ui.add_sized([24.0,64.0],egui::Button::new("◀"))
+                        .on_hover_text(tr(lang,"Show properties panel","إظهار شريط الخصائص والطبقات"))
+                        .clicked() {
+                        self.config.show_right_dock=true;
+                        self.config.save();
+                    }
+                });
         }
         if let Some(idx)=layer_effect_window_request {
             self.layer_effect_window=Some(idx);
@@ -8739,6 +8777,42 @@ impl eframe::App for StickApp {
             }
 
             let can_use_tool = self.active_tool_ui == ActiveToolUI::Eyedropper || !self.is_active_layer_locked();
+
+            // Secondary-button vector editing is independent from the primary
+            // drawing capture. Previously this lived inside canvas_primary_capture,
+            // so a normal right-click could never reach the vector-node handler.
+            if secondary_clicked
+                && self.active_tool_ui==ActiveToolUI::VectorDirectSelect
+                && is_over_canvas && !any_modal_open && can_use_tool
+                && self.canvas_quick_menu.is_none() {
+                if let Some(pos)=pointer_pos {
+                    let stage_pos=to_stage(pos);
+                    self.save_undo_state();
+                    self.ensure_editable_keyframe();
+                    let selected=self.selected_stroke_indices.clone();
+                    let edit=self.project.layers.get_mut(self.active_layer_idx)
+                        .and_then(|layer|layer.keyframes.get_mut(&self.current_frame))
+                        .and_then(|frame|vector_path::quick_edit_node_prefer_selection(
+                            &mut frame.strokes,&selected,stage_pos.x,stage_pos.y,
+                            (24.0/scale).max(3.0)));
+                    match edit {
+                        Some(vector_path::QuickNodeEdit::Inserted{stroke,point})=>{
+                            self.selected_vector_node=Some((stroke,point));
+                            self.selected_vector_nodes=vec![(stroke,point)];
+                            self.selected_stroke_indices=vec![stroke];
+                            self.has_unsaved_changes=true;
+                        }
+                        Some(vector_path::QuickNodeEdit::Removed{stroke,..})=>{
+                            self.selected_vector_node=None;
+                            self.selected_vector_nodes.clear();
+                            self.selected_stroke_indices=vec![stroke];
+                            self.has_unsaved_changes=true;
+                        }
+                        None=>{self.undo_stack.pop();}
+                    }
+                }
+            }
+
             let opacity_gesture=opacity_gesture_down && self.active_tool_opacity().is_some();
             if !space_down && !size_gesture_down && !opacity_gesture
                 && self.canvas_quick_menu.is_none()
@@ -8964,31 +9038,7 @@ impl eframe::App for StickApp {
                             }
                         }
                         ActiveToolUI::VectorDirectSelect => {
-                            if ctx.input(|i|i.pointer.secondary_clicked()) {
-                                self.save_undo_state();
-                                self.ensure_editable_keyframe();
-                                let selected=self.selected_stroke_indices.clone();
-                                let edit=self.project.layers.get_mut(self.active_layer_idx)
-                                    .and_then(|layer|layer.keyframes.get_mut(&self.current_frame))
-                                    .and_then(|frame|vector_path::quick_edit_node_in_selection(
-                                        &mut frame.strokes,&selected,stage_pos.x,stage_pos.y,
-                                        (24.0/scale).max(3.0)));
-                                match edit {
-                                    Some(vector_path::QuickNodeEdit::Inserted{stroke,point}) => {
-                                        self.selected_vector_node=Some((stroke,point));
-                                        self.selected_vector_nodes=vec![(stroke,point)];
-                                        self.selected_stroke_indices=vec![stroke];
-                                        self.has_unsaved_changes=true;
-                                    }
-                                    Some(vector_path::QuickNodeEdit::Removed{stroke,..}) => {
-                                        self.selected_vector_node=None;
-                                        self.selected_vector_nodes.clear();
-                                        self.selected_stroke_indices=vec![stroke];
-                                        self.has_unsaved_changes=true;
-                                    }
-                                    None => {self.undo_stack.pop();}
-                                }
-                            } else if pointer_pressed {
+                            if pointer_pressed {
                                 let vector_pivot=self.project.layers.get(self.active_layer_idx)
                                     .and_then(|layer| {
                                         let frame=self.project.evaluate_layer_at_frame(layer,self.current_frame);
