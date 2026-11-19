@@ -177,12 +177,12 @@ pub fn render_frame_pixmap(project: &AniProject, frame_idx: usize, transparent_b
                         image::imageops::FilterType::Triangle,
                     )
                     .to_rgba8();
-                if layer.effect!=crate::project::LayerEffectPreset::None {
-                    let multiplier=layer.effect.rgb_multiplier();
+                if layer.effect != crate::project::LayerEffectPreset::None {
+                    let multiplier = layer.effect.rgb_multiplier();
                     for pixel in resized.pixels_mut() {
-                        pixel.0[0]=(pixel.0[0] as f32*multiplier[0]).round().clamp(0.0,255.0) as u8;
-                        pixel.0[1]=(pixel.0[1] as f32*multiplier[1]).round().clamp(0.0,255.0) as u8;
-                        pixel.0[2]=(pixel.0[2] as f32*multiplier[2]).round().clamp(0.0,255.0) as u8;
+                        pixel.0[0] = (pixel.0[0] as f32 * multiplier[0]).round().clamp(0.0,255.0) as u8;
+                        pixel.0[1] = (pixel.0[1] as f32 * multiplier[1]).round().clamp(0.0,255.0) as u8;
+                        pixel.0[2] = (pixel.0[2] as f32 * multiplier[2]).round().clamp(0.0,255.0) as u8;
                     }
                 }
                 if let Some(mut sub_pix) = Pixmap::new(resized.width(), resized.height()) {
@@ -208,24 +208,24 @@ pub fn render_frame_pixmap(project: &AniProject, frame_idx: usize, transparent_b
         }
 
         for s in &fd.strokes {
-            if layer.effect==crate::project::LayerEffectPreset::None {
-                draw_skia_stroke(&mut layer_pixmap,s,Transform::identity());
+            if layer.effect == crate::project::LayerEffectPreset::None {
+                draw_skia_stroke(&mut layer_pixmap, s, Transform::identity());
             } else {
-                let mut effected=s.clone();
-                effected.color=layer.effect.apply_rgba(effected.color);
-                effected.fill_color=effected.fill_color.map(|c|layer.effect.apply_rgba(c));
-                draw_skia_stroke(&mut layer_pixmap,&effected,Transform::identity());
+                let mut effected = s.clone();
+                effected.color = layer.effect.apply_rgba(effected.color);
+                effected.fill_color = effected.fill_color.map(|c| layer.effect.apply_rgba(c));
+                draw_skia_stroke(&mut layer_pixmap, &effected, Transform::identity());
             }
         }
 
         // Text must be present in every export, not only in the editor preview.
         for item in &fd.text_items {
-            if layer.effect==crate::project::LayerEffectPreset::None {
-                draw_export_text(&mut layer_pixmap,item);
+            if layer.effect == crate::project::LayerEffectPreset::None {
+                draw_export_text(&mut layer_pixmap, item);
             } else {
-                let mut effected=item.clone();
-                effected.color=layer.effect.apply_rgba(effected.color);
-                draw_export_text(&mut layer_pixmap,&effected);
+                let mut effected = item.clone();
+                effected.color = layer.effect.apply_rgba(effected.color);
+                draw_export_text(&mut layer_pixmap, &effected);
             }
         }
 
@@ -237,13 +237,13 @@ pub fn render_frame_pixmap(project: &AniProject, frame_idx: usize, transparent_b
                     .post_rotate(inst.rotation_deg)
                     .post_translate(inst.x + inst.anchor_offset_x, inst.y + inst.anchor_offset_y);
                 for s in sym_strokes {
-                    if layer.effect==crate::project::LayerEffectPreset::None {
-                        draw_skia_stroke(&mut layer_pixmap,s,ts);
+                    if layer.effect == crate::project::LayerEffectPreset::None {
+                        draw_skia_stroke(&mut layer_pixmap, s, ts);
                     } else {
-                        let mut effected=s.clone();
-                        effected.color=layer.effect.apply_rgba(effected.color);
-                        effected.fill_color=effected.fill_color.map(|c|layer.effect.apply_rgba(c));
-                        draw_skia_stroke(&mut layer_pixmap,&effected,ts);
+                        let mut effected = s.clone();
+                        effected.color = layer.effect.apply_rgba(effected.color);
+                        effected.fill_color = effected.fill_color.map(|c| layer.effect.apply_rgba(c));
+                        draw_skia_stroke(&mut layer_pixmap, &effected, ts);
                     }
                 }
             }
@@ -321,18 +321,18 @@ fn draw_export_text_unrotated(pixmap: &mut Pixmap, item: &crate::project::TextIt
     }
 }
 
-fn draw_export_text(pixmap:&mut Pixmap,item:&crate::project::TextItem) {
-    let angle=if item.rotation_deg.is_finite(){item.rotation_deg}else{0.0};
-    if angle.abs()<0.001 {
-        draw_export_text_unrotated(pixmap,item);
+fn draw_export_text(pixmap: &mut Pixmap, item: &crate::project::TextItem) {
+    let angle = if item.rotation_deg.is_finite() { item.rotation_deg } else { 0.0 };
+    if angle.abs() < 0.001 {
+        draw_export_text_unrotated(pixmap, item);
         return;
     }
-    let Some(mut temp)=Pixmap::new(pixmap.width(),pixmap.height()) else{return};
-    draw_export_text_unrotated(&mut temp,item);
-    let transform=Transform::from_translate(-item.x,-item.y)
+    let Some(mut temp) = Pixmap::new(pixmap.width(), pixmap.height()) else { return };
+    draw_export_text_unrotated(&mut temp, item);
+    let transform = Transform::from_translate(-item.x, -item.y)
         .post_rotate(angle)
-        .post_translate(item.x,item.y);
-    pixmap.draw_pixmap(0,0,temp.as_ref(),&tiny_skia::PixmapPaint::default(),transform,None);
+        .post_translate(item.x, item.y);
+    pixmap.draw_pixmap(0, 0, temp.as_ref(), &tiny_skia::PixmapPaint::default(), transform, None);
 }
 
 fn fill_skia_polygon(
@@ -843,13 +843,17 @@ mod layer_opacity_tests {
     #[test]
     fn rotated_text_is_present_in_export() {
         if export_text_font().is_none() { return; }
-        let mut project=AniProject::default();
-        project.width=180; project.height=180;
+        let mut project = AniProject::default();
+        project.width = 180;
+        project.height = 180;
         project.layers[0].keyframes.get_mut(&1).unwrap().text_items.push(
-            crate::project::TextItem{content:"Rotate".into(),x:70.,y:50.,
-                font_size:28.,color:[0,0,0,255],rotation_deg:90.});
-        let rendered=render_frame_pixmap(&project,1,true,[0,0,0,0]);
-        assert!(rendered.data().chunks_exact(4).any(|p|p[3]!=0));
+            crate::project::TextItem {
+                content: "Rotate".into(), x: 70.0, y: 50.0,
+                font_size: 28.0, color: [0,0,0,255], rotation_deg: 90.0,
+            }
+        );
+        let rendered = render_frame_pixmap(&project, 1, true, [0,0,0,0]);
+        assert!(rendered.data().chunks_exact(4).any(|p| p[3] != 0));
     }
 
     #[test]
