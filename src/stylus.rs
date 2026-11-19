@@ -19,17 +19,20 @@ pub struct TouchPressureTracker {
     /// Latched only for the current contact. Once a real pressure sample
     /// has appeared, a later missing/zero sample is pen lift, not a mouse.
     sensed_this_contact: bool,
+    /// True only for the frame where a pressure-capable contact ended.
+    lifted_this_frame: bool,
 }
 
 impl TouchPressureTracker {
     pub fn pressure_is_available(&self) -> bool {
-        self.sensed_this_contact
+        self.sensed_this_contact || self.lifted_this_frame
     }
 
     pub fn reset(&mut self) {
         self.pressure = None;
         self.sample_position = None;
         self.sensed_this_contact = false;
+        self.lifted_this_frame = false;
     }
 
     fn apply_touch_event(
@@ -101,13 +104,22 @@ impl TouchPressureTracker {
         pointer_pos: Option<egui::Pos2>,
         pointer_down: bool,
     ) -> f32 {
+        self.lifted_this_frame = false;
         if !pointer_down {
-            self.reset();
-            return 1.0;
+            let was_pressure_contact=self.sensed_this_contact;
+            self.pressure=None;
+            self.sample_position=None;
+            self.sensed_this_contact=false;
+            self.lifted_this_frame=was_pressure_contact;
+            return if was_pressure_contact {0.0} else {1.0};
         }
         let Some(pointer) = pointer_pos.filter(|p| p.x.is_finite() && p.y.is_finite()) else {
-            self.reset();
-            return 1.0;
+            let was_pressure_contact=self.sensed_this_contact;
+            self.pressure=None;
+            self.sample_position=None;
+            self.sensed_this_contact=false;
+            self.lifted_this_frame=was_pressure_contact;
+            return if was_pressure_contact {0.0} else {1.0};
         };
 
         for event in events {
@@ -123,7 +135,12 @@ impl TouchPressureTracker {
             .sample_position
             .is_some_and(|sample| sample.distance(pointer) > MAX_STALE_PRESSURE_DISTANCE)
         {
-            self.reset();
+            if self.sensed_this_contact {
+                self.pressure=Some(0.0);
+                self.sample_position=Some(pointer);
+            } else {
+                self.reset();
+            }
         }
         if self.sensed_this_contact {
             self.pressure.unwrap_or(0.0)
@@ -207,7 +224,8 @@ mod tests {
         let mut tracker=TouchPressureTracker::default();
         tracker.apply_touch_event(
             egui::TouchPhase::Start,pos(4.0,4.0),Some(0.3),pos(4.0,4.0));
-        tracker.update(&[],Some(pos(4.0,4.0)),false);
+        assert_eq!(tracker.update(&[],Some(pos(4.0,4.0)),false),0.0);
+        assert!(tracker.pressure_is_available());
         assert_eq!(tracker.update(&[],Some(pos(8.0,8.0)),true),1.0);
         assert!(!tracker.pressure_is_available());
     }
