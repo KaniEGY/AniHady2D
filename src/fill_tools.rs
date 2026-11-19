@@ -71,6 +71,24 @@ fn closed_outline(stroke:&Stroke)->Option<&[StrokePoint]> {
     ((first.x-last.x).hypot(first.y-last.y)<=tolerance).then_some(points)
 }
 
+fn inset_hole_ring(
+    points:&[StrokePoint], center:(f32,f32), amount:f32,
+)->Vec<StrokePoint> {
+    let amount=amount.max(0.0);
+    points.iter().map(|p| {
+        let dx=center.0-p.x;
+        let dy=center.1-p.y;
+        let distance=dx.hypot(dy);
+        if distance<=0.0001 {return p.clone();}
+        let step=amount.min(distance*0.22);
+        StrokePoint {
+            x:p.x+dx/distance*step,
+            y:p.y+dy/distance*step,
+            pressure:p.pressure,
+        }
+    }).collect()
+}
+
 /// Preserve immediate closed contours inside the solved Bucket region as real
 /// holes. This keeps a circle inside another circle independently paintable:
 /// filling the outer annulus no longer paints through the inner contour.
@@ -78,7 +96,7 @@ pub fn preserve_nested_holes(
     mut outer: Vec<StrokePoint>, strokes:&[Stroke], seed:(f32,f32),
 )->Vec<StrokePoint> {
     if outer.len()<4 {return outer;}
-    let mut candidates:Vec<(Vec<StrokePoint>,f32,(f32,f32))>=Vec::new();
+    let mut candidates:Vec<(Vec<StrokePoint>,f32,(f32,f32),f32)>=Vec::new();
     for stroke in strokes {
         if stroke.color[3]==0 {continue;}
         let Some(ring)=closed_outline(stroke) else {continue};
@@ -94,7 +112,10 @@ pub fn preserve_nested_holes(
         );
         if !raw_ring_contains(&outer,center.0,center.1) {continue;}
         let area=ring_area(unique);
-        if area>4.0 {candidates.push((ring.to_vec(),area,center));}
+        if area>4.0 {
+            let inset=(stroke.base_width.abs()*0.55+0.75).clamp(0.5,6.0);
+            candidates.push((ring.to_vec(),area,center,inset));
+        }
     }
     let mut keep=vec![true;candidates.len()];
     for i in 0..candidates.len() {
@@ -107,11 +128,12 @@ pub fn preserve_nested_holes(
             }
         }
     }
-    for (index,(ring,_,_)) in candidates.into_iter().enumerate() {
+    for (index,(ring,_,center,inset)) in candidates.into_iter().enumerate() {
         if !keep[index] {continue;}
-        let anchor=&ring[0];
+        let hole=inset_hole_ring(&ring,center,inset);
+        let anchor=&hole[0];
         outer.push(StrokePoint{x:anchor.x,y:anchor.y,pressure:FILL_RING_BREAK_PRESSURE});
-        outer.extend(ring);
+        outer.extend(hole);
     }
     outer
 }
@@ -343,6 +365,13 @@ pub fn flood_fill_polygon_with_options(
     if w.checked_mul(h)? > 2_000_000 { return None; }
     let size = w * h;
     let mut wall = vec![false; size];
+    let boundary_thickness=if options.boundary_thickness.is_finite() {
+        options.boundary_thickness.clamp(0.0,20.0)
+    } else {0.0};
+    let dilate=if options.dilate_contract.is_finite() {
+        options.dilate_contract.clamp(-12.0,12.0)
+    } else {0.0};
+    let mut max_line_half=0.0f32;
     let mut canvas_contacts: [Vec<f32>; 4] = std::array::from_fn(|_| Vec::new());
     let world_to_px = |x: f32, y: f32| -> (f32, f32) {
         (x / cell + 2.0, y / cell + 2.0)
@@ -355,9 +384,10 @@ pub fn flood_fill_polygon_with_options(
         if stroke.color[3] == 0 { continue; }
         segment_budget = segment_budget.saturating_add(stroke.points.len());
         if segment_budget > 250_000 { return None; }
-        let thickness = if options.boundary_thickness.is_finite() { options.boundary_thickness.clamp(0.0, 20.0) } else { 0.0 };
-        let edge_margin = (stroke.base_width.abs() * 0.5
-            + gap.clamp(0.0, 14.0) + thickness * 0.5 + cell * 1.5).max(2.0);
+        let line_half=stroke.base_width.abs()*0.5;
+        max_line_half=max_line_half.max(line_half);
+        let edge_margin = (line_half
+            + gap.clamp(0.0, 14.0) + boundary_thickness * 0.5 + cell * 1.5).max(2.0);
         let mut record_endpoint = |p: &StrokePoint| {
             if p.x.abs() <= edge_margin { canvas_contacts[0].push(p.y.clamp(0.0, ch)); }
             if (p.x-cw).abs() <= edge_margin { canvas_contacts[1].push(p.y.clamp(0.0, ch)); }
@@ -389,8 +419,8 @@ pub fn flood_fill_polygon_with_options(
                 }
             }
         }
-        let r = ((stroke.base_width.abs() * 0.5 + gap.clamp(0.0, 14.0) + thickness * 0.5) / cell)
-            .clamp(1.15, 9.0);
+        let r = ((line_half + gap.clamp(0.0, 14.0) + boundary_thickness * 0.5) / cell)
+            .clamp(1.15, 12.0);
         let r2 = r * r;
         for pair in stroke.points.windows(2) {
             let (x0, y0) = world_to_px(pair[0].x, pair[0].y);
@@ -525,11 +555,14 @@ pub fn flood_fill_polygon_with_options(
     // leaves a white hairline between the color and the visible brush.
     // Grow the selected component INTO wall cells only, never into another
     // transparent component: a center divider therefore remains a barrier.
-    let dilate = if options.dilate_contract.is_finite() { options.dilate_contract.clamp(-12.0, 12.0) } else { 0.0 };
     let mut covered = visited.clone();
     if !used_canvas_edge_closure {
-        let grow_steps = ((gap.clamp(0.0, 14.0) + 1.5 + dilate.max(0.0)) / cell).ceil()
-            .clamp(1.0, 32.0) as usize;
+        // Boundary Thickness is only a temporary solver mask. Reach back to
+        // the real ink center plus its inside half so increasing this control
+        // cannot create a visible white halo around the line art.
+        let underpaint_world=gap.clamp(0.0,14.0)
+            +boundary_thickness*0.5+max_line_half+1.5+dilate.max(0.0);
+        let grow_steps=(underpaint_world/cell).ceil().clamp(1.0,40.0) as usize;
         let mut boundary = VecDeque::<(usize, usize)>::new();
         for index in 0..size {
             if !visited[index] { continue; }
@@ -795,6 +828,44 @@ mod tests {
             "filling should not leave a white halo just inside the outline");
         assert!(!contour_contains(&filled,17.0,70.0),
             "color must not escape outside the contour");
+    }
+
+    #[test]
+    fn thick_boundary_mask_does_not_create_a_white_halo() {
+        let mut border=shape(&[(25.,25.),(140.,25.),(140.,140.),
+                              (25.,140.),(25.,25.)]);
+        border.base_width=8.0;
+        let points=flood_fill_polygon_with_options(
+            &[border],(80.,80.),(180.,180.),2.0,
+            FillOptions{precision:2.2,dilate_contract:0.0,boundary_thickness:20.0}
+        ).expect("thick temporary boundary must still fill under visible ink");
+        let fill=polygon_fill_stroke(points,[180,170,110,255]);
+        assert!(contour_contains(&fill,28.,70.),
+            "temporary boundary thickness must not leave a white strip by the line");
+        assert!(!contour_contains(&fill,14.,70.));
+    }
+
+    #[test]
+    fn nested_hole_is_inset_under_its_outline_to_avoid_white_ring() {
+        let circle=|r:f32,width:f32| -> Stroke {
+            let points:Vec<_>=(0..=96).map(|i| {
+                let a=i as f32*std::f32::consts::TAU/96.0;
+                StrokePoint{x:100.+r*a.cos(),y:100.+r*a.sin(),pressure:1.0}
+            }).collect();
+            Stroke {
+                points,color:[0,0,0,255],fill_color:None,base_width:width,is_vector:true,
+                brush_preset:KritaBrushPreset::GPenInk,opacity:1.0,
+                brush_texture_id:None,tip_shape:crate::project::BrushTipShape::Round,
+            }
+        };
+        let outlines=vec![circle(80.,4.),circle(30.,8.)];
+        let outer=flood_fill_polygon(&outlines,(150.,100.),(220.,220.),1.5).unwrap();
+        let encoded=preserve_nested_holes(outer,&outlines,(150.,100.));
+        let fill=polygon_fill_stroke(encoded,[180,170,110,255]);
+        assert!(contour_contains(&fill,72.,100.),
+            "fill should extend under the inner outline instead of leaving a white halo");
+        assert!(!contour_contains(&fill,100.,100.),
+            "the actual nested interior must remain independently paintable");
     }
 
     #[test]
