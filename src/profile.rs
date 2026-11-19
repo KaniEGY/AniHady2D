@@ -221,14 +221,20 @@ const AR_BONUS_LEVEL_UP_LINES: [&str; 100] = [
 ];
 
 pub fn level_up_message(variant: usize, is_arabic: bool) -> String {
-    if is_arabic && variant % 3 == 0 {
-        return AR_BONUS_LEVEL_UP_LINES[(variant / 3) % AR_BONUS_LEVEL_UP_LINES.len()].to_string();
-    }
+    // Keep the original 40×25 base space one-to-one so all 1,000 variants
+    // remain distinct. Bonus Egyptian lines enrich selected variants instead
+    // of replacing the base sentence (which would introduce duplicates).
     let idx = variant.wrapping_mul(37) % 1000;
     let first = idx / 25;
     let second = idx % 25;
     if is_arabic {
-        format!("{} {}", AR_OPENINGS[first], AR_ENDINGS[second])
+        let base = format!("{} {}", AR_OPENINGS[first], AR_ENDINGS[second]);
+        if variant % 3 == 0 {
+            format!("{} {}", base,
+                AR_BONUS_LEVEL_UP_LINES[(variant / 3) % AR_BONUS_LEVEL_UP_LINES.len()])
+        } else {
+            base
+        }
     } else {
         format!("{} {}", EN_OPENINGS[first], EN_ENDINGS[second])
     }
