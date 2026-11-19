@@ -581,6 +581,8 @@ struct AppConfig {
     sound_effects_enabled: bool,
     #[serde(default = "default_true_val")]
     artist_project_intro_enabled: bool,
+    #[serde(default = "default_true_val")]
+    level_up_banner_enabled: bool,
     #[serde(default)]
     show_grid: bool,
     #[serde(default)]
@@ -795,6 +797,7 @@ impl Default for AppConfig {
             recent_projects: Vec::new(),
             sound_effects_enabled: true,
             artist_project_intro_enabled: true,
+            level_up_banner_enabled: true,
             show_grid: false,
             canvas_appearance: canvas_appearance::CanvasAppearance::default(),
             canvas_aspect_lock: false,
@@ -2771,7 +2774,11 @@ impl StickApp {
             self.level_up_custom_msg = profile::level_up_message(
                 (seed % 1000) as usize, self.config.lang == AppLang::Arabic
             );
-            self.level_up_banner_timer = now_time + 10.0;
+            if self.config.level_up_banner_enabled {
+                self.level_up_banner_timer = now_time + 4.0;
+            } else {
+                self.level_up_banner_timer = 0.0;
+            }
             let sound = profile::level_up_sound_variant(level, self.user_profile.xp, seed);
             self.play_sfx(SfxType::LevelUpFanfare(sound));
         }
@@ -5285,6 +5292,14 @@ impl eframe::App for StickApp {
                         });
                         if ui.checkbox(&mut self.config.sound_effects_enabled,
                             tr(lang, "Enable Tool & Level-Up Sound Effects", "شغّل أو اقفل أصوات الأدوات والمستويات")).changed() {
+                            self.config.save();
+                        }
+                        if ui.checkbox(&mut self.config.level_up_banner_enabled,
+                            tr(lang, "Show 4-second level-up message",
+                                "اظهر رسالة ارتفاع المستوى لمدة 4 ثواني")).changed() {
+                            if !self.config.level_up_banner_enabled {
+                                self.level_up_banner_timer = 0.0;
+                            }
                             self.config.save();
                         }
                         if ui.checkbox(&mut self.config.artist_project_intro_enabled,
