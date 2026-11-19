@@ -22,6 +22,7 @@ pub fn draw_brush_preset_icon(painter: &egui::Painter, rect: egui::Rect, preset:
             KritaBrushPreset::TaperedPen => egui::Color32::from_rgb(240, 186, 101),
             KritaBrushPreset::Calligraphy => egui::Color32::from_rgb(232, 144, 226),
             KritaBrushPreset::SoftSketchPencil => egui::Color32::from_rgb(187, 200, 211),
+            KritaBrushPreset::GraphitePencil => egui::Color32::from_rgb(176, 183, 191),
         }
     };
 
@@ -139,6 +140,18 @@ pub fn draw_brush_preset_icon(painter: &egui::Painter, rect: egui::Rect, preset:
                     c+egui::vec2(-8.+k as f32,7.),
                     c+egui::vec2(7.,-8.+k as f32)
                 ],egui::Stroke::new(1.0,col));
+            }
+        }
+        KritaBrushPreset::GraphitePencil => {
+            painter.add(egui::Shape::convex_polygon(vec![
+                c+egui::vec2(-7.,5.),c+egui::vec2(3.,-7.),
+                c+egui::vec2(7.,-3.),c+egui::vec2(-3.,8.)
+            ],col,egui::Stroke::NONE));
+            painter.add(egui::Shape::convex_polygon(vec![
+                c+egui::vec2(-7.,5.),c+egui::vec2(-3.,8.),c+egui::vec2(-9.,9.)
+            ],egui::Color32::from_gray(72),egui::Stroke::NONE));
+            for (dx,dy) in [(-7.,-4.),(-2.,5.),(5.,5.)] {
+                painter.circle_filled(c+egui::vec2(dx,dy),0.9,col);
             }
         }
     }
