@@ -378,14 +378,8 @@ fn draw_skia_stroke(pixmap: &mut Pixmap, s: &crate::project::Stroke, ts: Transfo
         texture.export(pixmap, s, alpha, ts);
         return;
     }
-    if !s.is_vector && s.tip_shape != BrushTipShape::Round {
-        paint.set_color_rgba8(s.color[0], s.color[1], s.color[2], alpha);
-        crate::brush_engine::visit_pressure_dabs(&s.points,s.base_width, |dab,_| {
-            let polygon = crate::brush_engine::dab_polygon(s.tip_shape, dab);
-            fill_skia_polygon(pixmap, polygon.into_iter(), &paint, ts);
-        });
-        return;
-    }
+    // Non-round raster tips now flow through the shared continuous-stroke engine.
+    // This keeps canvas preview and PNG/video export on the same geometry path.
     let mut centerline = None;
     visit_round_marks(s, |mark, flow| {
         paint.set_color_rgba8(s.color[0], s.color[1], s.color[2], (alpha as f32 * flow) as u8);
@@ -433,10 +427,31 @@ fn draw_skia_stroke(pixmap: &mut Pixmap, s: &crate::project::Stroke, ts: Transfo
                         width,
                         line_cap: if s.is_vector && s.tip_shape == BrushTipShape::Square {
                             tiny_skia::LineCap::Square
-                        } else { tiny_skia::LineCap::Round },
+                        } else if !s.is_vector && s.tip_shape != BrushTipShape::Round {
+                            tiny_skia::LineCap::Butt
+                        } else {
+                            tiny_skia::LineCap::Round
+                        },
                         line_join: tiny_skia::LineJoin::Round, ..Stroke::default()
                     };
                     pixmap.stroke_path(path,&paint,&brush,ts,None);
+
+                    if !s.is_vector && s.tip_shape != BrushTipShape::Round && s.points.len() >= 2 {
+                        let first=&s.points[0];
+                        let second=&s.points[1];
+                        let last=&s.points[s.points.len()-1];
+                        let before_last=&s.points[s.points.len()-2];
+                        for cap in [
+                            crate::brush_engine::raster_tip_cap_polygon(
+                                (first.x,first.y),(second.x,second.y),width,s.tip_shape),
+                            crate::brush_engine::raster_tip_cap_polygon(
+                                (last.x,last.y),(before_last.x,before_last.y),width,s.tip_shape),
+                        ] {
+                            if cap.len()>=3 {
+                                fill_skia_polygon(pixmap,cap.into_iter(),&paint,ts);
+                            }
+                        }
+                    }
                 }
             }
         }
