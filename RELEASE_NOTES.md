@@ -4,6 +4,16 @@
 
 ## English (US)
 
+### Quick color controls, customizable gestures and Online UI
+- The radial color wheel now has a **Custom Color** center action. It opens an exact color picker instead of showing the old COLOR label.
+- The quick color wheel now works with **Brush, Vector Pen and Bucket**. Its default keyboard shortcut is **Z**, and it can be rebound from Settings → Shortcuts.
+- The hold-and-move **tool size** gesture and **opacity** gesture are now separately rebindable. Defaults remain **Alt** for size and **Ctrl** for opacity.
+- Tool-size feedback now shows the active value in pixels plus a normalized percentage of that tool's supported size range; Sculpt reports its radius. Opacity still shows the selected-color preview dot and percentage.
+- Removed the redundant right-panel **Split** slider. The draggable three-dot divider remains the single control for resizing Properties versus Layers.
+- Online Create/Join screens now use icon cards and connection-method chips with delayed hover help. The UI distinguishes LAN, Tailscale and advanced Direct/Tunnel joins without changing Stick's working TCP/UDP room protocol.
+- The online guide now documents provider-neutral public TCP endpoints. Stick does not bundle a tunnel client or claim third-party plans are permanently free.
+- Added `ONLINE_ARCHITECTURE_REVIEW_2026-11-19.md` with the networking review and future transport recommendations. No project-schema or collaboration-protocol version change was required.
+
 ### Direct keyframe drag, sculpt/fill, radial menus and lip-sync audio
 - Removed the temporary Copy +1 / Move +1 / Clear-selection quick icons from the timeline toolbar.
 - In OLD, NEW and New mine, click a real keyframe once to select it, then hold the left mouse button and drag that selected keyframe; releasing drops it at the new frame. A gold drop preview follows the drag. New mine keeps Ctrl/Shift multi-select and Alt-drag copy.
@@ -266,6 +276,16 @@
 - Added an unsaved-work guard to avoid restarting with an unfinished project.
 
 ## العربية (المصري)
+
+### عجلة الألوان والاختصارات وواجهة الأونلاين
+- نص **COLOR** اللي في نص عجلة الألوان اتبدل بزر **لون مخصص**؛ الضغط عليه بيفتح منتقي لون دقيق.
+- عجلة الألوان السريعة بقت شغالة مع **الفرشة وقلم الفيكتور والبوكت**، واختصارها الافتراضي **Z** وقابل للتغيير من الإعدادات → الاختصارات.
+- حركة الضغط المطول لتغيير **حجم الأداة** وحركة تغيير **الشفافية** بقوا اختصارات منفصلة قابلة للتخصيص. الافتراضي لسه **Alt** للحجم و**Ctrl** للشفافية.
+- مؤشر الحجم بقى يعرض قيمة السُمك بالبكسل ومعاها نسبة مئوية من مدى حجم الأداة؛ أداة النحت بتعرض نطاق التأثير. مؤشر الشفافية لسه بيعرض نقطة بنفس اللون والنسبة الفعلية.
+- اتشال شريط **تقسيم** الزيادة من فوق اللوحة اليمين؛ فاصل الثلاث نقط هو المتحكم الوحيد في مساحة الخصائص والطبقات.
+- شاشات إنشاء الغرفة والانضمام اتعمل لها UI جديد بكروت وأيقونات وشرح Hover مؤخر. الطرق بقت واضحة: LAN، وTailscale، ودخول مباشر/نفق للمستخدم المتقدم، من غير تغيير بروتوكول الغرف الحالي.
+- دليل الأونلاين بقى يشرح أي عنوان TCP عام قابل للوصول بدل ربط البرنامج بخدمة نفق واحدة، ومفيش ادعاء إن خطط الخدمات الخارجية هتفضل مجانية.
+- اتضاف ملف `ONLINE_ARCHITECTURE_REVIEW_2026-11-19.md` لمراجعة بنية الشبكات والخطوات المستقبلية. صيغة المشاريع وبروتوكول التعاون الحالي ما اتغيروش.
 
 ### إيه الجديد؟
 - علامات إنشاء الفريم بقت موحّدة في OLD وNEW وNew mine: الفريم الفاضي الجديد دائرة خضرا، والكي فريم اللي بينسخ الوضع الحالي دائرة حمرا، والكي فريم الفاضي دائرة بيضا بحد أسود. النوع بيتحفظ جوه المشروع، والمشاريع القديمة بتفضل متوافقة.

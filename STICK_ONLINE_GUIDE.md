@@ -27,7 +27,16 @@ While viewing the same frame, you see each artist's name and roster color beside
 
 As an alternative to Tailscale, both people can explicitly connect to the same authorized [ZeroTier](https://www.zerotier.com/download/) private network, then join using the host's assigned IPv4. This requires separate ZeroTier setup and consent on both devices. The existing Stick host TCP protocol and port 47554 remain the same.
 
-**Internet direct TCP caution:** Opening the host's port to the public internet increases exposure and Stick does not add end-to-end encrypted transport. Prefer an authorized private overlay for now. Public relay-based joins would require an independently deployed and audited backend; no such service is included in this release.
+### Advanced: public TCP tunnel / reachable endpoint
+
+Stick is provider-neutral here. If an external service gives the host a reachable **TCP host:port** and forwards that endpoint to local **TCP 47554**, the guest can paste that public host:port in **Join directly** or use it when creating a Stick invitation.
+
+- [ngrok TCP endpoints](https://ngrok.com/docs/gateway/endpoints/tcp/) can provide a TCP endpoint; account requirements, quotas and pricing are controlled by ngrok and can change.
+- [playit.gg](https://playit.gg/) is another tunneling provider. Generic TCP availability depends on its current plan/features, so Stick does not label it as a guaranteed free option.
+- The tunnel provider is **not bundled with Stick**, is not launched silently, and is not required for LAN/Tailscale use.
+- A tunnel is only transport reachability. The host must still keep Stick open, and the room password is still separate from the transport.
+
+**Internet direct TCP caution:** Opening the host's port or exposing it through a public tunnel increases exposure and Stick does not add end-to-end encrypted transport. For normal friend sessions, prefer an authorized private overlay such as Tailscale/ZeroTier.
 
 ## Same home / LAN
 

@@ -19,6 +19,7 @@ pub struct QuickMenuState {
 pub enum QuickMenuAction {
     Shape(usize),
     Color([u8; 4]),
+    CustomColor,
     Close,
 }
 
@@ -32,6 +33,7 @@ pub fn show(
     colors: &[[u8; 4]],
     selected_shape: usize,
     selected_color: [u8; 4],
+    custom_label: &str,
 ) -> Option<QuickMenuAction> {
     let origin = state.center - egui::vec2(MENU_SIZE * 0.5, MENU_SIZE * 0.5);
     let mut action = None;
@@ -44,21 +46,22 @@ pub fn show(
                 egui::Sense::hover(),
             );
             let center = rect.center();
-            ui.painter().circle_filled(
-                center,
-                31.0,
-                egui::Color32::from_rgba_unmultiplied(18, 24, 33, 246),
-            );
+            let center_rect=egui::Rect::from_center_size(center,egui::vec2(62.0,62.0));
+            let center_response=ui.allocate_rect(center_rect,egui::Sense::click());
+            let center_fill=match state.kind {
+                QuickMenuKind::Colors=>egui::Color32::from_rgba_unmultiplied(
+                    selected_color[0],selected_color[1],selected_color[2],selected_color[3]),
+                QuickMenuKind::Shapes=>egui::Color32::from_rgba_unmultiplied(18,24,33,246),
+            };
+            ui.painter().circle_filled(center,31.0,center_fill);
             ui.painter().circle_stroke(
-                center,
-                31.0,
-                egui::Stroke::new(1.4, egui::Color32::from_rgb(66, 205, 242)),
-            );
+                center,31.0,
+                egui::Stroke::new(
+                    if center_response.hovered(){2.2}else{1.4},
+                    egui::Color32::from_rgb(66,205,242)));
             ui.painter().circle_stroke(
-                center,
-                104.0,
-                egui::Stroke::new(1.0, egui::Color32::from_rgba_unmultiplied(66, 205, 242, 72)),
-            );
+                center,104.0,
+                egui::Stroke::new(1.0,egui::Color32::from_rgba_unmultiplied(66,205,242,72)));
 
             match state.kind {
                 QuickMenuKind::Shapes => {
@@ -109,13 +112,22 @@ pub fn show(
                     }
                 }
                 QuickMenuKind::Colors => {
+                    let luminance=(selected_color[0] as u16*299
+                        +selected_color[1] as u16*587
+                        +selected_color[2] as u16*114)/1000;
+                    let label_color=if luminance>150 {
+                        egui::Color32::BLACK
+                    } else {egui::Color32::WHITE};
                     ui.painter().text(
                         center,
                         egui::Align2::CENTER_CENTER,
-                        "COLOR",
+                        custom_label,
                         egui::FontId::proportional(10.0),
-                        egui::Color32::from_rgb(223, 232, 241),
+                        label_color,
                     );
+                    if center_response.clicked() {
+                        action=Some(QuickMenuAction::CustomColor);
+                    }
                     let count = colors.len().max(1);
                     for (index, color) in colors.iter().copied().enumerate() {
                         let angle = -std::f32::consts::FRAC_PI_2
@@ -163,6 +175,8 @@ pub fn draw_size_feedback(
     radius_px: f32,
     color: egui::Color32,
     value: f32,
+    percent: f32,
+    label: &str,
 ) {
     let r = radius_px.clamp(3.0, 220.0);
     painter.circle_stroke(center, r + 2.0, egui::Stroke::new(2.4, egui::Color32::BLACK));
@@ -171,7 +185,7 @@ pub fn draw_size_feedback(
     painter.text(
         center + egui::vec2(0.0, r + 9.0),
         egui::Align2::CENTER_TOP,
-        format!("{:.0}", value),
+        format!("{} {:.0}px • {:.0}%", label, value, percent.clamp(0.0,100.0)),
         egui::FontId::monospace(11.0),
         egui::Color32::WHITE,
     );

@@ -692,6 +692,12 @@ struct AppConfig {
     tool_shape: String,
     #[serde(default = "default_hand_key")]
     tool_hand: String,
+    #[serde(default = "default_quick_color_key")]
+    quick_color_key: String,
+    #[serde(default = "default_size_gesture_key")]
+    size_gesture_key: String,
+    #[serde(default = "default_opacity_gesture_key")]
+    opacity_gesture_key: String,
     #[serde(default = "default_del_frame_key")]
     delete_frame_key: String,
     insert_keyframe: String,
@@ -726,6 +732,9 @@ fn default_autosave_mins() -> u64 { 5 }
 fn default_cursor_scale() -> f32 { 1.0 }
 fn default_tablet_pressure_sensitivity() -> f32 { 1.0 }
 fn default_tablet_min_pressure() -> f32 { 0.02 }
+fn default_quick_color_key() -> String { "Z".to_string() }
+fn default_size_gesture_key() -> String { "Alt".to_string() }
+fn default_opacity_gesture_key() -> String { "Ctrl".to_string() }
 // Public Desktop OAuth identifier for the Stick Studio Google Cloud project.
 // Not a client secret. A valid build-time override is still supported.
 const OFFICIAL_GOOGLE_CLIENT_ID: &str =
@@ -828,6 +837,9 @@ impl Default for AppConfig {
             tool_text: "N".to_string(),
             tool_shape: "U".to_string(),
             tool_hand: "H".to_string(),
+            quick_color_key: default_quick_color_key(),
+            size_gesture_key: default_size_gesture_key(),
+            opacity_gesture_key: default_opacity_gesture_key(),
             delete_frame_key: "F4".to_string(),
             insert_keyframe: "F6".to_string(),
             insert_blank_kf: "F7".to_string(),
@@ -915,12 +927,29 @@ impl AppConfig {
 fn is_shortcut_pressed(i: &egui::InputState, key_name: &str) -> bool {
     if key_name.is_empty() { return false; }
     if key_name.eq_ignore_ascii_case("Shift") {
-        return i.modifiers.shift && !i.modifiers.ctrl && !i.modifiers.alt && i.events.iter().any(|e| matches!(e, egui::Event::Key { pressed: true, .. }));
+        return i.modifiers.shift && !i.modifiers.ctrl && !i.modifiers.alt
+            && i.events.iter().any(|e| matches!(e, egui::Event::Key { pressed: true, .. }));
+    }
+    if key_name.eq_ignore_ascii_case("Alt") {
+        return i.modifiers.alt && !i.modifiers.ctrl && !i.modifiers.shift;
+    }
+    if key_name.eq_ignore_ascii_case("Ctrl") || key_name.eq_ignore_ascii_case("Control") {
+        return i.modifiers.ctrl && !i.modifiers.alt && !i.modifiers.shift;
     }
     if let Some(k) = egui::Key::from_name(key_name) {
         return i.key_pressed(k) && !i.modifiers.ctrl && !i.modifiers.alt;
     }
     false
+}
+
+fn is_hold_shortcut_active(i: &egui::InputState, key_name: &str) -> bool {
+    if key_name.is_empty() { return false; }
+    if key_name.eq_ignore_ascii_case("Alt") { return i.modifiers.alt; }
+    if key_name.eq_ignore_ascii_case("Ctrl") || key_name.eq_ignore_ascii_case("Control") {
+        return i.modifiers.ctrl;
+    }
+    if key_name.eq_ignore_ascii_case("Shift") { return i.modifiers.shift; }
+    egui::Key::from_name(key_name).is_some_and(|key| i.key_down(key))
 }
 
 fn generate_stick_window_icon() -> egui::IconData {
@@ -1429,6 +1458,53 @@ fn draw_artist_lightning_fx(ctx: &egui::Context, rect: egui::Rect, time: f64) {
         painter.add(egui::Shape::line(bolt, egui::Stroke::new(1.8 + pulse*1.2, cyan)));
     }
 }
+fn online_action_card(
+    ui:&mut egui::Ui,
+    icon:&str,
+    title:&str,
+    subtitle:&str,
+    accent:egui::Color32,
+)->egui::Response {
+    let width=ui.available_width().min(390.0).max(250.0);
+    let (rect,response)=ui.allocate_exact_size(egui::vec2(width,72.0),egui::Sense::click());
+    let hovered=response.hovered();
+    let fill=if hovered {egui::Color32::from_rgb(34,43,55)}
+        else {egui::Color32::from_rgb(27,32,41)};
+    ui.painter().rect_filled(rect,8.0,fill);
+    ui.painter().rect_stroke(rect,8.0,egui::Stroke::new(if hovered{1.8}else{1.0},accent));
+    let icon_center=rect.left_center()+egui::vec2(34.0,0.0);
+    ui.painter().circle_filled(icon_center,22.0,
+        egui::Color32::from_rgba_unmultiplied(accent.r(),accent.g(),accent.b(),45));
+    ui.painter().text(icon_center,egui::Align2::CENTER_CENTER,icon,
+        egui::FontId::proportional(24.0),accent);
+    ui.painter().text(rect.left_top()+egui::vec2(69.0,17.0),
+        egui::Align2::LEFT_TOP,title,egui::FontId::proportional(16.5),egui::Color32::WHITE);
+    ui.painter().text(rect.left_top()+egui::vec2(69.0,42.0),
+        egui::Align2::LEFT_TOP,subtitle,egui::FontId::proportional(11.5),
+        egui::Color32::from_gray(182));
+    response.on_hover_text(format!("{}\n{}",title,subtitle))
+}
+
+fn online_info_chip(
+    ui:&mut egui::Ui,
+    icon:&str,
+    title:&str,
+    description:&str,
+    accent:egui::Color32,
+)->egui::Response {
+    let (rect,response)=ui.allocate_exact_size(egui::vec2(176.0,60.0),egui::Sense::hover());
+    ui.painter().rect_filled(rect,7.0,egui::Color32::from_rgb(25,30,38));
+    ui.painter().rect_stroke(rect,7.0,egui::Stroke::new(
+        if response.hovered(){1.6}else{0.9},accent));
+    ui.painter().text(rect.left_center()+egui::vec2(24.0,-8.0),
+        egui::Align2::CENTER_CENTER,icon,egui::FontId::proportional(19.0),accent);
+    ui.painter().text(rect.left_top()+egui::vec2(48.0,12.0),
+        egui::Align2::LEFT_TOP,title,egui::FontId::proportional(13.0),egui::Color32::WHITE);
+    ui.painter().text(rect.left_top()+egui::vec2(48.0,34.0),
+        egui::Align2::LEFT_TOP,"ⓘ",egui::FontId::proportional(11.0),accent);
+    response.on_hover_text(format!("{}\n{}",title,description))
+}
+
 fn draw_stick_timeline_cell(painter: &egui::Painter, rect: egui::Rect, is_keyframe: bool, has_content: bool, tween_mode: TweenMode, marker: FrameMarkerKind) {
     let c = rect.center();
     match tween_mode {
@@ -1700,6 +1776,7 @@ struct StickApp {
     alt_size_drag_origin: Option<(egui::Pos2, f32)>,
     ctrl_opacity_drag_origin: Option<(egui::Pos2, f32)>,
     canvas_quick_menu: Option<canvas_quick_menu::QuickMenuState>,
+    show_quick_custom_color: bool,
 }
 
 impl StickApp {
@@ -1890,6 +1967,7 @@ impl StickApp {
             alt_size_drag_origin: None,
             ctrl_opacity_drag_origin: None,
             canvas_quick_menu: None,
+            show_quick_custom_color: false,
         }
     }
 
@@ -2217,12 +2295,24 @@ impl StickApp {
                     OnlinePage::ChooseAction => {
                         ui.heading(tr(lang, "Create or Join a Room", "إنشاء غرفة أو الانضمام لغرفة"));
                         ui.add_space(18.0);
-                        if ui.add_sized([300.0, 58.0], egui::Button::new(tr(lang, "Create Room", "إنشاء غرفة"))).clicked() {
+                        let create=online_action_card(
+                            ui,"＋",
+                            &tr(lang,"Create Room","إنشاء غرفة"),
+                            &tr(lang,"Your PC becomes the host and shares the current project.",
+                                "جهازك يبقى الهوست ويشارك المشروع الحالي."),
+                            egui::Color32::from_rgb(43,200,146));
+                        if create.clicked() {
                             self.online_page = OnlinePage::CreateRoom;
                             self.online_message.clear();
                         }
-                        ui.add_space(12.0);
-                        if ui.add_sized([300.0, 58.0], egui::Button::new(tr(lang, "Join Room", "انضمام لغرفة"))).clicked() {
+                        ui.add_space(10.0);
+                        let join=online_action_card(
+                            ui,"⇲",
+                            &tr(lang,"Join Room","انضمام لغرفة"),
+                            &tr(lang,"Discover LAN/Tailscale rooms or paste an invitation/address.",
+                                "اكتشف غرف LAN/Tailscale أو الصق دعوة أو عنوان."),
+                            egui::Color32::from_rgb(76,180,245));
+                        if join.clicked() {
                             self.online_page = OnlinePage::JoinRoom;
                             self.online_message.clear();
                             self.refresh_online_rooms();
@@ -2247,6 +2337,26 @@ impl StickApp {
                     }
                     OnlinePage::CreateRoom => {
                         ui.heading(tr(lang, "Host a room", "إنشاء غرفة جديدة"));
+                        ui.add_space(8.0);
+                        ui.horizontal_wrapped(|ui|{
+                            online_info_chip(ui,"⌂",&tr(lang,"LAN","الشبكة المحلية"),
+                                &tr(lang,"Automatic discovery for devices on the same router/network.",
+                                    "اكتشاف تلقائي للأجهزة على نفس الراوتر أو الشبكة."),
+                                egui::Color32::from_rgb(72,201,137));
+                            let ts_ok=self.online_remote_info.as_ref().is_some_and(|x|x.connected);
+                            online_info_chip(ui,"⚡","Tailscale",
+                                &tr(lang,"Recommended for friends on different Internet connections; no router port-forwarding.",
+                                    "موصى به للأصحاب على نت مختلف، من غير فتح بورت في الراوتر."),
+                                if ts_ok {egui::Color32::from_rgb(77,215,140)}
+                                else {egui::Color32::from_rgb(120,130,145)});
+                            online_info_chip(ui,"↗",&tr(lang,"Direct / Tunnel","مباشر / نفق"),
+                                &tr(lang,"Advanced: expose TCP 47554 with a reachable public endpoint, then share host:port.",
+                                    "متقدم: وفّر عنوان عام يوصل لـTCP 47554 وشارك host:port."),
+                                egui::Color32::from_rgb(242,182,68));
+                        });
+                        ui.small(tr(lang,
+                            "Hover any connection icon for 2 seconds to see what it does. The Online Guide explains every method.",
+                            "حط الماوس على أي أيقونة لمدة ثانيتين عشان تعرف وظيفتها. دليل الأونلاين شارح كل الطرق."));
                         ui.add_space(12.0);
                         ui.label(tr(lang,
                             "Your PC becomes the host/server. Keep Stick open; friends can connect over LAN or via Tailscale from other networks.",
@@ -2306,12 +2416,29 @@ impl StickApp {
                     }
                     OnlinePage::JoinRoom => {
                         ui.heading(tr(lang,"Join a room","الانضمام لغرفة"));
+                        ui.horizontal_wrapped(|ui|{
+                            online_info_chip(ui,"⌂",&tr(lang,"LAN Rooms","غرف LAN"),
+                                &tr(lang,"Rooms discovered automatically on your local network.",
+                                    "غرف بتظهر تلقائي على نفس الشبكة المحلية."),
+                                egui::Color32::from_rgb(72,201,137));
+                            let ts_ok=self.online_remote_info.as_ref().is_some_and(|x|x.connected);
+                            online_info_chip(ui,"⚡","Tailscale",
+                                &tr(lang,"Remote private-network rooms discovered from authorized peers.",
+                                    "غرف بعيدة على شبكة خاصة من الأجهزة المسموح لها."),
+                                if ts_ok {egui::Color32::from_rgb(77,215,140)}
+                                else {egui::Color32::from_rgb(120,130,145)});
+                            online_info_chip(ui,"⇲",&tr(lang,"Invite / Direct","دعوة / مباشر"),
+                                &tr(lang,"Paste a Stick invitation or reachable host:port.",
+                                    "الصق رابط دعوة Stick أو عنوان host:port قابل للوصول."),
+                                egui::Color32::from_rgb(76,180,245));
+                        });
                         ui.small(tr(lang,
-                            "Rooms from your LAN or authorized Tailscale friends appear here.",
-                            "هنا بتظهر غرف نفس الشبكة أو أصحابك المسموح لهم على Tailscale."));
+                            "Hover an icon for 2 seconds for details, or open the Online Guide above.",
+                            "حط الماوس على الأيقونة ثانيتين للتفاصيل، أو افتح دليل الأونلاين فوق."));
                         ui.add_space(10.0);
                         ui.horizontal(|ui|{
-                            if ui.button(tr(lang,"Refresh","تحديث الغرف")).clicked(){
+                            if ui.button("⟳").on_hover_text(tr(lang,
+                                "Refresh room discovery","تحديث البحث عن الغرف")).clicked(){
                                 self.refresh_online_rooms();
                             }
                             if self.online_discovery.is_some(){ui.spinner();}
@@ -2342,11 +2469,18 @@ impl StickApp {
                                                     } else {tr(lang,"Animation","أنيميشن")},
                                                     room.members,room.limit,room.room_code));
                                             });
-                                            if room.locked {ui.label("🔒");}
+                                            if room.locked {
+                                                ui.label("🔒").on_hover_text(tr(lang,
+                                                    "Password protected room","غرفة محمية بكلمة سر"));
+                                            }
                                             if ui.add_enabled(self.online_session.is_none(),
-                                                egui::Button::new(
-                                                    if room.locked {tr(lang,"Select","اختيار")}
-                                                    else {tr(lang,"Join","دخول")})).clicked(){
+                                                egui::Button::new(if room.locked {"🔑"} else {"⇲"}))
+                                                .on_hover_text(if room.locked {
+                                                    tr(lang,"Select room and enter its password below",
+                                                        "اختار الغرفة واكتب كلمة السر تحت")
+                                                } else {
+                                                    tr(lang,"Join this room","ادخل الغرفة")
+                                                }).clicked(){
                                                 self.online_address=room.address.clone();
                                                 self.online_code_input=room.room_code.clone();
                                                 self.online_room_name=room.title.clone();
@@ -2483,6 +2617,17 @@ impl StickApp {
                                 "If both PCs join the same authorized ZeroTier network, enter the host's assigned IPv4 in Direct Join or in an invite. This is optional and LAN/Tailscale still work.",
                                 "لو الجهازين على نفس شبكة ZeroTier المصرح بيها، استخدم IPv4 الخاص بالهوست في الدخول المباشر أو رابط الدعوة. LAN وTailscale مستمرين."));
                             ui.hyperlink_to("ZeroTier","https://www.zerotier.com/download/");
+                            ui.separator();
+                            ui.strong(tr(lang,
+                                "Advanced public tunnel / endpoint",
+                                "نفق أو عنوان عام للمستخدم المتقدم"));
+                            ui.small(tr(lang,
+                                "Stick only needs a reachable TCP endpoint that forwards to local TCP 47554. Paste the provider's host:port in Direct Join or into a Stick invitation. Provider plans and limits can change.",
+                                "Stick محتاج فقط عنوان TCP قابل للوصول يتحول للبورت المحلي 47554. حط host:port بتاع الخدمة في الدخول المباشر أو رابط الدعوة. خطط وحدود الخدمات ممكن تتغير."));
+                            ui.horizontal_wrapped(|ui|{
+                                ui.hyperlink_to("ngrok TCP","https://ngrok.com/docs/gateway/endpoints/tcp");
+                                ui.hyperlink_to("playit.gg","https://playit.gg/");
+                            });
                             ui.small(tr(lang,
                                 "The host must keep Stick open; both devices must be permitted to reach each other. TCP 47554 must be allowed in the host firewall. Do not disable the firewall.",
                                 "لازم صاحب الغرفة يسيب Stick شغال، والأجهزة تكون مسموح لها تتواصل. اسمح لـStick ببورت TCP 47554 في جدار حماية الهوست، من غير تعطيل الحماية."));
@@ -2784,6 +2929,19 @@ impl StickApp {
             ActiveToolUI::Sculpt => size*scale,
             _ => size*scale*0.5,
         })
+    }
+
+    fn active_tool_size_percent(&self) -> Option<f32> {
+        let value=self.active_sizable_tool_size()?;
+        let (min,max)=match self.active_tool_ui {
+            ActiveToolUI::Brush => (1.0,120.0),
+            ActiveToolUI::VectorPen => (1.0,100.0),
+            ActiveToolUI::EraserRed | ActiveToolUI::EraserGreen => (2.0,120.0),
+            ActiveToolUI::ShapeLine => (1.0,120.0),
+            ActiveToolUI::Sculpt => (8.0,360.0),
+            _ => return None,
+        };
+        Some(((value-min)/(max-min)*100.0).clamp(0.0,100.0))
     }
 
     fn commit_stroke_with_symmetry(&mut self, stroke: Stroke, now_time: f64) {
@@ -3839,12 +3997,16 @@ impl StickApp {
                             "٤. جديد: من غرفة الهوست انسخ رابط الدعوة بدون كلمة السر، وصاحبك يلصقه في الدخول. LAN وTailscale لسه شغالين."));
                         ui.add_space(6.0);
                         ui.label(tr(lang,
-                            "5. On different networks, ZeroTier is an optional alternative to Tailscale when both PCs join the same trusted virtual network. Direct public IPv4/DNS requires a reachable TCP port 47554.",
-                            "٥. على شبكات مختلفة ينفع ZeroTier بدل Tailscale لو الجهازين متصلين بنفس الشبكة الخاصة. الدخول المباشر عبر IP عام أو DNS محتاج وصول لبورت TCP 47554."));
+                            "5. On different networks, Tailscale is the recommended private path. ZeroTier is an alternative when both PCs join the same trusted virtual network.",
+                            "٥. على شبكات مختلفة، Tailscale هو الطريق الخاص الموصى به. ZeroTier بديل لو الجهازين داخلين نفس الشبكة الموثوقة."));
                         ui.add_space(6.0);
                         ui.label(tr(lang,
-                            "6. Keep the host open and use matching Stick versions. A room code or invitation is not a global rendezvous or NAT traversal relay.",
-                            "٦. خليك فاتح الهوست واستخدموا نسخ Stick متوافقة. كود الغرفة أو رابط الدعوة مش سيرفر بحث عالمي ومش بيتجاوز حجب الراوتر."));
+                            "6. Advanced option: any public TCP tunnel/endpoint that forwards to local port 47554 can work with Direct Join. Paste its host:port; Stick does not require a specific tunnel provider.",
+                            "٦. اختيار متقدم: أي نفق أو عنوان TCP عام يحوّل للبورت المحلي 47554 ينفع مع الدخول المباشر. الصق host:port؛ Stick مش مربوط بخدمة نفق معينة."));
+                        ui.add_space(6.0);
+                        ui.label(tr(lang,
+                            "7. Keep the host open and use matching Stick versions. A room code or invitation is not a global rendezvous or NAT traversal relay.",
+                            "٧. خليك فاتح الهوست واستخدموا نسخ Stick متوافقة. كود الغرفة أو رابط الدعوة مش سيرفر بحث عالمي ومش بيتجاوز حجب الراوتر."));
                         ui.add_space(8.0);
                         ui.colored_label(egui::Color32::from_rgb(255,204,105),tr(lang,
                             "Security: direct LAN traffic is not end-to-end encrypted by Stick. Do not disable your firewall. Allow TCP 47554 and UDP 47553 only as appropriate.",
@@ -4541,6 +4703,8 @@ impl eframe::App for StickApp {
                     captured_key = Some(key.name().to_string());
                 }
             }
+            if captured_key.is_none() && i.modifiers.alt { captured_key = Some("Alt".to_string()); }
+            if captured_key.is_none() && i.modifiers.ctrl { captured_key = Some("Ctrl".to_string()); }
             if captured_key.is_none() && i.modifiers.shift { captured_key = Some("Shift".to_string()); }
             let z_in = (i.modifiers.ctrl && i.key_down(egui::Key::ArrowUp)) || (!i.modifiers.ctrl && !i.modifiers.alt && i.key_down(egui::Key::W));
             let z_out = (i.modifiers.ctrl && i.key_down(egui::Key::ArrowDown)) || (!i.modifiers.ctrl && !i.modifiers.alt && i.key_down(egui::Key::S));
@@ -4595,6 +4759,13 @@ impl eframe::App for StickApp {
             )
         });
 
+        let quick_color_pressed=ctx.input(|i|
+            is_shortcut_pressed(i,&self.config.quick_color_key));
+        let size_gesture_down=ctx.input(|i|
+            is_hold_shortcut_active(i,&self.config.size_gesture_key));
+        let opacity_gesture_down=ctx.input(|i|
+            is_hold_shortcut_active(i,&self.config.opacity_gesture_key));
+
         // Best-effort tablet pressure delivered by egui Touch events.
         // Regular mouse input and unsupported tablets safely use 1.0.
         let raw_drawing_pressure =
@@ -4633,11 +4804,33 @@ impl eframe::App for StickApp {
                 10 => self.config.tool_text = k_name,
                 11 => self.config.tool_shape = k_name,
                 12 => self.config.tool_hand = k_name,
+                100 => self.config.quick_color_key = k_name,
+                101 => self.config.size_gesture_key = k_name,
+                102 => self.config.opacity_gesture_key = k_name,
                 _ => {}
             }
             self.config.save();
             self.listening_shortcut_idx = None;
             typing_in_textbox = true;
+        }
+
+        if self.show_quick_custom_color {
+            let mut open=true;
+            let mut done=false;
+            egui::Window::new(tr(lang,"Custom Color","لون مخصص"))
+                .open(&mut open).collapsible(false).resizable(false)
+                .anchor(egui::Align2::CENTER_CENTER,[0.0,0.0])
+                .show(ctx,|ui|{
+                    ui.label(tr(lang,
+                        "Choose the exact color used by Brush, Vector Pen and Bucket.",
+                        "اختار اللون المخصص للفرشة وقلم الفيكتور والبوكت."));
+                    ui.add_space(8.0);
+                    ui.color_edit_button_srgba_unmultiplied(&mut self.brush_color);
+                    ui.monospace(format!("#{:02X}{:02X}{:02X}",
+                        self.brush_color[0],self.brush_color[1],self.brush_color[2]));
+                    if ui.button(tr(lang,"Done","تمام")).clicked(){done=true;}
+                });
+            self.show_quick_custom_color=open && !done;
         }
 
         let transient_system_overlay = artist_intro_visible || now_time < self.level_up_banner_timer;
@@ -4648,7 +4841,7 @@ impl eframe::App for StickApp {
             || self.show_features_guide || self.layer_rename_index.is_some()
             || self.show_timeline_settings || self.show_project_notice
             || self.show_recovery_dialog || self.show_project_details
-            || self.show_feedback_dialog
+            || self.show_feedback_dialog || self.show_quick_custom_color
             || transient_system_overlay;
         if any_modal_open { typing_in_textbox = true; }
 
@@ -4976,6 +5169,19 @@ impl eframe::App for StickApp {
                             });
                         }
                         ui.separator();
+                        for (en,ar,key) in [
+                            ("Quick color wheel","عجلة الألوان السريعة",self.config.quick_color_key.as_str()),
+                            ("Adjust tool size (hold + move mouse)","تغيير حجم الأداة (ضغط مطول + حركة الماوس)",self.config.size_gesture_key.as_str()),
+                            ("Adjust opacity (hold + move mouse)","تغيير الشفافية (ضغط مطول + حركة الماوس)",self.config.opacity_gesture_key.as_str()),
+                        ] {
+                            ui.horizontal(|ui| {
+                                ui.label(tr(lang,en,ar));
+                                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center),|ui|{
+                                    ui.monospace(key);
+                                });
+                            });
+                        }
+                        ui.separator();
                         ui.label(tr(lang, "Brush colors: right panel, under Colors. Onion Skin: Animation workspace, above the Timeline.", "الألوان: في اللوحة اليمنى تحت عنوان الألوان. عرض الفريمات المجاورة: في وضع الأنيميشن فوق التايم لاين."));
                     });
                     ui.separator();
@@ -5196,6 +5402,29 @@ impl eframe::App for StickApp {
                                     });
                                 });
                             }
+                            ui.separator();
+                            ui.strong(tr(lang,"Canvas quick controls","اختصارات التحكم السريع"));
+                            for (slot,en,ar,key) in [
+                                (100usize,"Quick color wheel","عجلة الألوان السريعة",self.config.quick_color_key.clone()),
+                                (101usize,"Adjust tool size (hold)","تغيير حجم الأداة بالضغط المطول",self.config.size_gesture_key.clone()),
+                                (102usize,"Adjust opacity (hold)","تغيير الشفافية بالضغط المطول",self.config.opacity_gesture_key.clone()),
+                            ] {
+                                ui.horizontal(|ui| {
+                                    ui.label(tr(lang,en,ar));
+                                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                        let is_listening=self.listening_shortcut_idx==Some(slot);
+                                        let caption=if is_listening {
+                                            tr(lang,"Press a key...","دوس أي زرار...").to_owned()
+                                        } else {format!("{}  ✎",key)};
+                                        if ui.button(caption).clicked() {
+                                            self.listening_shortcut_idx=Some(slot);
+                                        }
+                                    });
+                                });
+                            }
+                            ui.small(tr(lang,
+                                "Size and opacity shortcuts are hold gestures: keep the chosen key pressed and move the mouse.",
+                                "اختصار الحجم والشفافية ضغط مطول: خليك ضاغط الزرار المختار وحرّك الماوس."));
                         });
                         if ui.button(tr(lang, "Reset Keyboard Shortcuts", "رجّع اختصارات الكيبورد الأصلية")).clicked() {
                             let d = AppConfig::default();
@@ -5212,6 +5441,9 @@ impl eframe::App for StickApp {
                             self.config.tool_text = d.tool_text;
                             self.config.tool_shape = d.tool_shape;
                             self.config.tool_hand = d.tool_hand;
+                            self.config.quick_color_key = d.quick_color_key;
+                            self.config.size_gesture_key = d.size_gesture_key;
+                            self.config.opacity_gesture_key = d.opacity_gesture_key;
                             self.listening_shortcut_idx = None;
                             self.config.save();
                         }
@@ -6317,12 +6549,6 @@ impl eframe::App for StickApp {
                     ui.selectable_value(&mut self.right_panel_tab,2,
                         tr(lang,"Media","وسائط"));
                 }
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.add(egui::Slider::new(&mut self.config.right_panel_split, 0.18..=0.85)
-                        .show_value(false).text(tr(lang, "Split", "تقسيم"))).changed() {
-                        self.config.save();
-                    }
-                });
             });
             let panel_height = ui.available_height();
             let tool_height = ((panel_height - 44.0).max(180.0)
@@ -7659,9 +7885,9 @@ impl eframe::App for StickApp {
                 ActiveToolUI::Brush | ActiveToolUI::VectorPen | ActiveToolUI::Sculpt
                     | ActiveToolUI::EraserRed | ActiveToolUI::EraserGreen);
             let show_dot = is_inside_workspace && !any_modal_open && !space_down
-                && !alt_down && !ctrl_down && custom_brush_cursor;
+                && !size_gesture_down && !opacity_gesture_down && custom_brush_cursor;
             let show_tool_icon = is_inside_workspace && !any_modal_open && !space_down
-                && !alt_down && !ctrl_down && !custom_brush_cursor
+                && !size_gesture_down && !opacity_gesture_down && !custom_brush_cursor
                 && self.active_tool_ui != ActiveToolUI::HandCanvas;
             let tool_cursor = if !is_inside_workspace || any_modal_open {
                 egui::CursorIcon::Default
@@ -7687,13 +7913,21 @@ impl eframe::App for StickApp {
 
             let is_over_canvas = pointer_on_canvas_layer;
             let secondary_clicked=ctx.input(|i|i.pointer.secondary_clicked());
-            if secondary_clicked && is_over_canvas && !any_modal_open {
+            if (secondary_clicked || quick_color_pressed) && is_over_canvas && !any_modal_open {
                 if let Some(center)=pointer_pos {
-                    let kind=match self.active_tool_ui {
-                        ActiveToolUI::ShapeLine=>Some(canvas_quick_menu::QuickMenuKind::Shapes),
-                        ActiveToolUI::Brush | ActiveToolUI::VectorPen=>
-                            Some(canvas_quick_menu::QuickMenuKind::Colors),
-                        _=>None,
+                    let kind=if quick_color_pressed {
+                        match self.active_tool_ui {
+                            ActiveToolUI::Brush | ActiveToolUI::VectorPen | ActiveToolUI::Bucket=>
+                                Some(canvas_quick_menu::QuickMenuKind::Colors),
+                            _=>None,
+                        }
+                    } else {
+                        match self.active_tool_ui {
+                            ActiveToolUI::ShapeLine=>Some(canvas_quick_menu::QuickMenuKind::Shapes),
+                            ActiveToolUI::Brush | ActiveToolUI::VectorPen | ActiveToolUI::Bucket=>
+                                Some(canvas_quick_menu::QuickMenuKind::Colors),
+                            _=>None,
+                        }
                     };
                     if let Some(kind)=kind {
                         self.canvas_quick_menu=Some(canvas_quick_menu::QuickMenuState{kind,center});
@@ -7715,7 +7949,7 @@ impl eframe::App for StickApp {
                 };
                 if let Some(action)=canvas_quick_menu::show(
                     ctx,menu,&["／","○","□","▭","△","⬠"],&colors,
-                    selected_shape,self.brush_color
+                    selected_shape,self.brush_color,&tr(lang,"CUSTOM","مخصص")
                 ) {
                     match action {
                         canvas_quick_menu::QuickMenuAction::Shape(index)=>{
@@ -7735,6 +7969,11 @@ impl eframe::App for StickApp {
                             self.play_sfx(SfxType::UiClick);
                             self.canvas_quick_menu=None;
                         }
+                        canvas_quick_menu::QuickMenuAction::CustomColor=>{
+                            self.show_quick_custom_color=true;
+                            self.play_sfx(SfxType::UiClick);
+                            self.canvas_quick_menu=None;
+                        }
                         canvas_quick_menu::QuickMenuAction::Close=>{
                             self.canvas_quick_menu=None;
                         }
@@ -7743,7 +7982,7 @@ impl eframe::App for StickApp {
             }
 
             let can_alt_adjust_size = self.active_sizable_tool_size().is_some();
-            if alt_down && can_alt_adjust_size && is_over_canvas && !any_modal_open
+            if size_gesture_down && can_alt_adjust_size && is_over_canvas && !any_modal_open
                 && self.canvas_quick_menu.is_none() {
                 if let Some(pos) = pointer_pos {
                     if let Some((origin, start_size)) = self.alt_size_drag_origin {
@@ -7752,15 +7991,19 @@ impl eframe::App for StickApp {
                     } else if let Some(start_size) = self.active_sizable_tool_size() {
                         self.alt_size_drag_origin = Some((pos, start_size));
                     }
-                    if let (Some(radius),Some(value))=(
+                    if let (Some(radius),Some(value),Some(percent))=(
                         self.active_tool_visual_radius_px(scale),
-                        self.active_sizable_tool_size()
+                        self.active_sizable_tool_size(),
+                        self.active_tool_size_percent()
                     ) {
+                        let label=if self.active_tool_ui==ActiveToolUI::Sculpt {
+                            tr(lang,"Radius","نطاق")
+                        } else {tr(lang,"Thickness","السُمك")};
                         canvas_quick_menu::draw_size_feedback(
                             &painter,pos,radius,
                             egui::Color32::from_rgb(
                                 self.brush_color[0],self.brush_color[1],self.brush_color[2]),
-                            value
+                            value,percent,&label
                         );
                     }
                 }
@@ -7771,7 +8014,7 @@ impl eframe::App for StickApp {
             }
 
             let can_ctrl_adjust_opacity=self.active_tool_opacity().is_some();
-            if ctrl_down && !alt_down && can_ctrl_adjust_opacity && is_over_canvas
+            if opacity_gesture_down && !size_gesture_down && can_ctrl_adjust_opacity && is_over_canvas
                 && !any_modal_open && self.canvas_quick_menu.is_none() {
                 if let Some(pos)=pointer_pos {
                     if let Some((origin,start_opacity))=self.ctrl_opacity_drag_origin {
@@ -7791,7 +8034,8 @@ impl eframe::App for StickApp {
                 self.ctrl_opacity_drag_origin=None;
             }
 
-            if scroll_y != 0.0 && is_over_canvas && !any_modal_open && !alt_down && !ctrl_down {
+            if scroll_y != 0.0 && is_over_canvas && !any_modal_open
+                && !size_gesture_down && !opacity_gesture_down {
                 let old_zoom = self.zoom_level;
                 let new_zoom = (old_zoom * (1.0 + scroll_y * 0.0018).clamp(0.82, 1.22)).clamp(0.1, 6.0);
                 if let Some(pointer) = pointer_pos {
@@ -7973,8 +8217,8 @@ impl eframe::App for StickApp {
             }
 
             let can_use_tool = self.active_tool_ui == ActiveToolUI::Eyedropper || !self.is_active_layer_locked();
-            let opacity_gesture=ctrl_down && self.active_tool_opacity().is_some();
-            if !space_down && !alt_down && !opacity_gesture
+            let opacity_gesture=opacity_gesture_down && self.active_tool_opacity().is_some();
+            if !space_down && !size_gesture_down && !opacity_gesture
                 && self.canvas_quick_menu.is_none()
                 && self.active_tool_ui != ActiveToolUI::HandCanvas
                 && is_over_canvas && !any_modal_open && can_use_tool {
@@ -9197,6 +9441,14 @@ mod tool_discovery_tests {
         let mut config = AppConfig::default();
         config.tool_brush = "J".to_string();
         assert_eq!(tool_shortcut(ActiveToolUI::Brush, &config), "J");
+    }
+
+    #[test]
+    fn quick_canvas_control_shortcut_defaults_are_stable() {
+        let config=AppConfig::default();
+        assert_eq!(config.quick_color_key,"Z");
+        assert_eq!(config.size_gesture_key,"Alt");
+        assert_eq!(config.opacity_gesture_key,"Ctrl");
     }
 
     #[test]
