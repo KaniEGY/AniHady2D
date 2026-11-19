@@ -9202,9 +9202,8 @@ impl eframe::App for StickApp {
                 }
             }
             if let Some(stroke) = &self.current_stroke {
-                draw_stroke_pro(&painter, stroke, None, 1.0, scale, 0.0, 0.0, &to_screen);
-                if let Some(mirrored) = self.mirrored_stroke(stroke) {
-                    draw_stroke_pro(&painter, &mirrored, None, 1.0, scale, 0.0, 0.0, &to_screen);
+                for preview in self.symmetry_strokes(stroke.clone()) {
+                    draw_stroke_pro(&painter, &preview, None, 1.0, scale, 0.0, 0.0, &to_screen);
                 }
             }
             if let (Some(p0), Some(p1)) = (self.shape_drag_start, self.shape_drag_current) {
@@ -9213,9 +9212,8 @@ impl eframe::App for StickApp {
                 if self.shape_fill_enabled && self.selected_shape_kind != GeometricShapeKind::StraightLine {
                     shape.fill_color = Some(self.brush_color);
                 }
-                draw_stroke_pro(&painter, &shape, None, 1.0, scale, 0.0, 0.0, &to_screen);
-                if let Some(mirrored) = self.mirrored_stroke(&shape) {
-                    draw_stroke_pro(&painter, &mirrored, None, 1.0, scale, 0.0, 0.0, &to_screen);
+                for preview in self.symmetry_strokes(shape) {
+                    draw_stroke_pro(&painter, &preview, None, 1.0, scale, 0.0, 0.0, &to_screen);
                 }
             }
             // Display chrome only, intentionally excluded from all exports.
