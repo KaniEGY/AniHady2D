@@ -357,8 +357,11 @@ fn draw_skia_stroke(pixmap: &mut Pixmap, s: &crate::project::Stroke, ts: Transfo
                             for p in path.iter().skip(1) { pb.line_to(p.x,p.y); }
                         }
                     } else {
-                        pb.move_to(first.x,first.y);
-                        for p in &s.points[1..] { pb.line_to(p.x,p.y); }
+                        let path = crate::brush_engine::smooth_freehand_points(&s.points, width);
+                        if let Some(first) = path.first() {
+                            pb.move_to(first.x,first.y);
+                            for p in path.iter().skip(1) { pb.line_to(p.x,p.y); }
+                        }
                     }
                     pb.finish()
                 });
