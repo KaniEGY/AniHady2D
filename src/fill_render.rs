@@ -7,31 +7,42 @@ use eframe::egui;
 const MAX_FILL_VERTICES: usize = 20_000;
 
 pub fn solid_polygon_mesh(points: &[egui::Pos2], color: egui::Color32) -> Option<egui::Mesh> {
-    if points.len() < 3 || points.len() > MAX_FILL_VERTICES
-        || points.iter().any(|p| !p.x.is_finite() || !p.y.is_finite())
-        || color.a() == 0 { return None; }
+    solid_polygon_mesh_rings(&[points.to_vec()], color)
+}
 
-    // Bucket polygons repeat the first point as a final closing point; Earcut
-    // expects a single copy. Do not mutate the saved project geometry.
-    let mut end = points.len();
-    if points[0].distance_sq(points[end - 1]) < 0.0001 { end -= 1; }
-    if end < 3 { return None; }
-    let vertices: Vec<f64> = points[..end].iter()
-        .flat_map(|p| [p.x as f64, p.y as f64]).collect();
-    let triangles = earcutr::earcut(&vertices, &[], 2).ok()?;
-    if triangles.len() < 3 || triangles.len() % 3 != 0 { return None; }
-
-    let mut mesh = egui::Mesh::default();
-    for pos in &points[..end] {
+/// Triangulate one filled region with optional hole rings. This is used by
+/// Bucket fills so a closed contour inside another closed contour stays an
+/// independent paintable region instead of being swallowed by the outer fill.
+pub fn solid_polygon_mesh_rings(
+    rings: &[Vec<egui::Pos2>], color: egui::Color32,
+) -> Option<egui::Mesh> {
+    if rings.is_empty() || color.a()==0 { return None; }
+    let mut vertices=Vec::<f64>::new();
+    let mut positions=Vec::<egui::Pos2>::new();
+    let mut holes=Vec::<usize>::new();
+    for (ring_index,ring) in rings.iter().enumerate() {
+        if ring.len()<3 || ring.iter().any(|p|!p.x.is_finite()||!p.y.is_finite()) {
+            return None;
+        }
+        let mut end=ring.len();
+        if ring[0].distance_sq(ring[end-1])<0.0001 {end-=1;}
+        if end<3 {return None;}
+        if ring_index>0 {holes.push(positions.len());}
+        for pos in &ring[..end] {
+            positions.push(*pos);
+            vertices.extend([pos.x as f64,pos.y as f64]);
+        }
+        if positions.len()>MAX_FILL_VERTICES {return None;}
+    }
+    let triangles=earcutr::earcut(&vertices,&holes,2).ok()?;
+    if triangles.len()<3 || triangles.len()%3!=0 {return None;}
+    let mut mesh=egui::Mesh::default();
+    for pos in positions {
         mesh.vertices.push(egui::epaint::Vertex {
-            pos: *pos,
-            uv: egui::epaint::WHITE_UV,
-            color,
+            pos,uv:egui::epaint::WHITE_UV,color,
         });
     }
-    for idx in triangles {
-        mesh.indices.push(u32::try_from(idx).ok()?);
-    }
+    for idx in triangles {mesh.indices.push(u32::try_from(idx).ok()?);}
     Some(mesh)
 }
 
@@ -67,5 +78,12 @@ mod tests {
         assert!(solid_polygon_mesh(&[p(0.,0.),p(1.,1.)],egui::Color32::RED).is_none());
         assert!(solid_polygon_mesh(&[p(0.,0.),p(f32::NAN,1.),p(3.,1.)],egui::Color32::RED).is_none());
         assert!(solid_polygon_mesh(&[p(0.,0.),p(1.,0.),p(1.,1.)],egui::Color32::TRANSPARENT).is_none());
+    }
+    #[test]
+    fn nested_ring_remains_a_real_hole() {
+        let outer=vec![p(0.,0.),p(100.,0.),p(100.,100.),p(0.,100.),p(0.,0.)];
+        let hole=vec![p(30.,30.),p(30.,70.),p(70.,70.),p(70.,30.),p(30.,30.)];
+        let mesh=solid_polygon_mesh_rings(&[outer,hole],egui::Color32::RED).unwrap();
+        assert!((total_triangle_area(&mesh)-8400.0).abs()<0.05);
     }
 }
