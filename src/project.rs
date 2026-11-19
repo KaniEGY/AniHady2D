@@ -326,6 +326,8 @@ pub struct TextItem {
     pub font_size: f32,
     #[serde(default = "default_black")]
     pub color: [u8; 4],
+    #[serde(default)]
+    pub rotation_deg: f32,
 }
 
 fn default_font_size() -> f32 {
@@ -464,6 +466,42 @@ pub struct FrameData {
     pub easing: EasingCurve,
 }
 
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LayerEffectPreset {
+    None,
+    Warm,
+    Cool,
+    Rose,
+    Mint,
+    Night,
+    Vintage,
+}
+impl Default for LayerEffectPreset {
+    fn default()->Self { Self::None }
+}
+impl LayerEffectPreset {
+    pub fn rgb_multiplier(self)->[f32;3] {
+        match self {
+            Self::None => [1.0,1.0,1.0],
+            Self::Warm => [1.0,0.90,0.78],
+            Self::Cool => [0.78,0.90,1.0],
+            Self::Rose => [1.0,0.78,0.88],
+            Self::Mint => [0.78,1.0,0.88],
+            Self::Night => [0.62,0.72,1.0],
+            Self::Vintage => [0.92,0.82,0.66],
+        }
+    }
+    pub fn apply_rgba(self,color:[u8;4])->[u8;4] {
+        let m=self.rgb_multiplier();
+        [
+            (color[0] as f32*m[0]).round().clamp(0.0,255.0) as u8,
+            (color[1] as f32*m[1]).round().clamp(0.0,255.0) as u8,
+            (color[2] as f32*m[2]).round().clamp(0.0,255.0) as u8,
+            color[3],
+        ]
+    }
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct Layer {
     #[serde(default = "default_layer_name")]
@@ -479,6 +517,8 @@ pub struct Layer {
     pub xp_first_paint_rewarded: bool,
     #[serde(default = "default_pressure")]
     pub opacity: f32,
+    #[serde(default)]
+    pub effect: LayerEffectPreset,
     #[serde(default)]
     pub keyframes: HashMap<usize, FrameData>,
 }
@@ -618,6 +658,7 @@ impl Default for AniProject {
                 is_guide: false,
                 xp_first_paint_rewarded: false,
                 opacity: 1.0,
+                effect: LayerEffectPreset::None,
                 keyframes,
             }],
             audio_tracks: Vec::new(),
@@ -962,6 +1003,7 @@ pub fn import_adobe_animate_project(path: &Path) -> Result<AniProject, String> {
                 is_guide: false,
                 xp_first_paint_rewarded: false,
                 opacity: 1.0,
+                effect: LayerEffectPreset::None,
                 keyframes: kf_map,
             });
         }
@@ -996,6 +1038,22 @@ fn parse_animate_edges(edges: &str) -> Vec<StrokePoint> {
 #[cfg(test)]
 mod brush_tip_compat_tests {
     use super::*;
+
+    #[test]
+    fn old_layer_without_effect_defaults_to_none() {
+        let layer:Layer=serde_json::from_str(
+            r#"{"name":"Old","visible":true,"locked":false,"opacity":1.0,"keyframes":{}}"#
+        ).unwrap();
+        assert_eq!(layer.effect,LayerEffectPreset::None);
+    }
+
+    #[test]
+    fn layer_effect_presets_transform_only_rgb() {
+        let c=LayerEffectPreset::Warm.apply_rgba([100,120,140,77]);
+        assert_eq!(c[3],77);
+        assert_eq!(c[0],100);
+        assert!(c[1]<120 && c[2]<140);
+    }
 
     #[test]
     fn legacy_strokes_default_to_round_tip() {
@@ -1072,6 +1130,14 @@ mod brush_tip_compat_tests {
         };
         let point = instance.transform_point(f32::NAN, 5.0);
         assert!(point.0.is_finite() && point.1.is_finite());
+    }
+
+    #[test]
+    fn old_text_without_rotation_loads_at_zero_degrees() {
+        let text: TextItem=serde_json::from_str(
+            r#"{"content":"hello","x":10.0,"y":20.0,"font_size":30.0,"color":[0,0,0,255]}"#
+        ).unwrap();
+        assert_eq!(text.rotation_deg,0.0);
     }
 
     #[test]

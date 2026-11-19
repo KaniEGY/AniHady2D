@@ -10,6 +10,17 @@ pub enum LayerAction {
     MoveDown,
 }
 
+pub fn rename_layer(
+    project:&mut AniProject,index:usize,new_name:&str,
+)->Result<(), &'static str> {
+    let name=new_name.trim();
+    if name.is_empty() { return Err("Layer name cannot be empty."); }
+    if name.chars().count()>80 { return Err("Layer name is too long."); }
+    let layer=project.layers.get_mut(index).ok_or("The selected layer no longer exists.")?;
+    layer.name=name.to_owned();
+    Ok(())
+}
+
 pub fn apply_layer_action(
     project: &mut AniProject,
     index: usize,
@@ -58,6 +69,22 @@ pub fn apply_layer_action(
 mod tests {
     use super::*;
     use crate::project::AniProject;
+
+    #[test]
+    fn renaming_layer_preserves_media_and_keyframes_byte_for_byte() {
+        let mut project=AniProject::default();
+        let media=crate::project::MediaItem{
+            path:"C:/art/test.png".into(),media_type:crate::project::MediaType::Image,
+            x:5.0,y:7.0,width:320.0,height:180.0,rotation_deg:15.0,
+            flip_h:false,flip_v:false
+        };
+        project.layers[0].keyframes.get_mut(&1).unwrap().media_items.push(media);
+        let before=project.layers[0].keyframes.clone();
+        rename_layer(&mut project,0,"Poster").unwrap();
+        assert_eq!(project.layers[0].name,"Poster");
+        assert_eq!(project.layers[0].keyframes,before);
+        assert_eq!(project.layers[0].keyframes[&1].media_items[0].path,"C:/art/test.png");
+    }
 
     #[test]
     fn deleting_only_layer_is_rejected() {

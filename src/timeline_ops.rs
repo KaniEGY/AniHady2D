@@ -8,6 +8,7 @@ pub const MAX_TIMELINE_FRAMES: usize = 20_000;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FrameAction {
     Copy,
+    Cut,
     Paste,
     Clear,
     DeleteKeyframe,
@@ -162,7 +163,7 @@ pub fn apply_frame_edit(
             keys.entry(1).or_default();
         }
         FrameAction::DeleteFrame => unreachable!(),
-        FrameAction::Copy | FrameAction::Paste => {
+        FrameAction::Copy | FrameAction::Cut | FrameAction::Paste => {
             return Err("Clipboard operations need the editor clipboard.");
         }
     }

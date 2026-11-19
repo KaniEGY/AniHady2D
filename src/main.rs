@@ -43,7 +43,7 @@ use exporter::{ImageExportFormat, VideoExportFormat};
 use profile::UserProfile;
 use collab::{OnlineMode, OnlineEvent, OnlineSession, RoomListing, Participant};
 use project::{
-    AniProject, AudioSyncMode, AudioTrack, EasingCurve, FrameData, FrameMarkerKind, KritaBrushPreset, Layer, MediaItem, MediaType,
+    AniProject, AudioSyncMode, AudioTrack, EasingCurve, FrameData, FrameMarkerKind, KritaBrushPreset, Layer, LayerEffectPreset, MediaItem, MediaType,
     BrushTipShape, Stroke, StrokePoint, Symbol, SymbolInstance, TextItem, TweenMode, PROJECT_SCHEMA_VERSION,
 };
 // Game UI sounds are generated as samples without shipping external audio assets.
@@ -581,6 +581,8 @@ struct AppConfig {
     sound_effects_enabled: bool,
     #[serde(default = "default_true_val")]
     artist_project_intro_enabled: bool,
+    #[serde(default = "default_true_val")]
+    level_up_banner_enabled: bool,
     #[serde(default)]
     show_grid: bool,
     #[serde(default)]
@@ -787,6 +789,15 @@ fn default_shape_key() -> String { "U".to_string() }
 fn default_hand_key() -> String { "H".to_string() }
 fn default_del_frame_key() -> String { "F4".to_string() }
 
+fn vector_density_from_tolerance(tolerance:f32)->f32 {
+    let t=tolerance.clamp(0.4,8.0);
+    (100.0-(t-0.4)/(8.0-0.4)*90.0).clamp(10.0,100.0)
+}
+fn vector_tolerance_from_density(density:f32)->f32 {
+    let d=density.clamp(10.0,100.0);
+    (0.4+(100.0-d)/90.0*(8.0-0.4)).clamp(0.4,8.0)
+}
+
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
@@ -795,6 +806,7 @@ impl Default for AppConfig {
             recent_projects: Vec::new(),
             sound_effects_enabled: true,
             artist_project_intro_enabled: true,
+            level_up_banner_enabled: true,
             show_grid: false,
             canvas_appearance: canvas_appearance::CanvasAppearance::default(),
             canvas_aspect_lock: false,
@@ -1682,8 +1694,10 @@ struct StickApp {
     video_drag_origin: Option<(usize,usize)>,
     video_drag_pointer_x: Option<f32>,
     video_drag_undo_captured: bool,
+    image_drag_origin: Option<(usize,usize,usize,u8)>,
+    image_drag_pointer_x: Option<f32>,
+    image_drag_undo_captured: bool,
     right_panel_tab: u8,
-    vector_node_quick_edit: bool,
     timeline_scrub_active: bool,
     active_tool_ui: ActiveToolUI,
     active_krita_brush: KritaBrushPreset,
@@ -1877,8 +1891,10 @@ impl StickApp {
             video_drag_origin: None,
             video_drag_pointer_x: None,
             video_drag_undo_captured: false,
+            image_drag_origin: None,
+            image_drag_pointer_x: None,
+            image_drag_undo_captured: false,
             right_panel_tab: 0,
-            vector_node_quick_edit: false,
             timeline_scrub_active: false,
             active_tool_ui: ActiveToolUI::Brush,
             active_krita_brush: KritaBrushPreset::GPenInk,
@@ -2771,7 +2787,11 @@ impl StickApp {
             self.level_up_custom_msg = profile::level_up_message(
                 (seed % 1000) as usize, self.config.lang == AppLang::Arabic
             );
-            self.level_up_banner_timer = now_time + 10.0;
+            if self.config.level_up_banner_enabled {
+                self.level_up_banner_timer = now_time + 4.0;
+            } else {
+                self.level_up_banner_timer = 0.0;
+            }
             let sound = profile::level_up_sound_variant(level, self.user_profile.xp, seed);
             self.play_sfx(SfxType::LevelUpFanfare(sound));
         }
@@ -3160,6 +3180,8 @@ impl StickApp {
                         let (dx, dy) = (text.x - pivot.x, text.y - pivot.y);
                         text.x = pivot.x + dx * cs - dy * sn;
                         text.y = pivot.y + dx * sn + dy * cs;
+                        text.rotation_deg = (text.rotation_deg + radians.to_degrees())
+                            .rem_euclid(360.0);
                     }
                 }
                 if let Some(index) = self.selected_media_idx {
@@ -3272,6 +3294,16 @@ impl StickApp {
         }
     }
 
+    fn cut_frame(&mut self, layer_idx:usize, frame_idx:usize)->bool {
+        if !(1..=self.project.total_frames).contains(&frame_idx)
+            || !self.project.layers.get(layer_idx).is_some_and(|layer|!layer.locked) {
+            return false;
+        }
+        let Some(layer)=self.project.layers.get(layer_idx) else{return false};
+        self.clipboard_frame=Some(self.project.evaluate_layer_at_frame(layer,frame_idx));
+        self.edit_timeline_frame(layer_idx,frame_idx,timeline_ops::FrameAction::BlankKeyframe)
+    }
+
     fn paste_frame(&mut self, layer_idx: usize, frame_idx: usize) {
         if !(1..=self.project.total_frames).contains(&frame_idx)
             || !self.project.layers.get(layer_idx).is_some_and(|layer| !layer.locked)
@@ -3352,14 +3384,44 @@ impl StickApp {
         const END_MARKER:&str="__stick_image_end__";
         let Some((start,current_end))=Self::image_layer_range(layer,timeline_length) else{return false};
         let end=end.max(start);
-        if end==current_end {return false;}
+        let marker_frame=end.saturating_add(1);
+        let already_explicit=layer.keyframes.get(&marker_frame)
+            .is_some_and(|data|data.label==END_MARKER);
+        if end==current_end && already_explicit {return false;}
         layer.keyframes.retain(|_,data|data.label!=END_MARKER);
-        if end<timeline_length {
-            let mut blank=FrameData::default();
-            blank.label=END_MARKER.to_string();
-            layer.keyframes.insert(end+1,blank);
-        }
+        let mut blank=FrameData::default();
+        blank.label=END_MARKER.to_string();
+        layer.keyframes.insert(marker_frame,blank);
         true
+    }
+
+    fn set_image_layer_start(layer:&mut Layer,new_start:usize,timeline_length:usize)->bool {
+        let Some((start,end))=Self::image_layer_range(layer,timeline_length) else{return false};
+        let next=new_start.clamp(1,end.max(1));
+        if next==start{return false;}
+        let Some(source_key)=layer.keyframes.iter()
+            .filter(|(_,data)|data.media_items.iter().any(|m|m.media_type==MediaType::Image))
+            .map(|(&frame,_)|frame).min() else{return false};
+        let Some(data)=layer.keyframes.remove(&source_key) else{return false};
+        layer.keyframes.insert(next,data);
+        true
+    }
+
+    fn move_image_layer(
+        layer:&mut Layer,requested_start:usize,timeline_length:usize,max_frames:usize,
+    )->Option<usize> {
+        let (start,end)=Self::image_layer_range(layer,timeline_length)?;
+        let duration=end.saturating_sub(start);
+        if duration>=max_frames||max_frames==0{return None;}
+        let next_start=requested_start.clamp(1,max_frames-duration);
+        if next_start==start{return Some(end);}
+        let delta=next_start as i64-start as i64;
+        let moved:HashMap<usize,FrameData>=std::mem::take(&mut layer.keyframes)
+            .into_iter()
+            .map(|(frame,data)|(((frame as i64)+delta).max(1) as usize,data))
+            .collect();
+        layer.keyframes=moved;
+        Some(next_start+duration)
     }
 
     fn move_video_layer(layer: &mut Layer, requested_start: usize, max_frames: usize) -> bool {
@@ -3700,7 +3762,7 @@ impl StickApp {
                 y: (self.project.height as f32-height)*0.5,
                 width, height, rotation_deg: 0.0, flip_h: false, flip_v: false });
             kf.insert(self.current_frame, fd);
-            self.project.layers.insert(0, Layer { name: format!("Img_{}", img_name), visible: true, locked: false, is_guide: false, xp_first_paint_rewarded: false, opacity: 1.0, keyframes: kf });
+            self.project.layers.insert(0, Layer { name: format!("Img_{}", img_name), visible: true, locked: false, is_guide: false, xp_first_paint_rewarded: false, opacity: 1.0, effect: LayerEffectPreset::None, keyframes: kf });
             self.active_layer_idx = 0;
             self.clear_cel_selection();
             self.selected_media_idx = Some(0);
@@ -3752,7 +3814,7 @@ impl StickApp {
                     fd.media_items.push(MediaItem { path: f_path.to_string_lossy().to_string(), media_type: MediaType::VideoFrame, x: 0.0, y: 0.0, width: self.project.width as f32, height: self.project.height as f32, rotation_deg: 0.0, flip_h: false, flip_v: false });
                     kf.insert(self.current_frame + i, fd);
                 }
-                self.project.layers.insert(0, Layer { name: "Video_Layer".to_string(), visible: true, locked: false, is_guide: false, xp_first_paint_rewarded: false, opacity: 1.0, keyframes: kf });
+                self.project.layers.insert(0, Layer { name: "Video_Layer".to_string(), visible: true, locked: false, is_guide: false, xp_first_paint_rewarded: false, opacity: 1.0, effect: LayerEffectPreset::None, keyframes: kf });
                 self.active_layer_idx = 0;
                 self.clear_cel_selection();
                 self.selected_media_idx = Some(0);
@@ -4180,6 +4242,36 @@ impl StickApp {
                             item.rotation_deg=0.0; item.flip_h=false; item.flip_v=false;
                         }
                     });
+                    ui.separator();
+                    ui.label(tr(lang,"Opacity presets","فلاتر الشفافية"));
+                    let current_layer_opacity=self.project.layers.get(self.active_layer_idx)
+                        .map(|layer|layer.opacity).unwrap_or(1.0);
+                    ui.horizontal_wrapped(|ui| {
+                        for (label,value) in [
+                            ("100%",1.0f32),("75%",0.75),("50%",0.50),
+                            ("25%",0.25),("10%",0.10)
+                        ] {
+                            let selected=(current_layer_opacity-value).abs()<0.005;
+                            if ui.selectable_label(selected,label).clicked()
+                                && !self.is_active_layer_locked() {
+                                self.save_undo_state();
+                                if let Some(layer)=self.project.layers.get_mut(self.active_layer_idx) {
+                                    layer.opacity=value;
+                                    self.has_unsaved_changes=true;
+                                }
+                            }
+                        }
+                    });
+                    let mut media_opacity=current_layer_opacity;
+                    if ui.add(egui::Slider::new(&mut media_opacity,0.0..=1.0)
+                        .text(tr(lang,"Media opacity","شفافية الصورة/الفيديو"))).changed()
+                        && !self.is_active_layer_locked() {
+                        if let Some(layer)=self.project.layers.get_mut(self.active_layer_idx) {
+                            layer.opacity=media_opacity;
+                            self.has_unsaved_changes=true;
+                        }
+                    }
+
                     if item != previous && !self.is_active_layer_locked() {
                         self.save_undo_state();
                         self.ensure_editable_keyframe();
@@ -4302,7 +4394,7 @@ impl StickApp {
             return;
         }
         match self.active_tool_ui {
-            ActiveToolUI::SelectNormal | ActiveToolUI::SelectLasso | ActiveToolUI::FreeTransform | ActiveToolUI::VectorDirectSelect => {
+            ActiveToolUI::SelectNormal | ActiveToolUI::SelectLasso | ActiveToolUI::FreeTransform => {
                 ui.strong(tr(lang, "Transform", "خصائص التحويل"));
                 if self.active_tool_ui == ActiveToolUI::FreeTransform {
                     ui.small(tr(lang,
@@ -4315,6 +4407,17 @@ impl StickApp {
                     if ui.button(" ↻ 15° ").clicked() { self.save_undo_state(); self.transform_selected_items(1.0, 15.0, false, false); }
                     if ui.button(" ↺ 15° ").clicked() { self.save_undo_state(); self.transform_selected_items(1.0, -15.0, false, false); }
                 });
+            }
+            ActiveToolUI::VectorDirectSelect => {
+                ui.strong(tr(lang,"Vector Nodes","نقاط الفيكتور"));
+                let mut density=vector_density_from_tolerance(self.vector_tolerance);
+                if ui.add(egui::Slider::new(&mut density,10.0..=100.0)
+                    .suffix("%").text(tr(lang,"Node density","نسبة النقاط"))).changed() {
+                    self.vector_tolerance=vector_tolerance_from_density(density);
+                }
+                ui.small(tr(lang,
+                    "Left-click and drag nodes. Right-click a node to delete it; right-click a selected segment to insert one.",
+                    "اسحب النقط بالكلك الشمال. كلك يمين على نقطة يحذفها، وعلى جزء من الخط المحدد يضيف نقطة."));
             }
             ActiveToolUI::Sculpt => {
                 ui.strong(tr(lang,"Sculpt / Finger (J)","النحت / الصباع (J)"));
@@ -5186,7 +5289,7 @@ impl eframe::App for StickApp {
                             text_color[3] = ((text_color[3] as f32)
                                 * self.text_opacity.clamp(0.0, 1.0)).round() as u8;
                             if let Some(l) = self.project.layers.get_mut(self.active_layer_idx) {
-                                l.keyframes.entry(self.current_frame).or_default().text_items.push(TextItem { content: self.text_input_buf.clone(), x: self.pending_text_pos.x, y: self.pending_text_pos.y, font_size: self.text_font_size, color: text_color });
+                                l.keyframes.entry(self.current_frame).or_default().text_items.push(TextItem { content: self.text_input_buf.clone(), x: self.pending_text_pos.x, y: self.pending_text_pos.y, font_size: self.text_font_size, color: text_color, rotation_deg: 0.0 });
                                 self.has_unsaved_changes = true;
                             }
                         }
@@ -5285,6 +5388,14 @@ impl eframe::App for StickApp {
                         });
                         if ui.checkbox(&mut self.config.sound_effects_enabled,
                             tr(lang, "Enable Tool & Level-Up Sound Effects", "شغّل أو اقفل أصوات الأدوات والمستويات")).changed() {
+                            self.config.save();
+                        }
+                        if ui.checkbox(&mut self.config.level_up_banner_enabled,
+                            tr(lang, "Show 4-second level-up message",
+                                "اظهر رسالة ارتفاع المستوى لمدة 4 ثواني")).changed() {
+                            if !self.config.level_up_banner_enabled {
+                                self.level_up_banner_timer = 0.0;
+                            }
                             self.config.save();
                         }
                         if ui.checkbox(&mut self.config.artist_project_intro_enabled,
@@ -6475,42 +6586,22 @@ impl eframe::App for StickApp {
                                     ui.add(egui::Slider::new(&mut self.sculpt_strength,0.05..=1.0)
                                         .text(tr(lang,"Strength","القوة")));
                                 }
-                                ActiveToolUI::VectorDirectSelect | ActiveToolUI::VectorPen => {
-                                    ui.label(tr(lang,"Editable Vector Nodes","نقاط الفيكتور القابلة للتعديل"));
-                                    if tool==ActiveToolUI::VectorDirectSelect {
-                                        ui.checkbox(&mut self.vector_node_quick_edit,
-                                            tr(lang,
-                                                "Right-click inserts/removes nodes",
-                                                "الكلك اليمين يضيف/يحذف النقاط"));
-                                        ui.small(if self.vector_node_quick_edit {
-                                            tr(lang,
-                                                "Right-click a node to remove it; right-click a vector segment to insert a node.",
-                                                "كلك يمين على نقطة يحذفها، وعلى جزء من خط الفيكتور يضيف نقطة.")
-                                        } else {
-                                            tr(lang,
-                                                "Normal mode: click/select and drag nodes.",
-                                                "الوضع العادي: حدد النقاط واسحبها.")
-                                        });
+                                ActiveToolUI::VectorDirectSelect => {
+                                    ui.strong(tr(lang,"Vector node density","كثافة نقاط الفيكتور"));
+                                    let mut density=vector_density_from_tolerance(self.vector_tolerance);
+                                    if ui.add(egui::Slider::new(&mut density,10.0..=100.0)
+                                        .suffix("%").text(tr(lang,"Node density","نسبة النقاط"))).changed() {
+                                        self.vector_tolerance=vector_tolerance_from_density(density);
                                     }
-                                    ui.add(egui::Slider::new(&mut self.vector_tolerance,0.4..=8.0)
-                                        .text(tr(lang,"Simplify amount","تقليل النقط")));
-                                    if ui.button(tr(lang,"Simplify selected strokes","قلل نقاط الخطوط المحددة")).clicked(){
-                                        self.save_undo_state();
-                                        self.ensure_editable_keyframe();
-                                        if let Some(layer)=self.project.layers.get_mut(self.active_layer_idx){
-                                            if let Some(frame)=layer.keyframes.get_mut(&self.current_frame){
-                                                for (idx,stroke) in frame.strokes.iter_mut().enumerate(){
-                                                    if stroke.is_vector && (self.selected_stroke_indices.is_empty()
-                                                        || self.selected_stroke_indices.contains(&idx)){
-                                                        stroke.simplify_vector_nodes(self.vector_tolerance);
-                                                        self.has_unsaved_changes=true;
-                                                    }
-                                                }
-                                            }
-                                        }
-                                        self.selected_vector_nodes.clear();
-                                        self.selected_vector_node=None;
-                                        ui.close_menu();
+                                    ui.small(tr(lang,
+                                        "Right-click a node to delete it, or right-click a selected vector segment to insert a node.",
+                                        "كلك يمين على نقطة يحذفها، أو كلك يمين على خط فيكتور محدد يضيف نقطة."));
+                                }
+                                ActiveToolUI::VectorPen => {
+                                    let mut density=vector_density_from_tolerance(self.vector_tolerance);
+                                    if ui.add(egui::Slider::new(&mut density,10.0..=100.0)
+                                        .suffix("%").text(tr(lang,"Node density","نسبة النقاط"))).changed() {
+                                        self.vector_tolerance=vector_tolerance_from_density(density);
                                     }
                                 }
                                 ActiveToolUI::ShapeLine => {
@@ -6593,6 +6684,7 @@ impl eframe::App for StickApp {
         let mut copy_layer_index: Option<usize> = None;
         let mut paste_layer_index: Option<usize> = None;
         let mut rename_layer_index: Option<usize> = None;
+        let mut layer_effect_request: Option<(usize,LayerEffectPreset)> = None;
         if self.config.show_right_dock {
         egui::SidePanel::right("right_panel").resizable(true).default_width(376.0)
             .min_width(285.0).show(ctx, |ui| {
@@ -6811,7 +6903,7 @@ impl eframe::App for StickApp {
                     self.save_undo_state();
                     let mut kf = HashMap::new();
                     kf.insert(1, Default::default());
-                    self.project.layers.insert(0, Layer { name: format!("Layer_{}", self.project.layers.len() + 1), visible: true, locked: false, is_guide: false, xp_first_paint_rewarded: false, opacity: 1.0, keyframes: kf });
+                    self.project.layers.insert(0, Layer { name: format!("Layer_{}", self.project.layers.len() + 1), visible: true, locked: false, is_guide: false, xp_first_paint_rewarded: false, opacity: 1.0, effect: LayerEffectPreset::None, keyframes: kf });
                     self.active_layer_idx = 0;
                     self.has_unsaved_changes = true;
                 }
@@ -6903,6 +6995,31 @@ impl eframe::App for StickApp {
                     if lock_resp.on_hover_text(tr(lang, "Lock or unlock layer", "اقفل أو افتح قفل اللير")).clicked() {
                         dock_lock_toggle = Some(idx);
                     }
+                    ui.menu_button(
+                        egui::RichText::new("✦").color(if layer.effect==LayerEffectPreset::None {
+                            egui::Color32::from_gray(150)
+                        } else {egui::Color32::from_rgb(255,205,63)}),
+                        |ui| {
+                            ui.strong(tr(lang,"Layer Effects","مؤثرات اللير"));
+                            ui.small(tr(lang,
+                                "Applies only to this layer and is saved with the project.",
+                                "بتتطبق على اللير ده بس وبتتحفظ مع المشروع."));
+                            ui.separator();
+                            for (preset,en,ar) in [
+                                (LayerEffectPreset::None,"None","بدون"),
+                                (LayerEffectPreset::Warm,"Warm","دافئ"),
+                                (LayerEffectPreset::Cool,"Cool","بارد"),
+                                (LayerEffectPreset::Rose,"Rose","وردي"),
+                                (LayerEffectPreset::Mint,"Mint","نعناعي"),
+                                (LayerEffectPreset::Night,"Night","ليلي"),
+                                (LayerEffectPreset::Vintage,"Vintage","فينتاج"),
+                            ] {
+                                if ui.selectable_label(layer.effect==preset,tr(lang,en,ar)).clicked() {
+                                    layer_effect_request=Some((idx,preset));
+                                    ui.close_menu();
+                                }
+                            }
+                        });
                     let layer_response = ui.vertical(|ui| {
                         let response = ui.selectable_label(selected_row,
                             egui::RichText::new(&layer.name).strong().size(14.0));
@@ -7031,6 +7148,17 @@ impl eframe::App for StickApp {
                 self.has_unsaved_changes=true;
             }
         }
+        if let Some((idx,preset))=layer_effect_request {
+            let changed=self.project.layers.get(idx)
+                .is_some_and(|layer|!layer.locked && layer.effect!=preset);
+            if changed {
+                self.save_undo_state();
+                if let Some(layer)=self.project.layers.get_mut(idx) {
+                    layer.effect=preset;
+                    self.has_unsaved_changes=true;
+                }
+            }
+        }
         if let Some(idx) = copy_layer_index {
             self.layer_clipboard = self.project.layers.get(idx).cloned();
         }
@@ -7064,14 +7192,19 @@ impl eframe::App for StickApp {
                             self.layer_rename_index = None;
                         }
                         if ui.button(tr(lang, "Rename", "غيّر الاسم")).clicked() {
-                            let new_name = self.layer_rename_buffer.trim().to_owned();
-                            if !new_name.is_empty() && new_name.chars().count() <= 80 {
+                            let new_name=self.layer_rename_buffer.trim().to_owned();
+                            if !new_name.is_empty() && new_name.chars().count()<=80 {
                                 self.save_undo_state();
-                                if let Some(layer) = self.project.layers.get_mut(idx) {
-                                    layer.name = new_name;
-                                    self.has_unsaved_changes = true;
+                                match layer_ops::rename_layer(&mut self.project,idx,&new_name) {
+                                    Ok(()) => {
+                                        self.has_unsaved_changes=true;
+                                        self.layer_rename_index=None;
+                                    }
+                                    Err(reason) => {
+                                        self.undo_stack.pop();
+                                        self.status_message=reason.to_string();
+                                    }
                                 }
-                                self.layer_rename_index = None;
                             }
                         }
                     });
@@ -7120,6 +7253,9 @@ impl eframe::App for StickApp {
         let mut video_move_request: Option<(usize, usize)> = None;
         let mut video_drag_started = false;
         let mut video_clip_action: Option<(usize,bool)> = None;
+        let mut image_move_request: Option<(usize,usize)> = None;
+        let mut image_trim_request: Option<(usize,usize,usize)> = None;
+        let mut image_drag_started=false;
         let mut timeline_seek = None;
         if !pointer_down {
             self.audio_drag_origin=None;
@@ -7128,6 +7264,9 @@ impl eframe::App for StickApp {
             self.video_drag_origin=None;
             self.video_drag_pointer_x=None;
             self.video_drag_undo_captured=false;
+            self.image_drag_origin=None;
+            self.image_drag_pointer_x=None;
+            self.image_drag_undo_captured=false;
             self.timeline_scrub_active=false;
         }
         let mut timeline_visibility_toggle: Option<usize> = None;
@@ -7537,6 +7676,11 @@ impl eframe::App for StickApp {
                                         frame_menu_action = Some((l_idx, f, timeline_ops::FrameAction::Copy));
                                         ui.close_menu();
                                     }
+                                    if ui.add_enabled(!is_locked,
+                                        egui::Button::new(tr(lang,"Cut Frame","قص الفريم"))).clicked() {
+                                        frame_menu_action=Some((l_idx,f,timeline_ops::FrameAction::Cut));
+                                        ui.close_menu();
+                                    }
                                     if ui.add_enabled(!is_locked && self.clipboard_frame.is_some(),
                                         egui::Button::new(tr(lang, "Paste over cel", "الصق مكان الخلية"))).clicked() {
                                         frame_menu_action = Some((l_idx, f, timeline_ops::FrameAction::Paste));
@@ -7564,11 +7708,6 @@ impl eframe::App for StickApp {
                                         frame_menu_action = Some((l_idx, f, timeline_ops::FrameAction::BlankKeyframe));
                                         ui.close_menu();
                                     }
-                                    if ui.add_enabled(!is_locked, egui::Button::new(
-                                        tr(lang, "Clear Frame", "امسح محتوى الفريم"))).clicked() {
-                                        frame_menu_action = Some((l_idx, f, timeline_ops::FrameAction::Clear));
-                                        ui.close_menu();
-                                    }
                                     if ui.add_enabled(!is_locked && layer.keyframes.contains_key(&f),
                                         egui::Button::new(tr(lang, "Delete Keyframe", "احذف الكي فريم"))).clicked() {
                                         frame_menu_action = Some((l_idx, f, timeline_ops::FrameAction::DeleteKeyframe));
@@ -7586,6 +7725,117 @@ impl eframe::App for StickApp {
                             }
                         });
                     }
+                    // Imported still images behave like editable timeline clips:
+                    // body drag moves the exposure, left/right grips trim its visible range.
+                    for (image_layer,layer) in self.project.layers.iter().enumerate() {
+                        if !Self::media_layer_is_import_only(layer) {continue;}
+                        let Some((image_start,image_end))=
+                            Self::image_layer_range(layer,self.timeline_length) else {continue};
+                        let has_image=layer.keyframes.values().any(|data|
+                            data.media_items.iter().any(|m|m.media_type==MediaType::Image));
+                        if !has_image {continue;}
+                        ui.horizontal(|ui| {
+                            ui.allocate_ui(egui::vec2(label_w,row_h),|ui| {
+                                let active=self.active_layer_idx==image_layer
+                                    && self.selected_media_idx.is_some();
+                                let response=ui.selectable_label(active,
+                                    egui::RichText::new(format!("▧ {}",layer.name))
+                                        .color(if active {egui::Color32::from_rgb(111,205,255)}
+                                            else {egui::Color32::from_rgb(170,210,232)}));
+                                if response.clicked() {
+                                    self.active_layer_idx=image_layer;
+                                    self.current_frame=image_start;
+                                    self.selected_media_idx=Some(0);
+                                    self.selected_audio_idx=None;
+                                    self.right_panel_tab=2;
+                                    self.config.show_right_dock=true;
+                                }
+                                ui.small(tr(lang,"Drag ↔ • trim grips","اسحب ↔ • مد من الحواف"));
+                            });
+                            let lane_width=cell_w*cols as f32;
+                            let (rect,_resp)=ui.allocate_exact_size(
+                                egui::vec2(lane_width,row_h),egui::Sense::click_and_drag());
+                            ui.painter().rect_filled(rect,3.0,egui::Color32::from_rgb(29,38,48));
+                            let left=rect.left()+(image_start.saturating_sub(1) as f32)*cell_w;
+                            let right=rect.left()+(image_end.min(cols) as f32)*cell_w;
+                            if right>left && left<rect.right() {
+                                let clip=egui::Rect::from_min_max(
+                                    egui::pos2(left.max(rect.left()),rect.top()+2.0),
+                                    egui::pos2(right.min(rect.right()),rect.bottom()-2.0));
+                                let selected=self.active_layer_idx==image_layer
+                                    && self.selected_media_idx.is_some();
+                                ui.painter().rect_filled(clip,4.0,
+                                    if selected {egui::Color32::from_rgb(37,103,139)}
+                                    else {egui::Color32::from_rgb(42,73,92)});
+                                ui.painter().rect_stroke(clip,4.0,egui::Stroke::new(
+                                    1.0,egui::Color32::from_rgb(93,194,238)));
+                                let grip=8.0f32.min(clip.width()*0.25);
+                                ui.painter().rect_filled(
+                                    egui::Rect::from_min_max(clip.min,egui::pos2(clip.left()+grip,clip.bottom())),
+                                    2.0,egui::Color32::from_rgb(95,192,231));
+                                ui.painter().rect_filled(
+                                    egui::Rect::from_min_max(egui::pos2(clip.right()-grip,clip.top()),clip.max),
+                                    2.0,egui::Color32::from_rgb(95,192,231));
+                                ui.painter().text(clip.center(),egui::Align2::CENTER_CENTER,
+                                    format!("{}–{}",image_start,image_end),
+                                    egui::FontId::monospace(10.0),egui::Color32::WHITE);
+                                if !layer.locked && pointer_pressed
+                                    && pointer_pos.is_some_and(|p|clip.contains(p)) {
+                                    if let Some(p)=pointer_pos {
+                                        let mode=if p.x<=clip.left()+12.0 {1}
+                                            else if p.x>=clip.right()-12.0 {2}else{0};
+                                        self.image_drag_origin=Some((image_layer,image_start,image_end,mode));
+                                        self.image_drag_pointer_x=Some(p.x);
+                                        self.image_drag_undo_captured=false;
+                                        self.active_layer_idx=image_layer;
+                                        self.current_frame=image_start;
+                                        self.selected_media_idx=Some(0);
+                                        self.selected_audio_idx=None;
+                                        self.right_panel_tab=2;
+                                        self.config.show_right_dock=true;
+                                    }
+                                }
+                                if pointer_down {
+                                    if let Some((drag_layer,start,end,mode))=self.image_drag_origin {
+                                        if drag_layer==image_layer {
+                                            if let (Some(pos),Some(press_x))=(pointer_pos,self.image_drag_pointer_x) {
+                                                let delta=((pos.x-press_x)/cell_w).round() as i64;
+                                                match mode {
+                                                    1 => {
+                                                        let next=((start as i64)+delta)
+                                                            .clamp(1,end as i64) as usize;
+                                                        if next!=image_start {
+                                                            image_trim_request=Some((image_layer,next,end));
+                                                        }
+                                                    }
+                                                    2 => {
+                                                        let next=((end as i64)+delta)
+                                                            .clamp(start as i64,timeline_ops::MAX_TIMELINE_FRAMES as i64) as usize;
+                                                        if next!=image_end {
+                                                            image_trim_request=Some((image_layer,start,next));
+                                                        }
+                                                    }
+                                                    _ => {
+                                                        let next=((start as i64)+delta)
+                                                            .clamp(1,timeline_ops::MAX_TIMELINE_FRAMES as i64) as usize;
+                                                        if next!=image_start {
+                                                            image_move_request=Some((image_layer,next));
+                                                        }
+                                                    }
+                                                }
+                                                if (image_trim_request.is_some()||image_move_request.is_some())
+                                                    && !self.image_drag_undo_captured {
+                                                    image_drag_started=true;
+                                                    self.image_drag_undo_captured=true;
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        });
+                    }
+
                     // Imported videos get a dedicated clip lane while their decoded
                     // frames remain stored in the existing video layer for compatibility.
                     for (video_layer, layer) in self.project.layers.iter().enumerate() {
@@ -7636,7 +7886,8 @@ impl eframe::App for StickApp {
                                     egui::Align2::LEFT_CENTER,
                                     format!("{}–{}",video_start,video_end),
                                     egui::FontId::monospace(10.0),egui::Color32::WHITE);
-                                if pointer_pressed && pointer_pos.is_some_and(|p|clip.contains(p)) {
+                                if !layer.locked && pointer_pressed
+                                    && pointer_pos.is_some_and(|p|clip.contains(p)) {
                                     self.video_drag_origin=Some((video_layer,video_start));
                                     self.video_drag_pointer_x=pointer_pos.map(|p|p.x);
                                     self.video_drag_undo_captured=false;
@@ -7789,6 +8040,30 @@ impl eframe::App for StickApp {
                 });
             });
             // The grip and the height slider both modify the same persisted value.
+        }
+        if image_drag_started {self.save_undo_state();}
+        if let Some((layer_index,start))=image_move_request {
+            if let Some(layer)=self.project.layers.get_mut(layer_index) {
+                if let Some(new_end)=Self::move_image_layer(
+                    layer,start,self.timeline_length,timeline_ops::MAX_TIMELINE_FRAMES) {
+                    self.timeline_length=self.timeline_length.max(new_end);
+                    self.project.total_frames=self.timeline_length;
+                    self.current_frame=start;
+                    self.has_unsaved_changes=true;
+                }
+            }
+        }
+        if let Some((layer_index,start,end))=image_trim_request {
+            self.timeline_length=self.timeline_length.max(end);
+            self.project.total_frames=self.timeline_length;
+            if let Some(layer)=self.project.layers.get_mut(layer_index) {
+                let changed_start=Self::set_image_layer_start(layer,start,self.timeline_length);
+                let changed_end=Self::set_image_layer_end(layer,end,self.timeline_length);
+                if changed_start||changed_end {
+                    self.current_frame=start;
+                    self.has_unsaved_changes=true;
+                }
+            }
         }
         if video_drag_started {self.save_undo_state();}
         if let Some((layer_index,start))=video_move_request {
@@ -8012,9 +8287,12 @@ impl eframe::App for StickApp {
         }
         if let Some((layer_index, frame_index, action)) = frame_menu_action {
             match action {
-                timeline_ops::FrameAction::Copy => self.copy_frame(layer_index, frame_index),
-                timeline_ops::FrameAction::Paste => self.paste_frame(layer_index, frame_index),
-                edit => { self.edit_timeline_frame(layer_index, frame_index, edit); }
+                timeline_ops::FrameAction::Copy => self.copy_frame(layer_index,frame_index),
+                timeline_ops::FrameAction::Cut => {
+                    let _=self.cut_frame(layer_index,frame_index);
+                }
+                timeline_ops::FrameAction::Paste => self.paste_frame(layer_index,frame_index),
+                edit => { self.edit_timeline_frame(layer_index,frame_index,edit); }
             }
         }
 
@@ -8623,15 +8901,15 @@ impl eframe::App for StickApp {
                             }
                         }
                         ActiveToolUI::VectorDirectSelect => {
-                            if self.vector_node_quick_edit
-                                && ctx.input(|i|i.pointer.secondary_clicked()) {
+                            if ctx.input(|i|i.pointer.secondary_clicked()) {
                                 self.save_undo_state();
                                 self.ensure_editable_keyframe();
+                                let selected=self.selected_stroke_indices.clone();
                                 let edit=self.project.layers.get_mut(self.active_layer_idx)
                                     .and_then(|layer|layer.keyframes.get_mut(&self.current_frame))
-                                    .and_then(|frame|vector_path::quick_edit_node(
-                                        &mut frame.strokes,stage_pos.x,stage_pos.y,
-                                        (12.0/scale).max(2.0)));
+                                    .and_then(|frame|vector_path::quick_edit_node_in_selection(
+                                        &mut frame.strokes,&selected,stage_pos.x,stage_pos.y,
+                                        (18.0/scale).max(2.0)));
                                 match edit {
                                     Some(vector_path::QuickNodeEdit::Inserted{stroke,point}) => {
                                         self.selected_vector_node=Some((stroke,point));
@@ -8806,7 +9084,7 @@ impl eframe::App for StickApp {
                                     let frame = self.project.evaluate_layer_at_frame(layer, self.current_frame);
                                     self.selected_text_item_index = frame.text_items.iter()
                                         .enumerate().rev()
-                                        .find(|(_, text)| selection_tools::text_bounds(text).contains(stage_pos))
+                                        .find(|(_, text)| selection_tools::text_hit_test(text,stage_pos))
                                         .map(|(index, _)| index);
                                     if self.selected_text_item_index.is_none() {
                                         self.selected_media_idx = frame.media_items.iter().enumerate().rev()
@@ -9070,7 +9348,10 @@ impl eframe::App for StickApp {
                         let corners=media_transform::corners(m);
                         if let Some(tex) = self.texture_cache.get(&m.path) {
                             let mut mesh = egui::Mesh::with_texture(tex.id());
-                            let tint = egui::Color32::from_white_alpha((255.0 * l_op) as u8);
+                            let effect_white=layer.effect.apply_rgba([255,255,255,255]);
+                            let tint=egui::Color32::from_rgba_unmultiplied(
+                                effect_white[0],effect_white[1],effect_white[2],
+                                (255.0*l_op) as u8);
                             let (u0,u1) = if m.flip_h { (1.0,0.0) } else { (0.0,1.0) };
                             let (v0,v1) = if m.flip_v { (1.0,0.0) } else { (0.0,1.0) };
                             let uvs = [egui::pos2(u0,v0),egui::pos2(u1,v0),egui::pos2(u1,v1),egui::pos2(u0,v1)];
@@ -9113,11 +9394,20 @@ impl eframe::App for StickApp {
                         }
                     }
                     for s in &fd.strokes {
-                        draw_stroke_pro(&painter, s, None, l_op, scale, 0.0, 0.0, &to_screen);
+                        if layer.effect==LayerEffectPreset::None {
+                            draw_stroke_pro(&painter,s,None,l_op,scale,0.0,0.0,&to_screen);
+                        } else {
+                            let mut effected=s.clone();
+                            effected.color=layer.effect.apply_rgba(effected.color);
+                            effected.fill_color=effected.fill_color.map(|c|layer.effect.apply_rgba(c));
+                            draw_stroke_pro(&painter,&effected,None,l_op,scale,0.0,0.0,&to_screen);
+                        }
                     }
                     for txt in &fd.text_items {
-                        let tint = egui::Color32::from_rgba_unmultiplied(txt.color[0], txt.color[1],
-                            txt.color[2], (txt.color[3] as f32 * l_op) as u8);
+                        let effect_color=layer.effect.apply_rgba(txt.color);
+                        let tint=egui::Color32::from_rgba_unmultiplied(
+                            effect_color[0],effect_color[1],effect_color[2],
+                            (effect_color[3] as f32*l_op) as u8);
                         let galley = paper_painter.layout_no_wrap(
                             fix_ar(&txt.content),
                             egui::FontId::proportional(txt.font_size * scale),
@@ -9125,7 +9415,7 @@ impl eframe::App for StickApp {
                         );
                         let text_shape = egui::epaint::TextShape::new(
                             to_screen(egui::pos2(txt.x, txt.y)), galley, tint,
-                        ).with_angle(self.canvas_rotation_deg.to_radians());
+                        ).with_angle((self.canvas_rotation_deg + txt.rotation_deg).to_radians());
                         paper_painter.add(egui::Shape::Text(text_shape));
                     }
                     // Symbol instances are real visible artwork. Export paints
@@ -9141,9 +9431,16 @@ impl eframe::App for StickApp {
                                 to_screen(egui::pos2(x,y))
                             };
                             for stroke in self.project.evaluate_symbol_strokes(symbol,self.current_frame) {
-                                draw_stroke_pro(
-                                    &painter,stroke,None,l_op,scale*instance_scale,
-                                    0.0,0.0,&symbol_to_screen);
+                                if layer.effect==LayerEffectPreset::None {
+                                    draw_stroke_pro(&painter,stroke,None,l_op,scale*instance_scale,
+                                        0.0,0.0,&symbol_to_screen);
+                                } else {
+                                    let mut effected=stroke.clone();
+                                    effected.color=layer.effect.apply_rgba(effected.color);
+                                    effected.fill_color=effected.fill_color.map(|c|layer.effect.apply_rgba(c));
+                                    draw_stroke_pro(&painter,&effected,None,l_op,scale*instance_scale,
+                                        0.0,0.0,&symbol_to_screen);
+                                }
                             }
                         }
                     }
@@ -9183,11 +9480,10 @@ impl eframe::App for StickApp {
                 if let Some(layer) = self.project.layers.get(self.active_layer_idx) {
                     let frame = self.project.evaluate_layer_at_frame(layer, self.current_frame);
                     if let Some(txt) = frame.text_items.get(idx) {
-                        let bounds = selection_tools::text_bounds(txt);
-                        painter.add(egui::Shape::closed_line(vec![
-                            to_screen(bounds.left_top()),to_screen(bounds.right_top()),
-                            to_screen(bounds.right_bottom()),to_screen(bounds.left_bottom())
-                        ],egui::Stroke::new(1.4,egui::Color32::from_rgb(45,170,255))));
+                        let corners=selection_tools::text_corners(txt);
+                        painter.add(egui::Shape::closed_line(
+                            corners.into_iter().map(&to_screen).collect(),
+                            egui::Stroke::new(1.4,egui::Color32::from_rgb(45,170,255))));
                     }
                 }
             }
@@ -9548,7 +9844,7 @@ mod tool_discovery_tests {
             keyframes.insert(frame,data);
         }
         let mut layer=Layer{name:"Video".into(),visible:true,locked:false,is_guide:false,
-            xp_first_paint_rewarded:false,opacity:1.0,keyframes};
+            xp_first_paint_rewarded:false,opacity:1.0,effect:LayerEffectPreset::None,keyframes};
         assert_eq!(StickApp::video_layer_range(&layer),Some((5,8)));
         assert!(StickApp::move_video_layer(&mut layer,20,100));
         assert_eq!(StickApp::video_layer_range(&layer),Some((20,23)));
@@ -9563,12 +9859,61 @@ mod tool_discovery_tests {
             width:100.0,height:100.0,rotation_deg:0.0,flip_h:false,flip_v:false,
         });
         let mut layer=Layer{name:"Image".into(),visible:true,locked:false,is_guide:false,
-            xp_first_paint_rewarded:false,opacity:1.0,keyframes:HashMap::from([(3,data)])};
+            xp_first_paint_rewarded:false,opacity:1.0,effect:LayerEffectPreset::None,keyframes:HashMap::from([(3,data)])};
         assert_eq!(StickApp::image_layer_range(&layer,30),Some((3,30)));
         assert!(StickApp::set_image_layer_end(&mut layer,12,30));
         assert_eq!(StickApp::image_layer_range(&layer,30),Some((3,12)));
         assert!(layer.keyframes.get(&3).is_some_and(|f|!f.media_items.is_empty()));
         assert!(layer.keyframes.get(&13).is_some_and(|f|f.media_items.is_empty()));
+    }
+
+    #[test]
+    fn cut_frame_copies_visible_pose_and_leaves_blank_key() {
+        let mut app=StickApp::new(&egui::Context::default());
+        app.config.sound_effects_enabled=false;
+        app.project.layers[0].keyframes.get_mut(&1).unwrap().strokes.push(Stroke {
+            points:vec![StrokePoint{x:10.,y:20.,pressure:1.}],
+            color:[1,2,3,255],fill_color:None,base_width:5.,is_vector:false,
+            brush_preset:KritaBrushPreset::GPenInk,opacity:1.0,
+            brush_texture_id:None,tip_shape:BrushTipShape::Round,
+        });
+        assert!(app.cut_frame(0,1));
+        assert_eq!(app.clipboard_frame.as_ref().unwrap().strokes.len(),1);
+        assert!(app.project.layers[0].keyframes[&1].strokes.is_empty());
+        assert_eq!(app.project.layers[0].keyframes[&1].timeline_marker,FrameMarkerKind::Blank);
+        assert!(app.has_unsaved_changes);
+    }
+
+    #[test]
+    fn image_clip_can_trim_both_sides_and_move_without_losing_media() {
+        let mut data=FrameData::default();
+        data.media_items.push(MediaItem{
+            path:"still.png".into(),media_type:MediaType::Image,x:0.,y:0.,
+            width:100.,height:100.,rotation_deg:0.,flip_h:false,flip_v:false});
+        let mut layer=Layer{name:"Still".into(),visible:true,locked:false,is_guide:false,
+            xp_first_paint_rewarded:false,opacity:1.0,effect:LayerEffectPreset::None,
+            keyframes:HashMap::from([(3,data)])};
+        assert!(StickApp::set_image_layer_end(&mut layer,12,30));
+        assert!(StickApp::set_image_layer_start(&mut layer,6,30));
+        assert_eq!(StickApp::image_layer_range(&layer,30),Some((6,12)));
+        assert_eq!(layer.keyframes[&6].media_items[0].path,"still.png");
+        assert_eq!(StickApp::move_image_layer(&mut layer,20,30,100),Some(26));
+        assert_eq!(StickApp::image_layer_range(&layer,30),Some((20,26)));
+        assert_eq!(layer.keyframes[&20].media_items[0].path,"still.png");
+    }
+
+    #[test]
+    fn image_end_marker_survives_when_trimmed_to_current_timeline_end() {
+        let mut data=FrameData::default();
+        data.media_items.push(MediaItem{
+            path:"still.png".into(),media_type:MediaType::Image,x:0.,y:0.,
+            width:100.,height:100.,rotation_deg:0.,flip_h:false,flip_v:false});
+        let mut layer=Layer{name:"Still".into(),visible:true,locked:false,is_guide:false,
+            xp_first_paint_rewarded:false,opacity:1.0,effect:LayerEffectPreset::None,
+            keyframes:HashMap::from([(3,data)])};
+        assert!(StickApp::set_image_layer_end(&mut layer,30,30));
+        assert!(layer.keyframes.get(&31).is_some_and(|f|f.media_items.is_empty()));
+        assert_eq!(StickApp::image_layer_range(&layer,50),Some((3,30)));
     }
 
     #[test]
@@ -9710,6 +10055,14 @@ mod tool_discovery_tests {
         let mut config = AppConfig::default();
         config.tool_brush = "J".to_string();
         assert_eq!(tool_shortcut(ActiveToolUI::Brush, &config), "J");
+    }
+
+    #[test]
+    fn vector_density_mapping_is_stable_and_inverted() {
+        assert!((vector_tolerance_from_density(100.0)-0.4).abs()<0.001);
+        assert!((vector_tolerance_from_density(10.0)-8.0).abs()<0.001);
+        assert!((vector_density_from_tolerance(0.4)-100.0).abs()<0.001);
+        assert!((vector_density_from_tolerance(8.0)-10.0).abs()<0.001);
     }
 
     #[test]
