@@ -178,11 +178,8 @@ pub fn render_frame_pixmap(project: &AniProject, frame_idx: usize, transparent_b
                     )
                     .to_rgba8();
                 if layer.effect != crate::project::LayerEffectPreset::None {
-                    let multiplier = layer.effect.rgb_multiplier();
                     for pixel in resized.pixels_mut() {
-                        pixel.0[0] = (pixel.0[0] as f32 * multiplier[0]).round().clamp(0.0,255.0) as u8;
-                        pixel.0[1] = (pixel.0[1] as f32 * multiplier[1]).round().clamp(0.0,255.0) as u8;
-                        pixel.0[2] = (pixel.0[2] as f32 * multiplier[2]).round().clamp(0.0,255.0) as u8;
+                        pixel.0=layer.effect.apply_rgba(pixel.0);
                     }
                 }
                 if let Some(mut sub_pix) = Pixmap::new(resized.width(), resized.height()) {
@@ -348,6 +345,24 @@ fn fill_skia_polygon(
     }
 }
 
+fn fill_skia_stroke_region(
+    pixmap:&mut Pixmap, s:&crate::project::Stroke, paint:&Paint, ts:Transform,
+) {
+    let rings=crate::fill_tools::split_fill_rings(&s.points);
+    if rings.is_empty() {return;}
+    let mut path=PathBuilder::new();
+    for ring in rings {
+        let mut iter=ring.iter();
+        let Some(first)=iter.next() else {continue};
+        path.move_to(first.x,first.y);
+        for p in iter {path.line_to(p.x,p.y);}
+        path.close();
+    }
+    if let Some(path)=path.finish() {
+        pixmap.fill_path(&path,paint,tiny_skia::FillRule::EvenOdd,ts,None);
+    }
+}
+
 fn draw_skia_stroke(pixmap: &mut Pixmap, s: &crate::project::Stroke, ts: Transform) {
     use crate::brush_engine::{visit_round_marks, RoundMark};
     let Some(first) = s.points.first() else { return };
@@ -356,7 +371,7 @@ fn draw_skia_stroke(pixmap: &mut Pixmap, s: &crate::project::Stroke, ts: Transfo
     paint.anti_alias = true;
     if let Some(fc) = s.fill_color.filter(|_| s.points.len() >= 3) {
         paint.set_color_rgba8(fc[0], fc[1], fc[2], (fc[3] as f32 * s.opacity.clamp(0.0,1.0)) as u8);
-        fill_skia_polygon(pixmap, s.points.iter().map(|p| (p.x,p.y)), &paint, ts);
+        fill_skia_stroke_region(pixmap,s,&paint,ts);
     }
     if alpha == 0 { return; }
     if let Some(texture) = crate::texture_brush::TextureBrush::for_stroke(s) {
