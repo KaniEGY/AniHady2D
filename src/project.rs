@@ -326,6 +326,8 @@ pub struct TextItem {
     pub font_size: f32,
     #[serde(default = "default_black")]
     pub color: [u8; 4],
+    #[serde(default)]
+    pub rotation_deg: f32,
 }
 
 fn default_font_size() -> f32 {
@@ -1072,6 +1074,14 @@ mod brush_tip_compat_tests {
         };
         let point = instance.transform_point(f32::NAN, 5.0);
         assert!(point.0.is_finite() && point.1.is_finite());
+    }
+
+    #[test]
+    fn old_text_without_rotation_loads_at_zero_degrees() {
+        let text: TextItem=serde_json::from_str(
+            r#"{"content":"hello","x":10.0,"y":20.0,"font_size":30.0,"color":[0,0,0,255]}"#
+        ).unwrap();
+        assert_eq!(text.rotation_deg,0.0);
     }
 
     #[test]
