@@ -7411,6 +7411,22 @@ impl eframe::App for StickApp {
                                     || !fd.media_items.is_empty() || !fd.text_items.is_empty()
                                     || !fd.symbol_instances.is_empty());
                                 let tw = eff.map(|fd| fd.tween_mode).unwrap_or(TweenMode::None);
+                                let clip_source = if clip_style {
+                                    timeline_styles::clip_frame_source(is_b,is_kf,eff)
+                                } else {
+                                    timeline_styles::ClipFrameSource::None
+                                };
+                                let clip_evaluated = if matches!(
+                                    clip_source,timeline_styles::ClipFrameSource::EvaluateTween
+                                ) {
+                                    Some(self.project.evaluate_layer_at_frame(layer,f))
+                                } else { None };
+                                let clip_frame = match clip_source {
+                                    timeline_styles::ClipFrameSource::None => None,
+                                    timeline_styles::ClipFrameSource::BorrowExposure => eff,
+                                    timeline_styles::ClipFrameSource::EvaluateTween =>
+                                        clip_evaluated.as_ref(),
+                                };
                                 let (cr, cresp) = ui.allocate_exact_size(
                                     egui::vec2(cell_w,row_h),egui::Sense::click_and_drag());
                                 let address=advanced_timeline::CelAddress{layer:l_idx,frame:f};
@@ -7429,9 +7445,9 @@ impl eframe::App for StickApp {
                                 };
                                 if clip_style {
                                     timeline_styles::draw_clip_cell(
-                                        ui.painter(),cr,
-                                        if is_kf {key} else {None},
+                                        ui.painter(),cr,clip_frame,&self.project,f,
                                         (self.project.width as f32,self.project.height as f32),
+                                        layer.opacity,
                                         self.current_frame==f,selected_key,
                                         layer.locked || is_b);
                                 } else if advanced {
@@ -9024,13 +9040,17 @@ impl eframe::App for StickApp {
                         }
                         for instance in &ghost_data.symbol_instances {
                             if let Some(symbol) = self.project.library_symbols.get(&instance.symbol_name) {
+                                let instance_scale = if instance.scale.is_finite() {
+                                    instance.scale.abs()
+                                } else { 1.0 };
+                                let symbol_to_screen = |point:egui::Pos2| {
+                                    let (x,y)=instance.transform_point(point.x,point.y);
+                                    to_screen(egui::pos2(x,y))
+                                };
                                 for stroke in self.project.evaluate_symbol_strokes(symbol, ghost.frame) {
-                                    // Symbols are previewed at their existing position.
-                                    // More complex transforms will be unified with the
-                                    // shared compositor in a later milestone.
                                     draw_stroke_pro(
                                         &painter, stroke, Some(tint), layer_opacity,
-                                        scale, instance.x, instance.y, &to_screen,
+                                        scale*instance_scale, 0.0, 0.0, &symbol_to_screen,
                                     );
                                 }
                             }
@@ -9092,7 +9112,9 @@ impl eframe::App for StickApp {
                             });
                         }
                     }
-                    for s in &fd.strokes { draw_stroke_pro(&painter, s, None, l_op, scale, 0.0, 0.0, &to_screen); }
+                    for s in &fd.strokes {
+                        draw_stroke_pro(&painter, s, None, l_op, scale, 0.0, 0.0, &to_screen);
+                    }
                     for txt in &fd.text_items {
                         let tint = egui::Color32::from_rgba_unmultiplied(txt.color[0], txt.color[1],
                             txt.color[2], (txt.color[3] as f32 * l_op) as u8);
@@ -9105,6 +9127,25 @@ impl eframe::App for StickApp {
                             to_screen(egui::pos2(txt.x, txt.y)), galley, tint,
                         ).with_angle(self.canvas_rotation_deg.to_radians());
                         paper_painter.add(egui::Shape::Text(text_shape));
+                    }
+                    // Symbol instances are real visible artwork. Export paints
+                    // them after media/strokes/text, so the editor follows the
+                    // same compositing order and transform semantics.
+                    for instance in &fd.symbol_instances {
+                        if let Some(symbol)=self.project.library_symbols.get(&instance.symbol_name) {
+                            let instance_scale = if instance.scale.is_finite() {
+                                instance.scale.abs()
+                            } else { 1.0 };
+                            let symbol_to_screen = |point:egui::Pos2| {
+                                let (x,y)=instance.transform_point(point.x,point.y);
+                                to_screen(egui::pos2(x,y))
+                            };
+                            for stroke in self.project.evaluate_symbol_strokes(symbol,self.current_frame) {
+                                draw_stroke_pro(
+                                    &painter,stroke,None,l_op,scale*instance_scale,
+                                    0.0,0.0,&symbol_to_screen);
+                            }
+                        }
                     }
                 }
             }

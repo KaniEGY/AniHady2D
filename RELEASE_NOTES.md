@@ -34,6 +34,10 @@
 - Frame provenance is now preserved through next-key creation, clipboard paste and New mine multi-copy: inserted empty = green circle, copied pose = red circle, explicit blank = white circle with black outline, authored/drawn legacy content keeps its drawn-frame marker.
 
 ### Bugs fixed
+- Clip Timeline thumbnails now show the actual visible frame, including held exposures and evaluated tween in-betweens instead of appearing blank unless the cell itself contains an explicit keyframe.
+- Clip thumbnails now preserve quick one-point pen dabs, contour fills, layer opacity, transformed Symbol artwork, positioned text markers and media footprints.
+- Symbol instances are visible again in the normal canvas preview. Canvas, Onion Skin and Clip Timeline now honor the same symbol pivot/scale/rotation/translation semantics already used by raster/video export.
+
 - Timeline/dock drags no longer leak into canvas tools: a Brush, Eraser or Sculpt gesture can start only when the primary-button press itself began on the canvas.
 - Normal freehand raster brushes now use light corner-preserving centerline cleanup plus a speed-aware live stabilizer, reducing mouse/tablet micro-jitter while keeping deliberate sharp corners and catching up during fast strokes.
 - Canvas preview and raster/video export share the same freehand smoothing path so ordinary line brushes do not change shape unexpectedly on export.
@@ -298,6 +302,10 @@
 - أيقونة أداة التحويل بقت أصغر ومختلفة وواضحة عن أداة التحديد.
 
 ### المشاكل اللي اتصلحت
+- Clip Timeline بقى يعرض المحتوى المرئي الحقيقي للفريم، بما فيه الـHold/Exposure والفريمات البينية بتاعة الـTween، بدل ما الخلية تبان فاضية لو مفيش Keyframe صريح على نفس الرقم.
+- صور الفريمات المصغرة بقت تعرض ضغطة القلم المفردة، الـFill، شفافية اللير، رسومات الـSymbol بعد التحويل، ومكان النص والوسائط بشكل أوضح.
+- الـSymbol instances رجعت تظهر في معاينة الكانفا العادية، والكانفا والـOnion Skin والـClip Timeline بقوا يستخدموا نفس Pivot/Scale/Rotation/Translation الموجود في التصدير.
+
 - سحب التايم لاين أو أي Dock مبقاش يتسرّب لأدوات الكانفا: الفرشة أو الممحاة أو النحت مش بيبدأوا حركة إلا لو ضغطة الماوس الأساسية نفسها بدأت جوه الكانفا.
 - الفرش الحرة العادية بقت تستخدم تنعيم خفيف يحافظ على الزوايا مع Stabilizer متكيّف مع سرعة الحركة، عشان يقلّل رعشة الماوس/القلم من غير ما يعمل تأخير مطاطي في السحبات السريعة.
 - معاينة الكانفا والتصدير Raster/Video بقوا يستخدموا نفس مسار تنعيم الفرش الحرة، عشان شكل الخط مايتغيّرش بشكل مفاجئ وقت التصدير.

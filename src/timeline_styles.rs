@@ -2,7 +2,7 @@
 //! These helpers do not mutate project data or timeline commands: OLD and
 //! NEW share the exact same frames, keyframes, and context-menu actions.
 use eframe::egui;
-use crate::project::{FrameData, FrameMarkerKind, TweenMode};
+use crate::project::{AniProject, FrameData, FrameMarkerKind, Stroke, TweenMode};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FrameVisualState {
@@ -162,14 +162,116 @@ pub fn draw_cell(
 }
 
 
+/// Select the cheapest correct source for a Clip Timeline thumbnail. Static
+/// holds borrow the current exposure, while tween in-betweens are evaluated so
+/// the thumbnail matches the actual visible pose. Cells beyond the document
+/// never inherit artwork.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ClipFrameSource {
+    None,
+    BorrowExposure,
+    EvaluateTween,
+}
+
+pub fn clip_frame_source(
+    out_of_range: bool,
+    explicit_keyframe: bool,
+    exposure: Option<&FrameData>,
+) -> ClipFrameSource {
+    if out_of_range {
+        return ClipFrameSource::None;
+    }
+    let Some(exposure)=exposure else {
+        return ClipFrameSource::None;
+    };
+    if explicit_keyframe {
+        return ClipFrameSource::BorrowExposure;
+    }
+    if exposure.tween_mode != TweenMode::None || exposure.motion_tween {
+        ClipFrameSource::EvaluateTween
+    } else {
+        ClipFrameSource::BorrowExposure
+    }
+}
+
+fn clip_rgba(color: [u8;4], stroke_opacity: f32, layer_opacity: f32) -> egui::Color32 {
+    let alpha = (color[3] as f32
+        * stroke_opacity.clamp(0.0, 1.0)
+        * layer_opacity.clamp(0.0, 1.0)).round() as u8;
+    egui::Color32::from_rgba_unmultiplied(color[0],color[1],color[2],alpha)
+}
+
+fn draw_clip_stroke<F>(
+    painter:&egui::Painter,
+    preview:egui::Rect,
+    stage_size:(f32,f32),
+    stroke:&Stroke,
+    layer_opacity:f32,
+    width_multiplier:f32,
+    map:F,
+    budget:&mut usize,
+) where F: Fn(f32,f32)->(f32,f32) {
+    if *budget==0 || stroke.points.is_empty() { return; }
+    let sx=preview.width()/stage_size.0.max(1.0);
+    let sy=preview.height()/stage_size.1.max(1.0);
+    let scale=sx.min(sy);
+    let origin=preview.center()-egui::vec2(stage_size.0*scale,stage_size.1*scale)*0.5;
+    let to_preview=|x:f32,y:f32| {
+        let (x,y)=map(x,y);
+        origin+egui::vec2(x*scale,y*scale)
+    };
+
+    let line_color=clip_rgba(stroke.color,stroke.opacity,layer_opacity);
+    let width=(stroke.base_width*width_multiplier.abs()*scale).clamp(0.7,2.8);
+
+    // A quick pen tap is a valid drawing. The old thumbnail renderer skipped
+    // one-point strokes entirely, making some authored frames look blank.
+    if stroke.points.len()==1 {
+        let p=&stroke.points[0];
+        painter.circle_filled(to_preview(p.x,p.y),(width*0.5).max(0.8),line_color);
+        *budget=budget.saturating_sub(1);
+        return;
+    }
+
+    // Fills need a closed thumbnail shape, not just their contour. Cap the
+    // number of preview vertices so pathological bucket contours stay cheap.
+    if let Some(fill)=stroke.fill_color {
+        let step=((stroke.points.len().saturating_sub(1))/256).max(1);
+        let polygon:Vec<_>=stroke.points.iter().step_by(step)
+            .map(|p|to_preview(p.x,p.y)).collect();
+        if polygon.len()>=3 {
+            let fill_color=clip_rgba(fill,stroke.opacity,layer_opacity);
+            if let Some(mesh)=crate::fill_render::solid_polygon_mesh(&polygon,fill_color) {
+                painter.add(egui::Shape::mesh(mesh));
+            }
+        }
+    }
+
+    let step=((stroke.points.len().saturating_sub(1))/(*budget).max(1)).max(1);
+    let mut last:Option<egui::Pos2>=None;
+    for p in stroke.points.iter().step_by(step) {
+        let q=to_preview(p.x,p.y);
+        if let Some(prev)=last {
+            painter.line_segment([prev,q],egui::Stroke::new(width,line_color));
+            *budget=budget.saturating_sub(1);
+            if *budget==0 { break; }
+        }
+        last=Some(q);
+    }
+}
+
 /// Clip Timeline cell: thumbnail-first presentation inspired by exposure
-/// thumbnails in traditional animation software. It deliberately ignores the
-/// red/green/yellow/white marker system so the drawing itself is the focus.
+/// thumbnails in traditional animation software. Unlike the old implementation
+/// this paints the actual visible exposure (including held/tweened frames),
+/// valid one-point dabs, fills and symbol artwork.
 pub fn draw_clip_cell(
     painter:&egui::Painter,
     rect:egui::Rect,
     frame:Option<&FrameData>,
+    project:&AniProject,
+    global_frame:usize,
     stage_size:(f32,f32),
+    layer_opacity:f32,
     current:bool,
     selected:bool,
     locked:bool,
@@ -184,46 +286,95 @@ pub fn draw_clip_cell(
     painter.rect_stroke(body,3.0,egui::Stroke::new(if selected{2.2}else{1.0},border));
     let Some(frame)=frame else{return};
     let preview=body.shrink2(egui::vec2(4.0,4.0));
-    let sx=preview.width()/stage_size.0.max(1.0);
-    let sy=preview.height()/stage_size.1.max(1.0);
-    let scale=sx.min(sy);
-    let origin=preview.center()-egui::vec2(stage_size.0*scale,stage_size.1*scale)*0.5;
 
     let mut budget=420usize;
     for stroke in &frame.strokes {
-        if budget==0{break;}
-        if stroke.points.len()<2{continue;}
-        let color=egui::Color32::from_rgba_unmultiplied(
-            stroke.color[0],stroke.color[1],stroke.color[2],
-            ((stroke.color[3] as f32)*stroke.opacity.clamp(0.0,1.0)) as u8);
-        let step=((stroke.points.len().saturating_sub(1))/budget.max(1)).max(1);
-        let mut last:Option<egui::Pos2>=None;
-        for p in stroke.points.iter().step_by(step) {
-            let q=origin+egui::vec2(p.x*scale,p.y*scale);
-            if let Some(prev)=last {
-                painter.line_segment([prev,q],egui::Stroke::new(
-                    (stroke.base_width*scale).clamp(0.7,2.4),color));
-                budget=budget.saturating_sub(1);
-                if budget==0{break;}
+        draw_clip_stroke(
+            painter,preview,stage_size,stroke,layer_opacity,1.0,
+            |x,y|(x,y),&mut budget);
+        if budget==0 { break; }
+    }
+
+    // Symbols are real frame artwork too. Use the same nested-frame selection
+    // and transform order as export instead of showing an empty thumbnail.
+    if budget>0 {
+        for instance in &frame.symbol_instances {
+            let Some(symbol)=project.library_symbols.get(&instance.symbol_name) else {continue};
+            for stroke in project.evaluate_symbol_strokes(symbol,global_frame) {
+                draw_clip_stroke(
+                    painter,preview,stage_size,stroke,layer_opacity,
+                    instance.scale,
+                    |x,y|instance.transform_point(x,y),&mut budget);
+                if budget==0 { break; }
             }
-            last=Some(q);
+            if budget==0 { break; }
         }
     }
-    if !frame.text_items.is_empty() {
-        painter.text(preview.right_bottom()-egui::vec2(3.0,2.0),
-            egui::Align2::RIGHT_BOTTOM,"T",egui::FontId::proportional(9.0),
-            egui::Color32::from_rgb(35,70,120));
+
+    // Media bytes live in the editor texture cache, so timeline_styles cannot
+    // sample them directly. Still show their real transformed footprint rather
+    // than a detached corner badge.
+    for media in &frame.media_items {
+        let corners=crate::media_transform::corners(media);
+        let sx=preview.width()/stage_size.0.max(1.0);
+        let sy=preview.height()/stage_size.1.max(1.0);
+        let scale=sx.min(sy);
+        let origin=preview.center()-egui::vec2(stage_size.0*scale,stage_size.1*scale)*0.5;
+        let points:Vec<_>=corners.into_iter()
+            .map(|(x,y)|origin+egui::vec2(x*scale,y*scale)).collect();
+        if points.len()==4 {
+            painter.add(egui::Shape::convex_polygon(
+                points.clone(),
+                egui::Color32::from_rgba_unmultiplied(110,125,145,55),
+                egui::Stroke::new(0.7,egui::Color32::from_rgb(85,100,120))));
+            painter.line_segment([points[0],points[2]],
+                egui::Stroke::new(0.6,egui::Color32::from_rgb(100,112,130)));
+            painter.line_segment([points[1],points[3]],
+                egui::Stroke::new(0.6,egui::Color32::from_rgb(100,112,130)));
+        }
     }
-    if !frame.media_items.is_empty() {
-        painter.text(preview.left_bottom()+egui::vec2(3.0,-2.0),
-            egui::Align2::LEFT_BOTTOM,"▣",egui::FontId::proportional(9.0),
-            egui::Color32::from_rgb(90,75,35));
+
+    // Place text indicators at their actual stage position instead of always
+    // pinning a T badge to the same corner.
+    if !frame.text_items.is_empty() {
+        let sx=preview.width()/stage_size.0.max(1.0);
+        let sy=preview.height()/stage_size.1.max(1.0);
+        let scale=sx.min(sy);
+        let origin=preview.center()-egui::vec2(stage_size.0*scale,stage_size.1*scale)*0.5;
+        for text in frame.text_items.iter().take(12) {
+            painter.text(origin+egui::vec2(text.x*scale,text.y*scale),
+                egui::Align2::LEFT_TOP,"T",egui::FontId::proportional(8.0),
+                clip_rgba(text.color,1.0,layer_opacity));
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn clip_timeline_uses_visible_hold_and_evaluates_tween_inbetweens() {
+        let static_frame=FrameData::default();
+        assert_eq!(
+            clip_frame_source(false,false,Some(&static_frame)),
+            ClipFrameSource::BorrowExposure
+        );
+        let tween=FrameData {
+            tween_mode:TweenMode::Classic,
+            ..Default::default()
+        };
+        assert_eq!(
+            clip_frame_source(false,false,Some(&tween)),
+            ClipFrameSource::EvaluateTween
+        );
+        assert_eq!(
+            clip_frame_source(false,true,Some(&tween)),
+            ClipFrameSource::BorrowExposure
+        );
+        assert_eq!(clip_frame_source(true,false,Some(&static_frame)),ClipFrameSource::None);
+        assert_eq!(clip_frame_source(false,false,None),ClipFrameSource::None);
+    }
+
     #[test]
     fn stable_frame_color_states_match_editor_rules() {
         assert_eq!(frame_visual_state(FrameMarkerKind::Legacy,false),FrameVisualState::EmptyBase);
