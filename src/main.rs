@@ -9819,7 +9819,7 @@ mod tool_discovery_tests {
             keyframes.insert(frame,data);
         }
         let mut layer=Layer{name:"Video".into(),visible:true,locked:false,is_guide:false,
-            xp_first_paint_rewarded:false,opacity:1.0,keyframes};
+            xp_first_paint_rewarded:false,opacity:1.0,effect:LayerEffectPreset::None,keyframes};
         assert_eq!(StickApp::video_layer_range(&layer),Some((5,8)));
         assert!(StickApp::move_video_layer(&mut layer,20,100));
         assert_eq!(StickApp::video_layer_range(&layer),Some((20,23)));
@@ -9840,6 +9840,38 @@ mod tool_discovery_tests {
         assert_eq!(StickApp::image_layer_range(&layer,30),Some((3,12)));
         assert!(layer.keyframes.get(&3).is_some_and(|f|!f.media_items.is_empty()));
         assert!(layer.keyframes.get(&13).is_some_and(|f|f.media_items.is_empty()));
+    }
+
+    #[test]
+    fn image_clip_can_trim_both_sides_and_move_without_losing_media() {
+        let mut data=FrameData::default();
+        data.media_items.push(MediaItem{
+            path:"still.png".into(),media_type:MediaType::Image,x:0.,y:0.,
+            width:100.,height:100.,rotation_deg:0.,flip_h:false,flip_v:false});
+        let mut layer=Layer{name:"Still".into(),visible:true,locked:false,is_guide:false,
+            xp_first_paint_rewarded:false,opacity:1.0,effect:LayerEffectPreset::None,
+            keyframes:HashMap::from([(3,data)])};
+        assert!(StickApp::set_image_layer_end(&mut layer,12,30));
+        assert!(StickApp::set_image_layer_start(&mut layer,6,30));
+        assert_eq!(StickApp::image_layer_range(&layer,30),Some((6,12)));
+        assert_eq!(layer.keyframes[&6].media_items[0].path,"still.png");
+        assert_eq!(StickApp::move_image_layer(&mut layer,20,30,100),Some(26));
+        assert_eq!(StickApp::image_layer_range(&layer,30),Some((20,26)));
+        assert_eq!(layer.keyframes[&20].media_items[0].path,"still.png");
+    }
+
+    #[test]
+    fn image_end_marker_survives_when_trimmed_to_current_timeline_end() {
+        let mut data=FrameData::default();
+        data.media_items.push(MediaItem{
+            path:"still.png".into(),media_type:MediaType::Image,x:0.,y:0.,
+            width:100.,height:100.,rotation_deg:0.,flip_h:false,flip_v:false});
+        let mut layer=Layer{name:"Still".into(),visible:true,locked:false,is_guide:false,
+            xp_first_paint_rewarded:false,opacity:1.0,effect:LayerEffectPreset::None,
+            keyframes:HashMap::from([(3,data)])};
+        assert!(StickApp::set_image_layer_end(&mut layer,30,30));
+        assert!(layer.keyframes.get(&31).is_some_and(|f|f.media_items.is_empty()));
+        assert_eq!(StickApp::image_layer_range(&layer,50),Some((3,30)));
     }
 
     #[test]
