@@ -3,6 +3,7 @@
 //! The original two timeline styles remain unchanged. Every operation here is
 //! validated before mutation and uses the existing editor Undo snapshots.
 use crate::project::{AniProject, FrameMarkerKind, TweenMode};
+use crate::timeline_ops::MAX_TIMELINE_FRAMES;
 use eframe::egui;
 use std::collections::HashSet;
 
