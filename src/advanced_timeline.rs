@@ -18,6 +18,49 @@ pub enum RelocateMode { Move, Copy }
 /// Move or duplicate multiple genuine keyframes (not merely held exposure
 /// frames), potentially between unlocked layers. Validation is atomic: any
 /// collision or out-of-range target rejects the entire operation.
+/// Move one keyframe horizontally with editor-style insertion.
+/// If the destination is occupied, that key and any consecutive keyframes are
+/// pushed one frame forward until the first free slot. This makes a selected
+/// key feel draggable "between" frames instead of failing on collision.
+pub fn move_keyframe_with_push(
+    project:&mut AniProject,
+    source:CelAddress,
+    destination_frame:usize,
+)->Result<CelAddress,&'static str> {
+    if source.layer>=project.layers.len(){return Err("Source layer is missing.");}
+    if source.frame==0 || source.frame>project.total_frames
+        || destination_frame==0 || destination_frame>MAX_TIMELINE_FRAMES {
+        return Err("Move is outside the timeline.");
+    }
+    if source.frame==destination_frame{return Err("Choose another destination.");}
+    if project.layers[source.layer].locked{return Err("Source layer is locked.");}
+    let Some(data)=project.layers[source.layer].keyframes.remove(&source.frame)
+        else{return Err("Selection contains a held exposure, not a keyframe.");};
+
+    let keys=&mut project.layers[source.layer].keyframes;
+    if keys.contains_key(&destination_frame) {
+        let mut hole=destination_frame;
+        while keys.contains_key(&hole) {
+            hole+=1;
+            if hole>MAX_TIMELINE_FRAMES {
+                keys.insert(source.frame,data);
+                return Err("The timeline has reached its frame limit.");
+            }
+        }
+        // Shift from right to left so no key is overwritten.
+        for frame in (destination_frame..hole).rev() {
+            if let Some(existing)=keys.remove(&frame) {
+                keys.insert(frame+1,existing);
+            }
+        }
+        project.total_frames=project.total_frames.max(hole);
+    }
+    keys.insert(destination_frame,data);
+    keys.entry(1).or_default();
+    project.total_frames=project.total_frames.max(destination_frame);
+    Ok(CelAddress{layer:source.layer,frame:destination_frame})
+}
+
 pub fn relocate_keyframes(
     project: &mut AniProject,
     selected: &[CelAddress],
@@ -175,6 +218,29 @@ mod tests {
         p.layers.push(second);
         p
     }
+    #[test]
+    fn selected_key_can_drop_on_occupied_frame_and_push_chain_forward() {
+        let mut p=project();
+        p.layers[0].keyframes.insert(7,key("seven"));
+        let moved=move_keyframe_with_push(
+            &mut p,CelAddress{layer:0,frame:3},5).unwrap();
+        assert_eq!(moved,CelAddress{layer:0,frame:5});
+        assert_eq!(p.layers[0].keyframes[&5].label,"three");
+        assert_eq!(p.layers[0].keyframes[&6].label,"five");
+        assert_eq!(p.layers[0].keyframes[&7].label,"seven");
+        assert!(!p.layers[0].keyframes.contains_key(&3));
+    }
+
+    #[test]
+    fn push_move_uses_existing_gap_without_growing_timeline() {
+        let mut p=project();
+        let before=p.total_frames;
+        move_keyframe_with_push(&mut p,CelAddress{layer:0,frame:3},5).unwrap();
+        assert_eq!(p.layers[0].keyframes[&5].label,"three");
+        assert_eq!(p.layers[0].keyframes[&6].label,"five");
+        assert_eq!(p.total_frames,before);
+    }
+
     #[test]
     fn move_multiple_keys_within_a_layer_and_keep_labels() {
         let mut p=project();
