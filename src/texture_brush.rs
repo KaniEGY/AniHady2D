@@ -22,6 +22,7 @@ pub enum TextureBrush {
     Pastel,
     Calligraphy,
     SoftSketch,
+    SketchBrush,
 }
 
 impl TextureBrush {
@@ -44,12 +45,13 @@ impl TextureBrush {
             KritaBrushPreset::SoftPastel => Some(Self::Pastel),
             KritaBrushPreset::Calligraphy => Some(Self::Calligraphy),
             KritaBrushPreset::SoftSketchPencil => Some(Self::SoftSketch),
+            KritaBrushPreset::SketchBrush => Some(Self::SketchBrush),
             _ => None,
         }
     }
 
     fn mask(self, tip: BrushTipShape) -> &'static [u8; AREA] {
-        static MASKS: [OnceLock<[u8; AREA]>; 66] = [const { OnceLock::new() }; 66];
+        static MASKS: [OnceLock<[u8; AREA]>; 72] = [const { OnceLock::new() }; 72];
         MASKS[self as usize * 6 + tip as usize].get_or_init(|| self.make_mask(tip))
     }
 
@@ -104,7 +106,7 @@ impl TextureBrush {
                 }
                 Self::Marker | Self::Calligraphy =>
                     ((inside-0.01)*18.0).clamp(0.0,1.0),
-                Self::Sketch | Self::Graphite | Self::SoftSketch =>
+                Self::Sketch | Self::Graphite | Self::SoftSketch | Self::SketchBrush =>
                     ((inside-0.02)*7.0-grain*0.28).clamp(0.0,1.0),
                 _ => ((inside-0.04)*8.0-grain*0.65).clamp(0.0,1.0),
             };
@@ -167,6 +169,15 @@ impl TextureBrush {
                     if grain < 0.22 { 0.0 }
                     else { (0.10 + 0.30 * grain) * (0.65 + 0.35 * pencil) }
                 }
+                Self::SketchBrush => {
+                    let bristle=noise((x*37+y*11+271_003) as u32);
+                    let paper=noise((x*7+y*61+311_021) as u32);
+                    let streak=noise((x/3+y*SIZE+351_017) as u32);
+                    if bristle < 0.12 { 0.0 }
+                    else {
+                        (0.22+0.46*bristle)*(0.70+0.30*paper)*(0.85+0.15*streak)
+                    }
+                }
             };
             // Keep taps visible even when the tip is smaller than a pixel.
             let ink = if u.abs() < 0.07 && v.abs() < 0.07 {
@@ -174,6 +185,7 @@ impl TextureBrush {
                     Self::Airbrush=>0.12,
                     Self::Watercolor=>0.22,
                     Self::Sketch|Self::Graphite|Self::SoftSketch=>0.18,
+                    Self::SketchBrush=>0.24,
                     _=>0.45,
                 };
                 ink.max(minimum)
@@ -199,6 +211,7 @@ impl TextureBrush {
             Self::Pastel => 0.22,
             Self::Calligraphy => 0.18,
             Self::SoftSketch => 0.24,
+            Self::SketchBrush => 0.20,
             Self::Marker => 0.18,
         }
     }
@@ -206,6 +219,7 @@ impl TextureBrush {
     fn direction_memory(self) -> f32 {
         match self {
             Self::Sketch | Self::Graphite | Self::SoftSketch => 0.58,
+            Self::SketchBrush => 0.54,
             Self::Dry | Self::Chalk | Self::Charcoal | Self::Pastel => 0.48,
             Self::Watercolor => 0.35,
             _ => 0.0,
@@ -226,6 +240,7 @@ impl TextureBrush {
             Self::Graphite=>(0.72,0.62),
             Self::Calligraphy=>(1.20,0.62),
             Self::SoftSketch=>(0.95,0.82),
+            Self::SketchBrush=>(1.08,0.90),
             _=>(1.0,1.0),
         };
         let (wide,tall)=(tip_wide*preset_wide,tip_tall*preset_tall);
@@ -243,6 +258,7 @@ impl TextureBrush {
             let jitter=match self {
                 Self::Chalk|Self::Charcoal|Self::Pastel=>0.80,
                 Self::Sketch|Self::Graphite|Self::SoftSketch=>0.28,
+                Self::SketchBrush=>0.18,
                 Self::Watercolor=>0.16,
                 _=>0.0,
             };
@@ -281,6 +297,7 @@ impl TextureBrush {
                 Self::Pastel=>(0.20+0.42*pressure)*(0.76+0.24*variation),
                 Self::Calligraphy=>0.90,
                 Self::SoftSketch=>(0.10+0.34*pressure)*(0.74+0.26*variation),
+                Self::SketchBrush=>(0.18+0.50*pressure)*(0.78+0.22*variation),
             };
             emit(Stamp {
                 center: [dab.x, dab.y],
@@ -414,6 +431,7 @@ mod tests {
             TextureBrush::Sketch,TextureBrush::Graphite,TextureBrush::Dry,
             TextureBrush::Chalk,TextureBrush::Charcoal,TextureBrush::Pastel,
             TextureBrush::Calligraphy,TextureBrush::SoftSketch,
+            TextureBrush::SketchBrush,
         ];
         let masks:Vec<_>=variants.iter()
             .map(|brush|brush.make_mask(BrushTipShape::Round)).collect();
