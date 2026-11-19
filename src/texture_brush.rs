@@ -1,6 +1,6 @@
 //! Procedural brush tips in stroke coordinates. Preview and raster exports
 //! use the same alpha mask, orientation, pressure and spacing.
-use crate::brush_engine::{dab_polygon, visit_pressure_dabs, BrushDab};
+use crate::brush_engine::{dab_polygon, visit_pressure_dabs_spaced, BrushDab};
 use crate::project::{BrushTipShape, KritaBrushPreset, Stroke};
 use eframe::egui;
 use std::sync::OnceLock;
@@ -31,7 +31,10 @@ impl TextureBrush {
         }
         match stroke.brush_preset {
             KritaBrushPreset::Watercolor => Some(Self::Watercolor),
-            KritaBrushPreset::ChiselMarker => Some(Self::Marker),
+            // Marker is rendered as one continuous translucent stroke in the
+            // shared line engine. Repeated rectangular texture stamps caused
+            // the visible square/block pattern reported by artists.
+            KritaBrushPreset::ChiselMarker => None,
             KritaBrushPreset::SoftAirbrush => Some(Self::Airbrush),
             KritaBrushPreset::SketchPencil => Some(Self::Sketch),
             KritaBrushPreset::GraphitePencil => Some(Self::Graphite),
@@ -181,6 +184,34 @@ impl TextureBrush {
         })
     }
 
+    fn spacing_radius_ratio(self) -> f32 {
+        // Mature paint engines typically space dabs at roughly 8-15% of the
+        // brush diameter for smooth media. Our old universal 24%-diameter
+        // spacing exposed individual stamps on pencils/chalk/dry media.
+        match self {
+            Self::Airbrush => 0.20,
+            Self::Watercolor => 0.28,
+            Self::Sketch => 0.26,
+            Self::Graphite => 0.22,
+            Self::Dry => 0.24,
+            Self::Chalk => 0.24,
+            Self::Charcoal => 0.22,
+            Self::Pastel => 0.22,
+            Self::Calligraphy => 0.18,
+            Self::SoftSketch => 0.24,
+            Self::Marker => 0.18,
+        }
+    }
+
+    fn direction_memory(self) -> f32 {
+        match self {
+            Self::Sketch | Self::Graphite | Self::SoftSketch => 0.58,
+            Self::Dry | Self::Chalk | Self::Charcoal | Self::Pastel => 0.48,
+            Self::Watercolor => 0.35,
+            _ => 0.0,
+        }
+    }
+
     fn stamps(self, stroke: &Stroke, mut emit: impl FnMut(Stamp)) {
         let (tip_wide,tip_tall)=match stroke.tip_shape {
             BrushTipShape::TallRectangle=>(0.5,1.5),
@@ -199,7 +230,12 @@ impl TextureBrush {
         };
         let (wide,tall)=(tip_wide*preset_wide,tip_tall*preset_tall);
         let mut ordinal = 0u32;
-        visit_pressure_dabs(&stroke.points, stroke.base_width, |dab, [dx, dy]| {
+        let mut remembered_dir: Option<[f32;2]> = None;
+        visit_pressure_dabs_spaced(
+            &stroke.points,
+            stroke.base_width,
+            self.spacing_radius_ratio(),
+            |dab, [dx, dy]| {
             let pressure = (2.0 * dab.radius / stroke.base_width).clamp(0.0, 1.0);
             let variation = noise(ordinal.wrapping_add(3201));
             // Grain brushes rotate slightly from stamp to stamp; marker follows
@@ -210,10 +246,22 @@ impl TextureBrush {
                 Self::Watercolor=>0.16,
                 _=>0.0,
             };
+            let memory=self.direction_memory();
+            let [mut sx,mut sy]=[dx,dy];
+            if memory>0.0 {
+                if let Some([px,py])=remembered_dir {
+                    sx=px*memory+dx*(1.0-memory);
+                    sy=py*memory+dy*(1.0-memory);
+                    let len=sx.hypot(sy).max(1e-5);
+                    sx/=len;
+                    sy/=len;
+                }
+                remembered_dir=Some([sx,sy]);
+            }
             let (sin, cos) = ((variation - 0.5) * jitter).sin_cos();
             let (tx, ty) = if self == Self::Calligraphy {
                 (1.0,0.0)
-            } else {(dx * cos - dy * sin, dx * sin + dy * cos)};
+            } else {(sx * cos - sy * sin, sx * sin + sy * cos)};
             let radius_scale=match self {
                 Self::Watercolor=>1.45,
                 Self::Airbrush=>1.55,
@@ -374,6 +422,28 @@ mod tests {
             for b in masks.iter().skip(i+1) {
                 assert_ne!(a,b,"each brush family must keep a visibly distinct texture");
             }
+        }
+    }
+
+    #[test]
+    fn marker_routes_to_continuous_shared_stroke_engine() {
+        let stroke=Stroke {
+            points:Vec::new(),color:[0,0,0,255],fill_color:None,base_width:20.0,
+            is_vector:false,brush_preset:KritaBrushPreset::ChiselMarker,
+            opacity:0.42,brush_texture_id:None,tip_shape:BrushTipShape::Round,
+        };
+        assert_eq!(TextureBrush::for_stroke(&stroke),None);
+    }
+
+    #[test]
+    fn textured_media_use_dense_spacing() {
+        for brush in [
+            TextureBrush::Watercolor,TextureBrush::Airbrush,TextureBrush::Sketch,
+            TextureBrush::Graphite,TextureBrush::Dry,TextureBrush::Chalk,
+            TextureBrush::Charcoal,TextureBrush::Pastel,TextureBrush::Calligraphy,
+            TextureBrush::SoftSketch,
+        ] {
+            assert!(brush.spacing_radius_ratio() < 0.30);
         }
     }
 
