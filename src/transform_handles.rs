@@ -12,6 +12,18 @@ pub const RESIZE_VISUAL_PX: f32 = 13.0;
 pub const ROTATE_OFFSET_PX: f32 = 34.0;
 pub const TRANSLATE_OFFSET_PX: f32 = 52.0;
 
+/// Build a cursor icon rectangle whose visual center is the exact pointer
+/// hotspot used by input hit-testing. Free Transform uses a symmetric gizmo,
+/// so offsetting the icon would make the visible mouse appear detached from
+/// the real click/drag coordinate.
+pub fn cursor_rect_at_hotspot(
+    cursor_screen: egui::Pos2,
+    icon_size: f32,
+) -> egui::Rect {
+    let size = if icon_size.is_finite() { icon_size.max(1.0) } else { 1.0 };
+    egui::Rect::from_center_size(cursor_screen, egui::vec2(size, size))
+}
+
 pub fn rotation_handle_hit(handle_screen: egui::Pos2, cursor_screen: egui::Pos2) -> bool {
     cursor_screen.distance(handle_screen) <= ROTATE_HIT_RADIUS_PX
 }
@@ -49,6 +61,21 @@ pub fn translation_axis_screen(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn transform_cursor_visual_center_is_the_real_pointer_hotspot() {
+        let pointer=egui::pos2(78.0,75.0);
+        let rect=cursor_rect_at_hotspot(pointer,26.0);
+        assert_eq!(rect.center(),pointer);
+        assert!((rect.min.x-65.0).abs()<0.001);
+        assert!((rect.min.y-62.0).abs()<0.001);
+    }
+
+    #[test]
+    fn transform_cursor_rect_sanitizes_bad_size_without_moving_hotspot() {
+        let pointer=egui::pos2(120.0,44.0);
+        assert_eq!(cursor_rect_at_hotspot(pointer,f32::NAN).center(),pointer);
+    }
 
     #[test]
     fn all_four_visible_resize_handles_have_exact_pixel_targets() {

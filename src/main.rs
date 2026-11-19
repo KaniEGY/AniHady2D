@@ -9405,14 +9405,24 @@ impl eframe::App for StickApp {
                     // Eyedropper used to render its nib ~30px BELOW the real
                     // mouse hotspot while hiding the system cursor. Align the
                     // nib (icon local -10,+10) exactly with pointer_pos.
-                    let icon_center = if self.active_tool_ui == ActiveToolUI::Eyedropper {
-                        let s=icon_size/26.0;
-                        p + egui::vec2(10.0*s,-10.0*s)
+                    let rect = if self.active_tool_ui == ActiveToolUI::FreeTransform {
+                        // Free Transform is a symmetric gizmo. Its visible center
+                        // MUST be the same screen coordinate used by selection,
+                        // resize/rotate handles and drag hit-testing. The old
+                        // generic +8/+7 icon offset hid the OS cursor and made
+                        // the apparent mouse sit ~20px down/right from the real
+                        // pointer, exactly like the reported marquee mismatch.
+                        transform_handles::cursor_rect_at_hotspot(p,icon_size)
                     } else {
-                        p + egui::vec2(8.0+icon_size*0.5,7.0+icon_size*0.5)
+                        let icon_center = if self.active_tool_ui == ActiveToolUI::Eyedropper {
+                            let s=icon_size/26.0;
+                            p + egui::vec2(10.0*s,-10.0*s)
+                        } else {
+                            p + egui::vec2(8.0+icon_size*0.5,7.0+icon_size*0.5)
+                        };
+                        egui::Rect::from_center_size(icon_center,
+                            egui::vec2(icon_size, icon_size))
                     };
-                    let rect = egui::Rect::from_center_size(icon_center,
-                        egui::vec2(icon_size, icon_size));
                     let tool_color = self.online_participants.iter()
                         .find(|participant| self.online_session.is_some()
                             && participant.name == self.user_profile.username)

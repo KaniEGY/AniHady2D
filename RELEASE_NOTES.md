@@ -34,6 +34,9 @@
 - Frame provenance is now preserved through next-key creation, clipboard paste and New mine multi-copy: inserted empty = green circle, copied pose = red circle, explicit blank = white circle with black outline, authored/drawn legacy content keeps its drawn-frame marker.
 
 ### Bugs fixed
+- Free Transform's custom cursor is now centered exactly on the real mouse hotspot. The previous generic tool-icon offset drew the visible transform cursor about 20 pixels down/right from the actual click/drag coordinate, making selection rectangles and handle interactions look misaligned.
+- Transform selection, resize, rotate and X/Y axis hit-testing continue to use the same exact screen-space pointer coordinate, including after zoom, pan, canvas rotation or flips.
+
 - Clip Timeline thumbnails now show the actual visible frame, including held exposures and evaluated tween in-betweens instead of appearing blank unless the cell itself contains an explicit keyframe.
 - Clip thumbnails now preserve quick one-point pen dabs, contour fills, layer opacity, transformed Symbol artwork, positioned text markers and media footprints.
 - Symbol instances are visible again in the normal canvas preview. Canvas, Onion Skin and Clip Timeline now honor the same symbol pivot/scale/rotation/translation semantics already used by raster/video export.
@@ -302,6 +305,9 @@
 - أيقونة أداة التحويل بقت أصغر ومختلفة وواضحة عن أداة التحديد.
 
 ### المشاكل اللي اتصلحت
+- مؤشر أداة التحويل بقى في نفس مكان نقطة الماوس الحقيقية بالظبط. الإزاحة القديمة بتاعة أيقونات الأدوات كانت بتخلّي شكل مؤشر Transform ظاهر حوالي 20 بكسل يمين وتحت مكان الضغط، وده كان بيخلي مربع التحديد والـHitbox يبانوا بعيد عن الماوس.
+- التحديد والتكبير/التصغير والتدوير ومحاور X/Y في Transform بيستخدموا نفس إحداثيات الشاشة الدقيقة حتى مع الزوم والتحريك وتدوير أو عكس الكانفا.
+
 - Clip Timeline بقى يعرض المحتوى المرئي الحقيقي للفريم، بما فيه الـHold/Exposure والفريمات البينية بتاعة الـTween، بدل ما الخلية تبان فاضية لو مفيش Keyframe صريح على نفس الرقم.
 - صور الفريمات المصغرة بقت تعرض ضغطة القلم المفردة، الـFill، شفافية اللير، رسومات الـSymbol بعد التحويل، ومكان النص والوسائط بشكل أوضح.
 - الـSymbol instances رجعت تظهر في معاينة الكانفا العادية، والكانفا والـOnion Skin والـClip Timeline بقوا يستخدموا نفس Pivot/Scale/Rotation/Translation الموجود في التصدير.
