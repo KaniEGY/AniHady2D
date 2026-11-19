@@ -1003,6 +1003,7 @@ pub fn import_adobe_animate_project(path: &Path) -> Result<AniProject, String> {
                 is_guide: false,
                 xp_first_paint_rewarded: false,
                 opacity: 1.0,
+                effect: LayerEffectPreset::None,
                 keyframes: kf_map,
             });
         }
