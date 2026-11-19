@@ -626,6 +626,8 @@ struct AppConfig {
     timeline_new_cell_width: f32,
     #[serde(default = "default_new_timeline_row_height")]
     timeline_new_row_height: f32,
+    #[serde(default = "default_timeline_zoom_percent")]
+    timeline_zoom_percent: f32,
     #[serde(default = "default_true_val")]
     timeline_show_timecodes: bool,
     #[serde(default = "default_true_val")]
@@ -736,6 +738,7 @@ fn default_perspective_ray_count() -> u16 { 18 }
 fn default_timeline_height() -> f32 { 310.0 }
 fn default_new_timeline_row_height() -> f32 { 50.0 }
 fn default_new_timeline_cell_width() -> f32 { 64.0 }
+fn default_timeline_zoom_percent() -> f32 { 100.0 }
 fn default_right_split() -> f32 { 0.45 }
 fn default_grid_size() -> f32 { 40.0 }
 fn default_autosave_mins() -> u64 { 5 }
@@ -836,6 +839,7 @@ impl Default for AppConfig {
             timeline_style: 0,
             timeline_new_cell_width: default_new_timeline_cell_width(),
             timeline_new_row_height: default_new_timeline_row_height(),
+            timeline_zoom_percent: default_timeline_zoom_percent(),
             timeline_show_timecodes: true,
             timeline_fps_locked: true,
             show_top_bar: true,
@@ -7558,17 +7562,24 @@ impl eframe::App for StickApp {
                 }
                 ui.separator();
                 ui.horizontal(|ui| {
-                    ui.label(tr(lang, "Timeline zoom", "تكبير التايم لاين"));
-                    if self.config.timeline_style != 0 {
-                        let width_range=if self.config.timeline_style==3 {
-                            64.0..=140.0
-                        } else {28.0..=110.0};
-                        if ui.add(egui::Slider::new(&mut self.config.timeline_new_cell_width,
-                            width_range).show_value(false)).changed() { self.config.save(); }
-                    } else {
-                        ui.add(egui::Slider::new(&mut self.timeline_cell_width, 16.0..=84.0)
-                            .show_value(false));
+                    ui.label(tr(lang, "Timeline size", "حجم التايم لاين"));
+                    let mut zoom_changed=false;
+                    if ui.small_button("−").on_hover_text(
+                        tr(lang,"Shrink timeline","تصغير التايم لاين")).clicked() {
+                        self.config.timeline_zoom_percent=
+                            (self.config.timeline_zoom_percent-10.0).clamp(60.0,180.0);
+                        zoom_changed=true;
                     }
+                    zoom_changed |= ui.add(egui::Slider::new(
+                        &mut self.config.timeline_zoom_percent,60.0..=180.0)
+                        .suffix("%").show_value(true)).changed();
+                    if ui.small_button("+").on_hover_text(
+                        tr(lang,"Enlarge timeline","تكبير التايم لاين")).clicked() {
+                        self.config.timeline_zoom_percent=
+                            (self.config.timeline_zoom_percent+10.0).clamp(60.0,180.0);
+                        zoom_changed=true;
+                    }
+                    if zoom_changed { self.config.save(); }
                     if ui.add(egui::Slider::new(&mut self.config.timeline_dock_height, 140.0..=850.0)
                         .text(tr(lang, "Panel height", "ارتفاع التايم لاين"))).changed() {
                         self.config.save();
@@ -7584,18 +7595,22 @@ impl eframe::App for StickApp {
                 let modern = self.config.timeline_style != 0;
                 let advanced = self.config.timeline_style == 2;
                 let clip_style = self.config.timeline_style == 3;
-                let cell_w = if clip_style {
+                let timeline_scale=(self.config.timeline_zoom_percent/100.0)
+                    .clamp(0.60,1.80);
+                let base_cell_w = if clip_style {
                     self.config.timeline_new_cell_width.clamp(64.0, 140.0)
                 } else if modern {
                     self.config.timeline_new_cell_width.clamp(28.0, 110.0)
                 } else { self.timeline_cell_width };
-                let label_w = if modern { 218.0 } else { 198.0 };
-                let header_h = if modern { 39.0 } else { 30.0 };
-                let row_h = if clip_style {
+                let cell_w=base_cell_w*timeline_scale;
+                let label_w=(if modern { 218.0 } else { 198.0 })*timeline_scale;
+                let header_h=(if modern { 39.0 } else { 30.0 })*timeline_scale;
+                let base_row_h = if clip_style {
                     self.config.timeline_new_row_height.clamp(58.0, 112.0)
                 } else if modern {
                     self.config.timeline_new_row_height.clamp(36.0, 76.0)
                 } else { 34.0 };
+                let row_h=base_row_h*timeline_scale;
                 let cols = self.timeline_length.max(30);
                 if advanced {
                     ui.horizontal_wrapped(|ui| {
@@ -9906,6 +9921,16 @@ impl eframe::App for StickApp {
                                     ],egui::Stroke::new(0.8,graphite));
                                 }
                             }
+                            KritaBrushPreset::SketchBrush if self.active_tool_ui == ActiveToolUI::Brush => {
+                                let sketch=egui::Color32::from_rgb(239,170,92);
+                                painter.circle_stroke(p,radius,egui::Stroke::new(1.3,sketch));
+                                for offset in [-3.0_f32,0.0,3.0] {
+                                    painter.line_segment([
+                                        p+egui::vec2(-5.0,offset),
+                                        p+egui::vec2(5.0,offset*0.35)
+                                    ],egui::Stroke::new(0.9,sketch));
+                                }
+                            }
                             _ => {
                                 painter.circle_stroke(p, radius + 1.0,
                                     egui::Stroke::new(2.0, egui::Color32::WHITE));
@@ -10006,6 +10031,15 @@ mod tool_discovery_tests {
         assert_eq!(c.flip_canvas_h_key,"V");
         assert_eq!(c.flip_canvas_v_key,"F");
         assert_ne!(c.tool_select,c.flip_canvas_h_key);
+    }
+
+    #[test]
+    fn timeline_zoom_defaults_to_100_percent() {
+        let c=AppConfig::default();
+        assert_eq!(c.timeline_zoom_percent,100.0);
+        let min=(60.0_f32/100.0).clamp(0.60,1.80);
+        let max=(180.0_f32/100.0).clamp(0.60,1.80);
+        assert_eq!((min,max),(0.60,1.80));
     }
 
     #[test]

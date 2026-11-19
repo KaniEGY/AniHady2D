@@ -23,6 +23,7 @@ pub fn draw_brush_preset_icon(painter: &egui::Painter, rect: egui::Rect, preset:
             KritaBrushPreset::Calligraphy => egui::Color32::from_rgb(232, 144, 226),
             KritaBrushPreset::SoftSketchPencil => egui::Color32::from_rgb(187, 200, 211),
             KritaBrushPreset::GraphitePencil => egui::Color32::from_rgb(176, 183, 191),
+            KritaBrushPreset::SketchBrush => egui::Color32::from_rgb(239, 170, 92),
         }
     };
 
@@ -154,6 +155,17 @@ pub fn draw_brush_preset_icon(painter: &egui::Painter, rect: egui::Rect, preset:
                 painter.circle_filled(c+egui::vec2(dx,dy),0.9,col);
             }
         }
+        KritaBrushPreset::SketchBrush => {
+            // Broad sketch brush: several close bristles, visibly different
+            // from the narrow Sketch Pencil preset.
+            for (offset,width) in [(-4.0,1.4),(-1.5,2.0),(1.5,1.6),(4.0,1.2)] {
+                painter.line_segment([
+                    c+egui::vec2(-8.0,5.5+offset*0.25),
+                    c+egui::vec2(8.0,-5.5+offset*0.25)
+                ],egui::Stroke::new(width,col));
+            }
+            painter.circle_filled(c+egui::vec2(-6.5,6.0),1.4,col);
+        }
     }
 }
 
@@ -217,7 +229,6 @@ pub fn draw_stroke_pro<F: Fn(egui::Pos2) -> egui::Pos2>(
     let c = override_color.unwrap_or(stroke.color);
     let combined_opacity = stroke.opacity.clamp(0.0, 1.0) * layer_opacity.clamp(0.0, 1.0);
     let eff_alpha = ((c[3] as f32) * combined_opacity) as u8;
-    let color = egui::Color32::from_rgba_unmultiplied(c[0], c[1], c[2], eff_alpha);
 
     // Draw any Bucket fill before the early-return G-Pen dab renderer.
     // The old order silently discarded fill colors on hand-drawn loops.
@@ -252,18 +263,8 @@ pub fn draw_stroke_pro<F: Fn(egui::Pos2) -> egui::Pos2>(
         return;
     }
 
-    // Polygonal tips share their sampled geometry with PNG/video exports.
-    if !stroke.is_vector && stroke.tip_shape != BrushTipShape::Round {
-        crate::brush_engine::visit_pressure_dabs(&stroke.points, stroke.base_width, |dab,_| {
-            let verts: Vec<egui::Pos2> = crate::brush_engine::dab_polygon(stroke.tip_shape, dab)
-                .into_iter()
-                .map(|(x,y)| to_screen(egui::pos2(x + ox, y + oy))).collect();
-            if verts.len() >= 3 {
-                painter.add(egui::Shape::convex_polygon(verts, color, egui::Stroke::NONE));
-            }
-        });
-        return;
-    }
+    // Raster tip shapes are handled by the shared continuous-stroke engine.
+    // Never stamp square/triangle polygons repeatedly along the path.
 
     use crate::brush_engine::{visit_round_marks, RoundMark};
     let screen = |x,y| to_screen(egui::pos2(x+ox,y+oy));
@@ -308,16 +309,34 @@ pub fn draw_stroke_pro<F: Fn(egui::Pos2) -> egui::Pos2>(
         } else {
             screen_pts.get_or_insert_with(project_points).clone()
         };
-        painter.add(egui::Shape::line(points, egui::Stroke::new(width * scale, ink)));
-        // egui's polyline body does not guarantee circular end caps.
-        // Apply explicit caps to every round-tip line brush (including G-Pen),
-        // not only vector/Fineliner strokes. Polygon/pressure-outline brushes
-        // return above and keep their own geometry.
-        if stroke.tip_shape == BrushTipShape::Round {
-            if let (Some(first), Some(last)) = (stroke.points.first(), stroke.points.last()) {
-                let radius = (width * scale * 0.5).max(0.25);
-                painter.circle_filled(screen(first.x,first.y),radius,ink);
-                painter.circle_filled(screen(last.x,last.y),radius,ink);
+        painter.add(egui::Shape::line(points.clone(), egui::Stroke::new(width * scale, ink)));
+        // A translucent Marker used to receive two full circles over the line
+        // body, darkening half of each endpoint. Raster tips now use *outside*
+        // half-caps only, so no area is alpha-blended twice. Vector behavior is
+        // intentionally left unchanged.
+        if !stroke.is_vector && points.len() >= 2
+            && (stroke.tip_shape != BrushTipShape::Round
+                || stroke.brush_preset == KritaBrushPreset::ChiselMarker)
+        {
+            let pairs=[
+                (points[0],points[1]),
+                (points[points.len()-1],points[points.len()-2]),
+            ];
+            for (endpoint,interior) in pairs {
+                let cap=crate::brush_engine::raster_tip_cap_polygon(
+                    (endpoint.x,endpoint.y),(interior.x,interior.y),
+                    width*scale,stroke.tip_shape);
+                if cap.len()>=3 {
+                    painter.add(egui::Shape::convex_polygon(
+                        cap.into_iter().map(|(x,y)|egui::pos2(x,y)).collect(),
+                        ink,egui::Stroke::NONE));
+                }
+            }
+        } else if stroke.tip_shape == BrushTipShape::Round {
+            if let (Some(first),Some(last))=(points.first(),points.last()) {
+                let radius=(width*scale*0.5).max(0.25);
+                painter.circle_filled(*first,radius,ink);
+                painter.circle_filled(*last,radius,ink);
             }
         }
     });

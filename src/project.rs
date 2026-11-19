@@ -24,6 +24,8 @@ pub enum KritaBrushPreset {
     SoftSketchPencil,
     /// Real graphite-style pencil. Appended to preserve existing enum order.
     GraphitePencil,
+    /// Broad natural sketching brush. Appended to preserve old serialized presets.
+    SketchBrush,
 }
 
 impl Default for KritaBrushPreset {
@@ -33,7 +35,7 @@ impl Default for KritaBrushPreset {
 }
 
 impl KritaBrushPreset {
-    pub const MENU: [(Self, &'static str, &'static str); 15] = [
+    pub const MENU: [(Self, &'static str, &'static str); 16] = [
         (Self::GPenInk, "2D Pen", "قلم عادي"),
         (Self::Watercolor, "Watercolor", "مائية"),
         (Self::ChiselMarker, "Marker", "ماركر"),
@@ -49,6 +51,7 @@ impl KritaBrushPreset {
         (Self::Calligraphy, "Calligraphy", "خطاط"),
         (Self::SoftSketchPencil, "Soft Sketch", "سكتش ناعم"),
         (Self::GraphitePencil, "Graphite Pencil", "قلم رصاص"),
+        (Self::SketchBrush, "Sketch Brush", "فرشة الاسكتش"),
     ];
 
     pub fn label(&self) -> &'static str {
@@ -68,6 +71,7 @@ impl KritaBrushPreset {
             Self::Calligraphy => "Calligraphy (سن مائل بعرض واتجاه ثابتين)",
             Self::SoftSketchPencil => "Soft Sketch Pencil (رصاص محبّب وناعم)",
             Self::GraphitePencil => "Graphite Pencil (قلم رصاص بجرافيت حقيقي وشفافية حسب الضغط)",
+            Self::SketchBrush => "Sketch Brush (فرشة اسكتش طبيعية عريضة بخامة ورق خفيفة)",
         }
     }
 
@@ -88,6 +92,7 @@ impl KritaBrushPreset {
             Self::Calligraphy => 0.90,
             Self::SoftSketchPencil => 0.55,
             Self::GraphitePencil => 0.62,
+            Self::SketchBrush => 0.72,
         }
     }
 }
@@ -1102,9 +1107,14 @@ mod brush_tip_compat_tests {
         let json=serde_json::to_string(&KritaBrushPreset::GraphitePencil).unwrap();
         let restored:KritaBrushPreset=serde_json::from_str(&json).unwrap();
         assert_eq!(restored,KritaBrushPreset::GraphitePencil);
-        assert_eq!(KritaBrushPreset::MENU.len(),15);
+        assert_eq!(KritaBrushPreset::MENU.len(),16);
         assert!(KritaBrushPreset::MENU.iter().any(|(preset,_,ar)|
             *preset==KritaBrushPreset::GraphitePencil && *ar=="قلم رصاص"));
+        assert!(KritaBrushPreset::MENU.iter().any(|(preset,en,ar)|
+            *preset==KritaBrushPreset::SketchBrush && *en=="Sketch Brush" && *ar=="فرشة الاسكتش"));
+        let sketch_json=serde_json::to_string(&KritaBrushPreset::SketchBrush).unwrap();
+        assert_eq!(serde_json::from_str::<KritaBrushPreset>(&sketch_json).unwrap(),
+            KritaBrushPreset::SketchBrush);
     }
 
     #[test]
