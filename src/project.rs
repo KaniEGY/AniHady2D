@@ -22,6 +22,8 @@ pub enum KritaBrushPreset {
     TaperedPen,
     Calligraphy,
     SoftSketchPencil,
+    /// Real graphite-style pencil. Appended to preserve existing enum order.
+    GraphitePencil,
 }
 
 impl Default for KritaBrushPreset {
@@ -31,12 +33,12 @@ impl Default for KritaBrushPreset {
 }
 
 impl KritaBrushPreset {
-    pub const MENU: [(Self, &'static str, &'static str); 14] = [
+    pub const MENU: [(Self, &'static str, &'static str); 15] = [
         (Self::GPenInk, "2D Pen", "قلم عادي"),
         (Self::Watercolor, "Watercolor", "مائية"),
         (Self::ChiselMarker, "Marker", "ماركر"),
         (Self::SoftAirbrush, "Airbrush", "بخاخ"),
-        (Self::SketchPencil, "Pencil", "رصاص"),
+        (Self::SketchPencil, "Sketch Pencil", "سكتش"),
         (Self::DryBrush, "DryBrush", "جافة"),
         (Self::Chalk, "Chalk", "طباشير"),
         (Self::Charcoal, "Charcoal", "فحم"),
@@ -46,6 +48,7 @@ impl KritaBrushPreset {
         (Self::TaperedPen, "Tapered Pen", "قلم مدبب"),
         (Self::Calligraphy, "Calligraphy", "خطاط"),
         (Self::SoftSketchPencil, "Soft Sketch", "سكتش ناعم"),
+        (Self::GraphitePencil, "Graphite Pencil", "قلم رصاص"),
     ];
 
     pub fn label(&self) -> &'static str {
@@ -54,7 +57,7 @@ impl KritaBrushPreset {
             KritaBrushPreset::Watercolor => "Watercolor (ألوان مائية متصلة)",
             KritaBrushPreset::ChiselMarker => "Marker (ماركر شفاف متراكم)",
             KritaBrushPreset::SoftAirbrush => "Airbrush (بخاخ ناعم)",
-            KritaBrushPreset::SketchPencil => "Pencil (قلم رصاص سكتش)",
+            KritaBrushPreset::SketchPencil => "Sketch Pencil (قلم سكتش خشن وخفيف)",
             Self::DryBrush => "DryBrush (فرشاة جافة)",
             Self::Chalk => "Chalk (طباشير)",
             Self::Charcoal => "Charcoal (قلم فحم خشن)",
@@ -64,6 +67,7 @@ impl KritaBrushPreset {
             Self::TaperedPen => "Tapered Pen (ضغط يتدرج عند بداية ونهاية الخط)",
             Self::Calligraphy => "Calligraphy (سن مائل بعرض واتجاه ثابتين)",
             Self::SoftSketchPencil => "Soft Sketch Pencil (رصاص محبّب وناعم)",
+            Self::GraphitePencil => "Graphite Pencil (قلم رصاص بجرافيت حقيقي وشفافية حسب الضغط)",
         }
     }
 
@@ -83,6 +87,7 @@ impl KritaBrushPreset {
             Self::TaperedPen => 1.0,
             Self::Calligraphy => 0.90,
             Self::SoftSketchPencil => 0.55,
+            Self::GraphitePencil => 0.62,
         }
     }
 }
