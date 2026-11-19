@@ -53,12 +53,32 @@ pub fn visit_round_marks(stroke: &Stroke, mut paint: impl FnMut(RoundMark, f32))
             if stroke.brush_preset == KritaBrushPreset::Fineliner {
                 dab.radius = (0.5 * width).max(0.25);
             }
-            if stroke.is_vector && stroke.tip_shape == BrushTipShape::Square {
-                paint(RoundMark::Outline(dab_polygon(BrushTipShape::Square, dab)), flow);
+            if (!stroke.is_vector && stroke.tip_shape != BrushTipShape::Round)
+                || (stroke.is_vector && stroke.tip_shape == BrushTipShape::Square)
+            {
+                paint(RoundMark::Outline(dab_polygon(stroke.tip_shape, dab)), flow);
             } else {
                 paint(RoundMark::Dot(dab), flow);
             }
         } else {
+            // Raster geometric tips are a *continuous stroke*, not a chain of
+            // visible square/triangle stamps. Textured brushes are routed before
+            // this engine, and the Vector Pen is intentionally excluded.
+            if !stroke.is_vector && stroke.tip_shape != BrushTipShape::Round {
+                let shaped_width=(width*raster_tip_cross_scale(stroke.tip_shape)).max(0.5);
+                if varying && !has_risky_turn(&stroke.points) {
+                    let outline=crate::stroke_geometry::pressure_outline(
+                        &stroke.points,shaped_width);
+                    if !outline.is_empty() {
+                        paint(RoundMark::Outline(outline),flow);
+                        continue;
+                    }
+                }
+                paint(RoundMark::Line {
+                    width:(shaped_width*pressure).max(0.5),
+                },flow);
+                continue;
+            }
             if !stroke.is_vector && stroke.brush_preset==KritaBrushPreset::GPenInk && varying {
                 // Krita-style basic 2D ink: pressure changes size through
                 // overlapping opaque round dabs rather than one fragile
@@ -272,6 +292,67 @@ pub fn dab_polygon(tip: BrushTipShape, dab: BrushDab) -> Vec<(f32, f32)> {
     }
 }
 
+/// Cross-stroke width multiplier for continuous raster tip shapes.
+pub fn raster_tip_cross_scale(tip: BrushTipShape) -> f32 {
+    match tip {
+        BrushTipShape::TallRectangle => 1.45,
+        BrushTipShape::WideRectangle => 0.62,
+        BrushTipShape::Triangle => 0.92,
+        _ => 1.0,
+    }
+}
+
+/// Build only the *outside* half-cap of a continuous raster stroke.
+/// Because this polygon starts at the endpoint cross-section and extends
+/// outward, translucent marker caps do not repaint/darken the line body.
+pub fn raster_tip_cap_polygon(
+    endpoint: (f32,f32),
+    interior: (f32,f32),
+    body_width: f32,
+    tip: BrushTipShape,
+) -> Vec<(f32,f32)> {
+    if !body_width.is_finite() || body_width <= 0.0
+        || !endpoint.0.is_finite() || !endpoint.1.is_finite()
+        || !interior.0.is_finite() || !interior.1.is_finite()
+    {
+        return Vec::new();
+    }
+    let dx=endpoint.0-interior.0;
+    let dy=endpoint.1-interior.1;
+    let len=dx.hypot(dy);
+    if len <= 0.0001 { return Vec::new(); }
+    let out=(dx/len,dy/len);
+    let normal=(-out.1,out.0);
+    let r=(body_width*0.5).max(0.25);
+    let add=|a:f32,b:f32| (
+        endpoint.0+out.0*a+normal.0*b,
+        endpoint.1+out.1*a+normal.1*b
+    );
+    match tip {
+        BrushTipShape::Round => {
+            let angle=out.1.atan2(out.0);
+            let steps=10;
+            (0..=steps).map(|i| {
+                let a=angle+std::f32::consts::FRAC_PI_2
+                    -std::f32::consts::PI*i as f32/steps as f32;
+                (endpoint.0+a.cos()*r,endpoint.1+a.sin()*r)
+            }).collect()
+        }
+        BrushTipShape::Square => vec![add(0.0,r),add(r,r),add(r,-r),add(0.0,-r)],
+        BrushTipShape::Triangle => vec![add(0.0,r),add(r*1.28,0.0),add(0.0,-r)],
+        BrushTipShape::Pentagon => vec![
+            add(0.0,r),add(r*0.70,r*0.72),add(r*1.18,0.0),
+            add(r*0.70,-r*0.72),add(0.0,-r),
+        ],
+        BrushTipShape::TallRectangle => vec![
+            add(0.0,r),add(r*0.45,r),add(r*0.45,-r),add(0.0,-r)
+        ],
+        BrushTipShape::WideRectangle => vec![
+            add(0.0,r),add(r*1.65,r),add(r*1.65,-r),add(0.0,-r)
+        ],
+    }
+}
+
 fn dab_for(p: &StrokePoint, width: f32) -> BrushDab {
     BrushDab {
         x: p.x,
@@ -424,6 +505,38 @@ mod tests {
         assert!((lines[0]-13.6).abs()<0.01);
         assert_eq!(dots,0);
         assert_eq!(outlines,0);
+    }
+
+    #[test]
+    fn polygonal_raster_tips_route_as_one_continuous_stroke() {
+        for tip in [
+            BrushTipShape::Square,BrushTipShape::Triangle,BrushTipShape::Pentagon,
+            BrushTipShape::TallRectangle,BrushTipShape::WideRectangle,
+        ] {
+            let s=Stroke {
+                points:vec![point(0.,0.,1.),point(20.,4.,1.),point(40.,0.,1.)],
+                color:[0,0,0,255],fill_color:None,base_width:18.,is_vector:false,
+                brush_preset:KritaBrushPreset::ChiselMarker,opacity:0.42,
+                brush_texture_id:None,tip_shape:tip,
+            };
+            let mut lines=0;
+            let mut dots=0;
+            visit_round_marks(&s,|mark,_|match mark {
+                RoundMark::Line{..}=>lines+=1,
+                RoundMark::Dot(_)=>dots+=1,
+                RoundMark::Outline(_)=>{},
+            });
+            assert_eq!(lines,1,"{tip:?} must be one continuous line");
+            assert_eq!(dots,0,"{tip:?} must not fall back to repeated dabs");
+        }
+    }
+
+    #[test]
+    fn marker_half_cap_stays_outside_the_stroke_body() {
+        let cap=raster_tip_cap_polygon((0.,0.),(10.,0.),20.,BrushTipShape::Round);
+        assert!(cap.len()>=8);
+        // Start cap points outward (negative X here), never into the body.
+        assert!(cap.iter().all(|(x,_)|*x<=0.001));
     }
 
     #[test]
