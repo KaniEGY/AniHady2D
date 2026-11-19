@@ -187,11 +187,19 @@ fn segment_projection(a: &StrokePoint, b: &StrokePoint, x: f32, y: f32)
 pub fn quick_edit_node(
     strokes: &mut [Stroke], x: f32, y: f32, tolerance: f32,
 ) -> Option<QuickNodeEdit> {
+    quick_edit_node_in_selection(strokes,&[],x,y,tolerance)
+}
+
+pub fn quick_edit_node_in_selection(
+    strokes: &mut [Stroke], selected_strokes: &[usize],
+    x: f32, y: f32, tolerance: f32,
+) -> Option<QuickNodeEdit> {
     if !x.is_finite() || !y.is_finite() || !tolerance.is_finite() || tolerance<=0.0 {
         return None;
     }
     let mut nearest_node: Option<(usize,usize,f32)> = None;
-    for (si,stroke) in strokes.iter().enumerate().filter(|(_,s)|s.is_vector) {
+    for (si,stroke) in strokes.iter().enumerate()
+        .filter(|(si,s)|s.is_vector && (selected_strokes.is_empty() || selected_strokes.contains(si))) {
         for (pi,p) in stroke.points.iter().enumerate() {
             let d=(p.x-x).hypot(p.y-y);
             if d<=tolerance && nearest_node.is_none_or(|(_,_,best)|d<best) {
@@ -222,7 +230,8 @@ pub fn quick_edit_node(
     }
 
     let mut nearest_segment: Option<(usize,usize,f32,f32,f32,f32)> = None;
-    for (si,stroke) in strokes.iter().enumerate().filter(|(_,s)|s.is_vector) {
+    for (si,stroke) in strokes.iter().enumerate()
+        .filter(|(si,s)|s.is_vector && (selected_strokes.is_empty() || selected_strokes.contains(si))) {
         for (segment,pair) in stroke.points.windows(2).enumerate() {
             let Some((px,py,t,d))=segment_projection(&pair[0],&pair[1],x,y) else {continue};
             if d<=tolerance && nearest_segment.is_none_or(|(_,_,_,_,_,best)|d<best) {
@@ -281,6 +290,16 @@ mod tests {
             brush_preset:crate::project::KritaBrushPreset::GPenInk,opacity:1.0,
             brush_texture_id:None,tip_shape:crate::project::BrushTipShape::Round,
         }
+    }
+
+    #[test]
+    fn quick_node_edit_respects_selected_vector_stroke() {
+        let mut strokes=vec![
+            vector(&[(0.,0.),(100.,0.),(100.,100.)]),
+            vector(&[(0.,4.),(100.,4.),(100.,104.)])
+        ];
+        let edit=quick_edit_node_in_selection(&mut strokes,&[1],50.,1.,8.).unwrap();
+        assert!(matches!(edit,QuickNodeEdit::Inserted{stroke:1,..}));
     }
 
     #[test]
