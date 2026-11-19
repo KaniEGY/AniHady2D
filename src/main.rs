@@ -7140,8 +7140,10 @@ impl eframe::App for StickApp {
                         // The CentralPanel loses/gains this height, moving its
                         // center by half. Compensate pan so the paper stays put.
                         self.pan_offset.y += applied*0.5;
-                        self.config.save();
                     }
+                }
+                if handle.drag_stopped() {
+                    self.config.save();
                 }
                 let bg = self.config.timeline_bg_color;
                 ui.painter().rect_filled(ui.max_rect(), 0.0,
@@ -7237,8 +7239,11 @@ impl eframe::App for StickApp {
                 ui.horizontal(|ui| {
                     ui.label(tr(lang, "Timeline zoom", "تكبير التايم لاين"));
                     if self.config.timeline_style != 0 {
+                        let width_range=if self.config.timeline_style==3 {
+                            64.0..=140.0
+                        } else {28.0..=110.0};
                         if ui.add(egui::Slider::new(&mut self.config.timeline_new_cell_width,
-                            28.0..=110.0).show_value(false)).changed() { self.config.save(); }
+                            width_range).show_value(false)).changed() { self.config.save(); }
                     } else {
                         ui.add(egui::Slider::new(&mut self.timeline_cell_width, 16.0..=84.0)
                             .show_value(false));
@@ -7924,8 +7929,11 @@ impl eframe::App for StickApp {
                     ui.separator();
                     ui.label(tr(lang, "Timeline cell width", "عرض الفريم في التايم لاين"));
                     if self.config.timeline_style != 0 {
+                        let width_range=if self.config.timeline_style==3 {
+                            64.0..=140.0
+                        } else {28.0..=110.0};
                         if ui.add(egui::Slider::new(&mut self.config.timeline_new_cell_width,
-                            28.0..=110.0)).changed() { self.config.save(); }
+                            width_range)).changed() { self.config.save(); }
                     } else {
                         ui.add(egui::Slider::new(&mut self.timeline_cell_width, 20.0..=90.0));
                     }
