@@ -3,12 +3,42 @@
 use crate::project::{Stroke, TextItem};
 use eframe::egui;
 
-pub fn text_bounds(text: &TextItem) -> egui::Rect {
+fn text_unrotated_rect(text:&TextItem)->egui::Rect {
     let lines: Vec<&str> = text.content.lines().collect();
     let max_chars = lines.iter().map(|line| line.chars().count()).max().unwrap_or(1).max(1);
     let height = (lines.len().max(1) as f32 * text.font_size * 1.32).max(12.0);
     let width = (max_chars as f32 * text.font_size * 0.60).max(14.0);
-    egui::Rect::from_min_size(egui::pos2(text.x, text.y), egui::vec2(width, height))
+    egui::Rect::from_min_size(egui::pos2(text.x,text.y),egui::vec2(width,height))
+}
+
+pub fn text_corners(text:&TextItem)->[egui::Pos2;4] {
+    let rect=text_unrotated_rect(text);
+    let origin=egui::pos2(text.x,text.y);
+    let angle=if text.rotation_deg.is_finite(){text.rotation_deg.to_radians()}else{0.0};
+    let (sn,cs)=angle.sin_cos();
+    let rotate=|p:egui::Pos2| {
+        let d=p-origin;
+        origin+egui::vec2(d.x*cs-d.y*sn,d.x*sn+d.y*cs)
+    };
+    [rotate(rect.left_top()),rotate(rect.right_top()),rotate(rect.right_bottom()),rotate(rect.left_bottom())]
+}
+
+pub fn text_bounds(text:&TextItem)->egui::Rect {
+    let corners=text_corners(text);
+    let mut min=corners[0];
+    let mut max=corners[0];
+    for p in corners.into_iter().skip(1){min=min.min(p);max=max.max(p);}
+    egui::Rect::from_min_max(min,max)
+}
+
+pub fn text_hit_test(text:&TextItem,cursor:egui::Pos2)->bool {
+    if !cursor.x.is_finite()||!cursor.y.is_finite(){return false;}
+    let origin=egui::pos2(text.x,text.y);
+    let angle=if text.rotation_deg.is_finite(){-text.rotation_deg.to_radians()}else{0.0};
+    let (sn,cs)=angle.sin_cos();
+    let d=cursor-origin;
+    let local=origin+egui::vec2(d.x*cs-d.y*sn,d.x*sn+d.y*cs);
+    text_unrotated_rect(text).contains(local)
 }
 
 pub fn stroke_intersects_marquee(stroke: &Stroke, rect: egui::Rect) -> bool {
@@ -304,10 +334,20 @@ mod tests {
     }
 
     #[test]
+    fn rotated_text_hit_test_tracks_visual_rotation() {
+        let text=TextItem{content:"AB".into(),x:100.,y:100.,font_size:30.,
+            color:[0,0,0,255],rotation_deg:90.};
+        assert!(text_hit_test(&text,egui::pos2(90.,115.)));
+        assert!(!text_hit_test(&text,egui::pos2(125.,115.)));
+        let bounds=text_bounds(&text);
+        assert!(bounds.height()>bounds.width());
+    }
+
+    #[test]
     fn text_hit_bounds_track_content_size() {
         let text = TextItem {
             content: "Hello".into(), x: 10.0, y: 20.0,
-            font_size: 30.0, color: [0,0,0,255],
+            font_size: 30.0, color: [0,0,0,255], rotation_deg: 0.0,
         };
         let b = text_bounds(&text);
         assert!(b.contains(egui::pos2(15.0,25.0)));
