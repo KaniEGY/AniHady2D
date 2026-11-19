@@ -52,6 +52,8 @@ pub fn visit_round_marks(stroke: &Stroke, mut paint: impl FnMut(RoundMark, f32))
             let mut dab = dab_for(first, width);
             if stroke.brush_preset == KritaBrushPreset::Fineliner {
                 dab.radius = (0.5 * width).max(0.25);
+            } else if !stroke.is_vector && stroke.brush_preset == KritaBrushPreset::ChiselMarker {
+                dab.radius = (0.5 * width * 0.68).max(0.25);
             }
             if (!stroke.is_vector && stroke.tip_shape != BrushTipShape::Round)
                 || (stroke.is_vector && stroke.tip_shape == BrushTipShape::Square)
@@ -65,7 +67,13 @@ pub fn visit_round_marks(stroke: &Stroke, mut paint: impl FnMut(RoundMark, f32))
             // visible square/triangle stamps. Textured brushes are routed before
             // this engine, and the Vector Pen is intentionally excluded.
             if !stroke.is_vector && stroke.tip_shape != BrushTipShape::Round {
-                let shaped_width=(width*raster_tip_cross_scale(stroke.tip_shape)).max(0.5);
+                let preset_scale=if stroke.brush_preset==KritaBrushPreset::ChiselMarker {
+                    0.68
+                } else {
+                    1.0
+                };
+                let shaped_width=(width*preset_scale
+                    *raster_tip_cross_scale(stroke.tip_shape)).max(0.5);
                 if varying && !has_risky_turn(&stroke.points) {
                     let outline=crate::stroke_geometry::pressure_outline(
                         &stroke.points,shaped_width);
