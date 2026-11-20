@@ -4,7 +4,7 @@
 //! The original file is kept beside the normalized tip(s) so future versions
 //! can improve the mapping without making users re-import their libraries.
 
-use crate::brush_engine::visit_pressure_dabs_spaced;
+use crate::brush_engine::visit_pressure_dabs_spaced_dense;
 use crate::project::Stroke;
 use base64::Engine;
 use eframe::egui;
@@ -488,7 +488,7 @@ fn emit_stamps(stroke:&Stroke,brush:&RuntimeBrush,mut emit:impl FnMut(Stamp)){
     };
     let ratio=(spacing*2.0*brush.meta.tip_scale).clamp(0.01,2.0);
     let mut ordinal=0u32;
-    visit_pressure_dabs_spaced(&stroke.points,stroke.base_width,ratio,|dab,[dx,dy]|{
+    visit_pressure_dabs_spaced_dense(&stroke.points,stroke.base_width,ratio,|dab,[dx,dy]|{
         let p=(2.0*dab.radius/stroke.base_width.max(0.001)).clamp(0.0,1.5);
         let size_factor=(1.0-brush.meta.size_pressure)+brush.meta.size_pressure*p;
         let r=(stroke.base_width*0.5*size_factor*brush.meta.tip_scale).max(0.25);
