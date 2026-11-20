@@ -7,7 +7,10 @@
 
 use eframe::egui;
 
-pub const MAX_POINTER_SAMPLES_PER_FRAME: usize = 96;
+// A 1000 Hz mouse usually delivers ~16 samples at 60 FPS. 48 leaves ample
+// headroom for tablets while preventing a stalled/high-polling frame from
+// spending a visible chunk of the next frame replaying old pointer events.
+pub const MAX_POINTER_SAMPLES_PER_FRAME: usize = 48;
 
 fn push_distinct(out: &mut Vec<egui::Pos2>, p: egui::Pos2) {
     if !p.x.is_finite() || !p.y.is_finite() {
