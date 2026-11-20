@@ -897,8 +897,10 @@ fn parse_svg_path_d(d: &str) -> Vec<StrokePoint> {
     let mut start_y = 0.0f32;
 
     while idx < tokens.len() {
-        if tokens[idx].len() == 1 && tokens[idx].chars().next().unwrap().is_alphabetic() {
-            cmd = tokens[idx].chars().next().unwrap();
+        if let Some(next_cmd)=tokens[idx].chars().next()
+            .filter(|ch|tokens[idx].len()==1 && ch.is_ascii_alphabetic())
+        {
+            cmd=next_cmd;
             idx += 1;
             if cmd == 'Z' || cmd == 'z' {
                 pts.push(StrokePoint { x: start_x, y: start_y, pressure: 1.0 });

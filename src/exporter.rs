@@ -399,7 +399,13 @@ fn draw_skia_stroke(pixmap: &mut Pixmap, s: &crate::project::Stroke, ts: Transfo
                 let path = centerline.get_or_insert_with(|| {
                     let mut pb = PathBuilder::new();
                     if s.is_vector || s.brush_preset == crate::project::KritaBrushPreset::Fineliner {
-                        let path = crate::vector_path::smoothed_path(&s.points);
+                        let path = if s.is_vector
+                            && s.brush_preset == crate::project::KritaBrushPreset::SmoothInk
+                        {
+                            crate::vector_path::smoothed_ink_path(&s.points)
+                        } else {
+                            crate::vector_path::smoothed_path(&s.points)
+                        };
                         if let Some(&(x,y)) = path.first() {
                             pb.move_to(x,y);
                             for &(x,y) in path.iter().skip(1) { pb.line_to(x,y); }

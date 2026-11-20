@@ -18,6 +18,7 @@ pub struct QuickMenuState {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum QuickMenuAction {
     Shape(usize),
+    ToggleShapeVector,
     Color([u8; 4]),
     CustomColor,
     Close,
@@ -26,12 +27,38 @@ pub enum QuickMenuAction {
 const MENU_SIZE: f32 = 236.0;
 const RING_RADIUS: f32 = 78.0;
 
+fn draw_shape_icon(painter:&egui::Painter, center:egui::Pos2, index:usize, color:egui::Color32) {
+    let stroke=egui::Stroke::new(2.0,color);
+    match index {
+        0 => { painter.line_segment(
+            [center+egui::vec2(-9.0,7.0),center+egui::vec2(9.0,-7.0)],stroke); }
+        1 => { painter.circle_stroke(center,7.5,stroke); }
+        2 => { painter.rect_stroke(
+            egui::Rect::from_center_size(center,egui::vec2(14.0,14.0)),1.5,stroke); }
+        3 => { painter.rect_stroke(
+            egui::Rect::from_center_size(center,egui::vec2(17.0,11.0)),1.5,stroke); }
+        4 => { painter.add(egui::Shape::closed_line(vec![
+            center+egui::vec2(0.0,-8.0),
+            center+egui::vec2(8.0,7.0),
+            center+egui::vec2(-8.0,7.0),
+        ],stroke)); }
+        _ => {
+            let pts=(0..5).map(|i|{
+                let a=-std::f32::consts::FRAC_PI_2+i as f32*std::f32::consts::TAU/5.0;
+                center+egui::vec2(a.cos(),a.sin())*8.0
+            }).collect();
+            painter.add(egui::Shape::closed_line(pts,stroke));
+        }
+    }
+}
+
 pub fn show(
     ctx: &egui::Context,
     state: QuickMenuState,
     shape_labels: &[&str; 6],
     colors: &[[u8; 4]],
     selected_shape: usize,
+    shape_vector: bool,
     selected_color: [u8; 4],
     custom_label: &str,
 ) -> Option<QuickMenuAction> {
@@ -51,7 +78,11 @@ pub fn show(
             let center_fill=match state.kind {
                 QuickMenuKind::Colors=>egui::Color32::from_rgba_unmultiplied(
                     selected_color[0],selected_color[1],selected_color[2],selected_color[3]),
-                QuickMenuKind::Shapes=>egui::Color32::from_rgba_unmultiplied(18,24,33,246),
+                QuickMenuKind::Shapes=>if shape_vector {
+                    egui::Color32::from_rgba_unmultiplied(14,104,126,246)
+                } else {
+                    egui::Color32::from_rgba_unmultiplied(18,24,33,246)
+                },
             };
             ui.painter().circle_filled(center,31.0,center_fill);
             ui.painter().circle_stroke(
@@ -68,11 +99,14 @@ pub fn show(
                     ui.painter().text(
                         center,
                         egui::Align2::CENTER_CENTER,
-                        "SHAPE",
-                        egui::FontId::proportional(10.0),
+                        if shape_vector {"VECTOR"} else {"RASTER"},
+                        egui::FontId::proportional(9.0),
                         egui::Color32::from_rgb(223, 232, 241),
                     );
-                    for (index, label) in shape_labels.iter().enumerate() {
+                    if center_response.clicked() {
+                        action=Some(QuickMenuAction::ToggleShapeVector);
+                    }
+                    for (index, _label) in shape_labels.iter().enumerate() {
                         let angle = -std::f32::consts::FRAC_PI_2
                             + index as f32 * std::f32::consts::TAU / shape_labels.len() as f32;
                         let p = center + egui::vec2(angle.cos(), angle.sin()) * RING_RADIUS;
@@ -99,13 +133,7 @@ pub fn show(
                                 },
                             ),
                         );
-                        ui.painter().text(
-                            p,
-                            egui::Align2::CENTER_CENTER,
-                            *label,
-                            egui::FontId::proportional(17.0),
-                            egui::Color32::WHITE,
-                        );
+                        draw_shape_icon(ui.painter(),p,index,egui::Color32::WHITE);
                         if response.clicked() {
                             action = Some(QuickMenuAction::Shape(index));
                         }
