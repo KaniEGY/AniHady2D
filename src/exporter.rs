@@ -374,6 +374,9 @@ fn draw_skia_stroke(pixmap: &mut Pixmap, s: &crate::project::Stroke, ts: Transfo
         fill_skia_stroke_region(pixmap,s,&paint,ts);
     }
     if alpha == 0 { return; }
+    if crate::custom_brush::export(pixmap,s,alpha,ts) {
+        return;
+    }
     if let Some(texture) = crate::texture_brush::TextureBrush::for_stroke(s) {
         texture.export(pixmap, s, alpha, ts);
         return;
