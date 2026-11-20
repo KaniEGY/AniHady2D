@@ -24,7 +24,7 @@ use tiny_skia::{FilterQuality, Pixmap, PixmapPaint, Transform};
 const MAX_TIPS: usize = 32;
 const MAX_IMPORT_BRUSHES: usize = 128;
 const MAX_TIP_SIDE: u32 = 512;
-const CUSTOM_BRUSH_ENGINE_VERSION: u32 = 4;
+const CUSTOM_BRUSH_ENGINE_VERSION: u32 = 5;
 
 fn default_tip_scale() -> f32 { 1.0 }
 fn default_brush_size() -> f32 { 30.0 }
@@ -121,8 +121,8 @@ fn runtime() -> &'static RwLock<HashMap<String, RuntimeBrush>> {
 
 pub fn accepted_extensions() -> &'static [&'static str] {
     &[
-        "kpp", "bundle", "myb", "gbr", "gih", "abr",
-        "sut", "sutg", "blend",
+        "kpp", "bundle", "myb", "gbr", "gih", "vbr", "abr",
+        "sut", "sutg", "blend", "brush", "brushset", "zip",
         "png", "jpg", "jpeg", "webp", "bmp",
     ]
 }
@@ -564,6 +564,7 @@ pub fn import_file(path:&Path)->Result<Vec<ImportedBrushDraft>,String>{
         "png"|"jpg"|"jpeg"|"webp"|"bmp"=>import_image(path),
         "gbr"=>import_gbr_file(path),
         "gih"=>import_gih_file(path),
+        "vbr"=>import_vbr_file(path),
         "abr"=>import_abr_file(path),
         "kpp"=>import_kpp_file(path),
         "bundle"=>import_krita_bundle(path),
@@ -571,6 +572,7 @@ pub fn import_file(path:&Path)->Result<Vec<ImportedBrushDraft>,String>{
         "sut"=>import_sut_file(path),
         "sutg"=>import_sutg_file(path),
         "blend"=>import_blend_file(path),
+        "brush"|"brushset"|"zip"=>import_zip_brush_pack(path),
         _=>Err(format!("Unsupported brush file: .{ext}")),
     }
 }
@@ -588,6 +590,145 @@ fn import_image(path:&Path)->Result<Vec<ImportedBrushDraft>,String>{
         render_mode:CustomBrushRenderMode::Stamp,
         auxiliary_resource_path:None,compatibility_note:String::new(),
     }])
+}
+
+
+fn parse_vbr_text(text:&str,path:&Path)->Result<ImportedBrushDraft,String>{
+    let lines:Vec<&str>=text.lines().map(str::trim).filter(|l|!l.is_empty()).collect();
+    if lines.first().copied()!=Some("GIMP-VBR"){return Err("VBR magic missing".into())}
+    let version=*lines.get(1).ok_or("VBR version missing")?;
+    let shaped=version=="1.5";
+    if version!="1.0" && !shaped{return Err(format!("Unsupported VBR version {version}"))}
+    let name=lines.get(2).copied().unwrap_or("GIMP Generated Brush").to_owned();
+    let (shape,offset)=if shaped {
+        (lines.get(3).copied().unwrap_or("circle").to_ascii_lowercase(),1usize)
+    } else {("circle".to_owned(),0usize)};
+    let spacing=lines.get(3+offset).and_then(|v|v.parse::<f32>().ok()).unwrap_or(10.0);
+    let radius=lines.get(4+offset).and_then(|v|v.parse::<f32>().ok()).unwrap_or(15.0)
+        .clamp(0.5,2048.0);
+    let (spikes,hard_index)=if shaped {
+        (lines.get(5+offset).and_then(|v|v.parse::<usize>().ok()).unwrap_or(2),6+offset)
+    } else {(2usize),5usize};
+    let hardness=lines.get(hard_index).and_then(|v|v.parse::<f32>().ok()).unwrap_or(0.9)
+        .clamp(0.0,0.999);
+    let aspect=lines.get(hard_index+1).and_then(|v|v.parse::<f32>().ok()).unwrap_or(1.0);
+    let angle=lines.get(hard_index+2).and_then(|v|v.parse::<f32>().ok()).unwrap_or(0.0);
+    let ratio=if aspect.abs()<=1.0 {aspect.abs().max(0.05)}
+        else {(1.0/(1.0+aspect.abs()/20.0)).clamp(0.05,1.0)};
+    let tip=match shape.as_str() {
+        "square"=>square_tip(128,hardness),
+        "diamond"=>diamond_tip(128,hardness),
+        _ if ratio<0.98=>elliptical_tip(128,hardness,ratio,angle),
+        _=>round_tip(128,hardness),
+    };
+    Ok(ImportedBrushDraft{
+        suggested_name:if name.trim().is_empty(){
+            path.file_stem().and_then(|s|s.to_str()).unwrap_or("GIMP Generated Brush").to_owned()
+        }else{name},
+        source_format:"GIMP generated brush .vbr".into(),source_path:path.to_path_buf(),
+        default_size:(radius*2.0).clamp(1.0,2000.0),tips:vec![tip],icon:None,
+        spacing:(spacing/100.0).clamp(0.005,2.0),opacity:1.0,flow:1.0,
+        size_pressure:1.0,opacity_pressure:0.0,angle_deg:angle,follow_stroke:false,
+        scatter:0.0,random_tip:false,tip_scale:1.0,render_mode:CustomBrushRenderMode::Stamp,
+        auxiliary_resource_path:None,
+        compatibility_note:format!(
+            "GIMP VBR {version}: shape {shape}, radius {:.1}px, hardness {:.0}%, aspect {:.2}, angle {:.1}°, spikes {}.",
+            radius,hardness*100.0,aspect,angle,spikes),
+    })
+}
+
+fn import_vbr_file(path:&Path)->Result<Vec<ImportedBrushDraft>,String>{
+    let text=fs::read_to_string(path).map_err(|e|format!("VBR: {e}"))?;
+    Ok(vec![parse_vbr_text(&text,path)?])
+}
+
+fn import_zip_brush_pack(path:&Path)->Result<Vec<ImportedBrushDraft>,String>{
+    let bytes=fs::read(path).map_err(|e|e.to_string())?;
+    let mut zip=zip::ZipArchive::new(Cursor::new(bytes)).map_err(|e|format!("Brush archive: {e}"))?;
+    let outer_ext=path.extension().and_then(|s|s.to_str()).unwrap_or("").to_ascii_lowercase();
+    let procreate=outer_ext=="brush"||outer_ext=="brushset";
+    let mut out=Vec::new();
+    for i in 0..zip.len() {
+        if out.len()>=MAX_IMPORT_BRUSHES{break}
+        let mut entry=zip.by_index(i).map_err(|e|e.to_string())?;
+        if entry.is_dir(){continue}
+        let entry_name=entry.name().replace('\\',"/");
+        let lower=entry_name.to_ascii_lowercase();
+        let ext=Path::new(&entry_name).extension().and_then(|s|s.to_str())
+            .unwrap_or("").to_ascii_lowercase();
+        let mut data=Vec::new();
+        entry.read_to_end(&mut data).map_err(|e|e.to_string())?;
+        let display_name=Path::new(&entry_name).parent()
+            .and_then(|p|p.file_name()).and_then(|s|s.to_str())
+            .filter(|s|!s.is_empty())
+            .unwrap_or_else(||Path::new(&entry_name).file_stem().and_then(|s|s.to_str()).unwrap_or("Brush"))
+            .to_owned();
+
+        if ext=="gbr" {
+            if let Ok((name,tip,spacing,_))=parse_gbr(&data,0) {
+                out.push(ImportedBrushDraft{
+                    suggested_name:if name.is_empty(){display_name.clone()}else{name},
+                    source_format:"Brush pack / GIMP .gbr".into(),source_path:path.to_path_buf(),
+                    default_size:tip.width.max(tip.height).clamp(1,120) as f32,tips:vec![tip],
+                    icon:None,spacing:(spacing as f32/100.0).clamp(0.005,2.0),
+                    opacity:1.0,flow:1.0,size_pressure:1.0,opacity_pressure:0.0,
+                    angle_deg:0.0,follow_stroke:false,scatter:0.0,random_tip:false,tip_scale:1.0,
+                    render_mode:CustomBrushRenderMode::Stamp,auxiliary_resource_path:None,
+                    compatibility_note:"Imported from a brush-pack archive.".into(),
+                });
+            }
+            continue;
+        }
+        if ext=="gih" {
+            if let Ok(mut drafts)=parse_gih_bytes(&data,Path::new(&entry_name)) {
+                for draft in &mut drafts {
+                    draft.source_path=path.to_path_buf();
+                    draft.source_format="Brush pack / GIMP .gih".into();
+                }
+                out.extend(drafts.into_iter().take(MAX_IMPORT_BRUSHES-out.len()));
+            }
+            continue;
+        }
+        if ext=="vbr" {
+            if let Ok(text)=std::str::from_utf8(&data) {
+                if let Ok(mut draft)=parse_vbr_text(text,Path::new(&entry_name)) {
+                    draft.source_path=path.to_path_buf();
+                    draft.source_format="Brush pack / GIMP .vbr".into();
+                    out.push(draft);
+                }
+            }
+            continue;
+        }
+
+        let image_ext=matches!(ext.as_str(),"png"|"jpg"|"jpeg"|"webp"|"bmp");
+        // Procreate packages contain previews and grain maps too. Shape.png is
+        // the actual brush-tip mask; never import every thumbnail as a brush.
+        let usable_image=image_ext && (!procreate || lower.ends_with("shape.png")
+            || lower.contains("/shape/") || lower.contains("brushshape"));
+        if usable_image {
+            if let Ok(img)=image::load_from_memory(&data) {
+                let tip=tip_from_image(&img);
+                out.push(ImportedBrushDraft{
+                    suggested_name:display_name,
+                    source_format:if procreate {
+                        "Procreate .brush/.brushset shape tip".into()
+                    } else {"ZIP image brush tip".into()},
+                    source_path:path.to_path_buf(),
+                    default_size:tip.width.max(tip.height).clamp(1,120) as f32,
+                    tips:vec![tip],icon:Some(icon_from_image(img)),spacing:0.10,
+                    opacity:1.0,flow:1.0,size_pressure:1.0,opacity_pressure:0.0,
+                    angle_deg:0.0,follow_stroke:true,scatter:0.0,random_tip:false,tip_scale:1.0,
+                    render_mode:CustomBrushRenderMode::Stamp,auxiliary_resource_path:None,
+                    compatibility_note:if procreate {
+                        "Procreate shape texture imported; proprietary dynamics are mapped to Stick defaults.".into()
+                    } else {"Image tip imported from ZIP brush pack.".into()},
+                });
+            }
+        }
+    }
+    if out.is_empty() {
+        Err("The brush archive contained no readable GBR/GIH/VBR or usable image/Procreate shape tips.".into())
+    } else {Ok(out)}
 }
 
 fn import_abr_file(path:&Path)->Result<Vec<ImportedBrushDraft>,String>{
@@ -1192,6 +1333,12 @@ fn value_f32(v:Option<&Value>)->Option<f32>{
 
 fn import_blend_file(path:&Path)->Result<Vec<ImportedBrushDraft>,String>{
     let result=std::panic::catch_unwind(std::panic::AssertUnwindSafe(||{
+        let blend_bytes=fs::read(path).map_err(|e|format!("Blender .blend read: {e}"))?;
+        let png_sig=b"\x89PNG\r\n\x1a\n";
+        let embedded_png_count=blend_bytes.windows(png_sig.len()).filter(|w|*w==png_sig).count();
+        let packed_texture=if embedded_png_count==1 {
+            find_first_png(&blend_bytes).and_then(|png|image::load_from_memory(png).ok())
+        } else {None};
         let blend=blend::Blend::from_path(path).map_err(|e|format!("Blender .blend: {e:?}"))?;
         let mut out=Vec::new();
 
@@ -1253,17 +1400,25 @@ fn import_blend_file(path:&Path)->Result<Vec<ImportedBrushDraft>,String>{
             let hardness=safe_f32(&gp,"hardness",
                 safe_f32(&brush,"hardness",0.9)).clamp(0.02,0.999);
             let angle=safe_f32(&gp,"draw_angle",0.0).to_degrees();
-            let aspect=safe_f32_vec(&gp,"aspect_ratio");
+            let angle_factor=safe_f32(&gp,"draw_angle_factor",0.0).abs().clamp(0.0,1.0);
+            let mut aspect=safe_f32_vec(&gp,"aspect");
+            if aspect.len()<2 {aspect=safe_f32_vec(&gp,"aspect_ratio");}
             let aspect_ratio=if aspect.len()>=2 {
                 let a=aspect[0].abs().max(0.01);
                 let b=aspect[1].abs().max(0.01);
                 (a.min(b)/a.max(b)).clamp(0.08,1.0)
             } else {
-                safe_f32(&brush,"tip_scale_x",1.0).abs().clamp(0.08,1.0)
+                (safe_f32(&brush,"tip_scale_x",1.0).abs()*(1.0-angle_factor*0.55))
+                    .clamp(0.08,1.0)
             };
-            let smooth=safe_f32(&gp,"active_smooth",
-                safe_f32(&gp,"draw_smoothfac",
+            let smooth=safe_f32(&gp,"draw_smoothfac",
+                safe_f32(&gp,"active_smooth",
                     safe_f32(&brush,"smooth_stroke_factor",0.0))).clamp(0.0,1.0);
+            let smooth_level=safe_i32(&gp,"draw_smoothlvl",0).max(0);
+            let subdivision=safe_i32(&gp,"draw_subdivide",0).max(0);
+            let random_pressure=safe_f32(&gp,"draw_random_press",0.0).abs().clamp(0.0,1.0);
+            let random_gp_strength=safe_f32(&gp,"draw_random_strength",0.0).abs().clamp(0.0,1.0);
+            let uv_random=safe_f32(&gp,"uv_random",0.0).abs().clamp(0.0,1.0);
             let input_samples=safe_i32(&gp,"input_samples",
                 safe_i32(&brush,"input_samples",1)).max(1);
             let gp_flags=safe_i32(&gp,"flag",0) as u32;
@@ -1309,6 +1464,11 @@ fn import_blend_file(path:&Path)->Result<Vec<ImportedBrushDraft>,String>{
                                         blender_external_image(path,&material_texture_path) {
                                         material_texture_tip=Some(tip_from_image(&texture));
                                         material_texture_source=Some(texture_path);
+                                    } else if let Some(texture)=packed_texture.clone() {
+                                        // Many distributed Blender brush packs embed the
+                                        // texture and retain the creator's dead absolute
+                                        // filepath. Use the packed PNG when it is unambiguous.
+                                        material_texture_tip=Some(tip_from_image(&texture));
                                     }
                                 }
                             }
@@ -1327,9 +1487,12 @@ fn import_blend_file(path:&Path)->Result<Vec<ImportedBrushDraft>,String>{
                 round_tip(128,hardness)
             };
             let textured=material_texture_tip.is_some();
-            let final_jitter=(jitter+random_size*0.35).clamp(0.0,3.0);
+            let final_jitter=(jitter+random_size*0.35+random_pressure*0.20+uv_random*0.15)
+                .clamp(0.0,3.0);
             let material_note=if !material_texture_path.is_empty() && !textured {
                 format!(" texture '{}' was referenced but not found beside the .blend;",material_texture_path)
+            } else if textured && material_texture_source.is_none() {
+                " packed stroke texture loaded from the .blend;".to_owned()
             } else if textured {
                 " external stroke texture loaded;".to_owned()
             } else {
@@ -1351,10 +1514,11 @@ fn import_blend_file(path:&Path)->Result<Vec<ImportedBrushDraft>,String>{
                 },
                 auxiliary_resource_path:material_texture_source,
                 compatibility_note:format!(
-                    "Blender GP Draw mapped: {}px, spacing {:.0}%, strength {:.0}%, hardness {:.0}%, aspect {:.2}, jitter {:.2}{}, material mode {}, random size {:.2}, strength {:.2}, rotation {:.2},{} smoothing {:.2}, input samples {}.",
-                    size,spacing*100.0,gp_strength*100.0,hardness*100.0,aspect_ratio,final_jitter,
-                    if pressure_jitter{" + pressure"}else{""},material_mode,random_size,
-                    random_strength,random_rotation,material_note,smooth,input_samples),
+                    "Blender GP Draw mapped: {}px, spacing {:.0}%, strength {:.0}%, hardness {:.0}%, aspect {:.2}, angle-factor {:.2}, jitter {:.2}{}, material mode {}, random size {:.2}, strength {:.2}/{:.2}, rotation {:.2}, uv-random {:.2},{} smoothing {:.2} (level {}), subdivision {}, input samples {}.",
+                    size,spacing*100.0,gp_strength*100.0,hardness*100.0,aspect_ratio,angle_factor,
+                    final_jitter,if pressure_jitter{" + pressure"}else{""},material_mode,random_size,
+                    random_strength,random_gp_strength,random_rotation,uv_random,material_note,
+                    smooth,smooth_level,subdivision,input_samples),
             });
         }
         Ok::<_,String>(out)
@@ -1504,6 +1668,20 @@ fn elliptical_tip(size:u32,hardness:f32,ratio:f32,angle_deg:f32)->TipMask{
     TipMask{width:size,height:size,data}
 }
 
+fn diamond_tip(size:u32,hardness:f32)->TipMask{
+    let size=size.max(8);
+    let hard=hardness.clamp(0.0,0.999);
+    let mut data=Vec::with_capacity((size*size) as usize);
+    for y in 0..size {for x in 0..size {
+        let fx=((x as f32+0.5)/size as f32*2.0-1.0).abs();
+        let fy=((y as f32+0.5)/size as f32*2.0-1.0).abs();
+        let d=(fx+fy).clamp(0.0,2.0);
+        let a=if d<=hard{1.0}else{((1.0-d)/(1.0-hard)).clamp(0.0,1.0)};
+        data.push((a*255.0).round() as u8);
+    }}
+    TipMask{width:size,height:size,data}
+}
+
 fn square_tip(size:u32,hardness:f32)->TipMask{
     let size=size.max(8);
     let hard=hardness.clamp(0.0,0.999);
@@ -1563,9 +1741,27 @@ mod tests {
 
     #[test]
     fn supported_extensions_cover_requested_apps() {
-        for ext in ["kpp","bundle","myb","gbr","gih","abr","sut","sutg","blend"] {
+        for ext in ["kpp","bundle","myb","gbr","gih","vbr","abr","sut","sutg","blend","brush","brushset","zip"] {
             assert!(accepted_extensions().contains(&ext),"{ext}");
         }
+    }
+
+    #[test]
+    fn vbr_generated_circle_parses() {
+        let text="GIMP-VBR\n1.0\nSoft Dot\n25\n16\n0.75\n1.0\n15\n";
+        let draft=parse_vbr_text(text,Path::new("soft.vbr")).unwrap();
+        assert_eq!(draft.suggested_name,"Soft Dot");
+        assert!((draft.default_size-32.0).abs()<0.01);
+        assert!((draft.spacing-0.25).abs()<0.001);
+        assert_eq!(draft.tips.len(),1);
+    }
+
+    #[test]
+    fn vbr_shaped_diamond_parses() {
+        let text="GIMP-VBR\n1.5\nDiamond\nsquare\n20\n12\n2\n0.8\n1.0\n0\n";
+        let draft=parse_vbr_text(text,Path::new("diamond.vbr")).unwrap();
+        assert_eq!(draft.tips[0].width,128);
+        assert!(draft.compatibility_note.contains("square"));
     }
 
     #[test]
