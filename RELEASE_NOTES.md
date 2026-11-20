@@ -89,6 +89,8 @@
 - Artist System and level-up overlays now block canvas/tool input behind the popup, preventing custom cursor and drawing interactions from leaking into background windows.
 
 ### What's new
+- **Updater TLS/CDN reliability fix:** update downloads now retry through fresh HTTPS connections when GitHub/CDN TLS streams fail, including errors such as `cannot decrypt peer's message`.
+- If the Rust HTTPS transport still fails, Stick automatically falls back to Windows `curl.exe`/Schannel, then performs the same published-size, SHA-256, ZIP and PE validation before installing anything.
 - **Krita KPP spacing/import fix:** Stick now keeps the real `brush_definition` spacing (for example 0.1 = 10%) instead of incorrectly replacing it with Krita's `SpacingValue` dynamics multiplier. This fixes imported brushes appearing as rows of separated dots.
 - Disabled Krita dynamics are now respected: stale `ScatterValue`, rotation or opacity sensor data is ignored unless the corresponding pressure option is enabled.
 - Predefined Krita brushes now load their real `.gbr` / `.gih` tip resources from beside the KPP, a sibling `brushes` folder, the local Krita resource folder, or from inside a `.bundle`. Multi-tip GIH data and brush-tip scale are preserved.
@@ -379,6 +381,8 @@
 - اتضاف ملف `ONLINE_ARCHITECTURE_REVIEW_2026-11-19.md` لمراجعة بنية الشبكات والخطوات المستقبلية. صيغة المشاريع وبروتوكول التعاون الحالي ما اتغيروش.
 
 ### إيه الجديد؟
+- **إصلاح موثوقية تحميل التحديثات:** لو اتصال GitHub/CDN رجع خطأ TLS زي `cannot decrypt peer's message`، Stick هيعيد المحاولة باتصالات HTTPS جديدة بدل ما يوقف التحديث فورًا.
+- لو مكتبة Rust نفسها فضلت تفشل، البرنامج هيستخدم تلقائيًا `curl.exe` الخاص بويندوز/Schannel كمسار بديل، وبعدها يفضل فحص الحجم وSHA-256 والـZIP وملف EXE شغالين قبل التثبيت.
 - **إصلاح استيراد فرش Krita KPP:** البرنامج بقى يحافظ على الـspacing الحقيقي الموجود في `brush_definition` (مثلاً 0.1 = 10%) بدل ما كان يستبدله غلط بـ`SpacingValue`، وده كان سبب إن الفرشة تطلع نقط/خرز منفصل.
 - لو Scatter أو Rotation أو Opacity pressure مقفولين في Krita، Stick مش هيطبق قيم قديمة مخزنة جوه الـpreset من ورا المستخدم.
 - فرش Krita اللي بتعتمد على سن خارجي `.gbr` أو `.gih` بقت تدور على السن الحقيقي جنب ملف KPP، أو في فولدر `brushes` المجاور، أو موارد Krita المحلية، أو جوه `.bundle`، مع الحفاظ على multi-tip والـscale.
