@@ -218,10 +218,17 @@ pub fn show_mode_menu(
         .show(ctx,|ui|{
             let (rect,_)=ui.allocate_exact_size(egui::vec2(MENU_SIZE,MENU_SIZE),egui::Sense::hover());
             let center=rect.center();
-            ui.painter().circle_filled(center,27.0,egui::Color32::from_rgba_unmultiplied(18,24,33,246));
-            ui.painter().circle_stroke(center,27.0,egui::Stroke::new(1.4,egui::Color32::from_rgb(66,205,242)));
+            let center_hit=egui::Rect::from_center_size(center,egui::vec2(56.0,56.0));
+            let center_response=ui.allocate_rect(center_hit,egui::Sense::click());
+            ui.painter().circle_filled(center,27.0,
+                if center_response.hovered(){egui::Color32::from_rgb(48,58,70)}
+                else{egui::Color32::from_rgba_unmultiplied(18,24,33,246)});
+            ui.painter().circle_stroke(center,27.0,egui::Stroke::new(
+                if center_response.hovered(){2.0}else{1.4},
+                egui::Color32::from_rgb(66,205,242)));
             ui.painter().text(center,egui::Align2::CENTER_CENTER,"×",
                 egui::FontId::proportional(18.0),egui::Color32::from_rgb(220,228,236));
+            if center_response.clicked(){action=Some(usize::MAX);}
             let count=items.len();
             for (index,(icon,label)) in items.iter().enumerate() {
                 let angle=-std::f32::consts::FRAC_PI_2
