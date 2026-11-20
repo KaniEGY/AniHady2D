@@ -1997,8 +1997,8 @@ impl StickApp {
             layer_effect_window: None,
             layer_clipboard: None,
             symmetry_mode: SymmetryMode::Off,
-            stabilizer_strength: 0.38,
-            vector_stabilizer_strength: 0.36,
+            stabilizer_strength: 0.18,
+            vector_stabilizer_strength: 0.20,
             stabilized_cursor: None,
             shape_drag_start: None,
             shape_drag_current: None,
@@ -4675,8 +4675,8 @@ impl StickApp {
                         egui::Align2::CENTER_CENTER,tr(lang,"Add brush","أضف فرشة"),
                         egui::FontId::proportional(8.5),egui::Color32::WHITE);
                     if add_resp.on_hover_text(tr(lang,
-                        "Import a brush from Krita, Clip Studio Paint, Blender or an image tip.",
-                        "استورد فرشة من كريتا أو كليب استديو أو بلندر أو صورة سن فرشة.")).clicked() {
+                        "Import one or many brushes from Krita, Clip Studio, Blender, GIMP, Procreate, Affinity-compatible packs or image tips.",
+                        "استورد فرشة أو مجموعة فرش من كريتا أو كليب استديو أو بلندر أو GIMP أو Procreate أو حزم Affinity القابلة للقراءة أو صور سنون الفرش.")).clicked() {
                         add_brush_requested=true;
                     }
                 });
@@ -4729,59 +4729,84 @@ impl StickApp {
                 }
 
                 if add_brush_requested {
-                    if let Some(path)=rfd::FileDialog::new()
+                    if let Some(paths)=rfd::FileDialog::new()
                         .add_filter("Brush files",custom_brush::accepted_extensions())
-                        .pick_file()
+                        .add_filter("All files",&["*"])
+                        .pick_files()
                     {
-                        match custom_brush::import_file(&path) {
-                            Ok(drafts) if !drafts.is_empty() => {
-                                self.pending_brush_imports=drafts;
-                                self.pending_brush_name=self.pending_brush_imports[0].suggested_name.clone();
-                                self.pending_brush_icon_path=None;
-                                self.brush_import_message=format!("{} {}",
-                                    tr(lang,"Imported brush candidates:","تم العثور على فرش:"),
-                                    self.pending_brush_imports.len());
+                        let mut imported=Vec::new();
+                        let mut failures=Vec::new();
+                        for path in &paths {
+                            match custom_brush::import_file(path) {
+                                Ok(mut drafts) if !drafts.is_empty()=>imported.append(&mut drafts),
+                                Ok(_)=>failures.push(format!(
+                                    "{}: {}",
+                                    path.file_name().and_then(|s|s.to_str()).unwrap_or("?"),
+                                    tr(lang,"no usable brushes found","ملقيناش فرش قابلة للاستخدام"))),
+                                Err(err)=>failures.push(format!(
+                                    "{}: {err}",
+                                    path.file_name().and_then(|s|s.to_str()).unwrap_or("?"))),
                             }
-                            Ok(_) => self.brush_import_message=tr(lang,
-                                "No usable brushes were found in that file.",
-                                "ملقيناش فرش قابلة للاستخدام جوه الملف.").to_owned(),
-                            Err(err) => {
-                                if let Some(required)=custom_brush::required_krita_resource(&path) {
-                                    let selected=rfd::FileDialog::new()
-                                        .set_title(tr(lang,
-                                            "Choose the required Krita brush tip",
-                                            "اختار ملف سن فرشة Krita المطلوب"))
-                                        .set_file_name(&required)
-                                        .add_filter("Krita brush tip",&["gih","gbr","png","jpg","jpeg","webp","bmp"])
-                                        .pick_file();
-                                    if let Some(resource)=selected {
-                                        match custom_brush::import_file_with_resource(&path,&resource) {
-                                            Ok(drafts) if !drafts.is_empty()=>{
-                                                self.pending_brush_imports=drafts;
-                                                self.pending_brush_name=self.pending_brush_imports[0].suggested_name.clone();
-                                                self.pending_brush_icon_path=None;
-                                                self.brush_import_message=format!("{} {}",
-                                                    tr(lang,"Loaded required resource:","تم تحميل ملف السن المطلوب:"),
-                                                    required);
-                                            }
-                                            Ok(_)=>self.brush_import_message=tr(lang,
-                                                "The selected resource did not create a usable brush.",
-                                                "ملف السن المحدد لم ينتج فرشة قابلة للاستخدام.").to_owned(),
-                                            Err(resource_err)=>self.brush_import_message=format!(
-                                                "{}: {resource_err}",
-                                                tr(lang,"Brush resource failed","فشل ملف سن الفرشة")),
+                        }
+
+                        if !imported.is_empty() {
+                            self.pending_brush_imports=imported;
+                            self.pending_brush_name=self.pending_brush_imports[0].suggested_name.clone();
+                            self.pending_brush_icon_path=None;
+                            self.brush_import_message=if failures.is_empty() {
+                                format!("{} {}",
+                                    tr(lang,"Imported brush candidates:","تم العثور على فرش:"),
+                                    self.pending_brush_imports.len())
+                            } else {
+                                format!("{} {} • {} {}",
+                                    tr(lang,"Imported brush candidates:","تم العثور على فرش:"),
+                                    self.pending_brush_imports.len(),
+                                    tr(lang,"Files skipped:","ملفات لم تُستورد:"),
+                                    failures.len())
+                            };
+                        } else if paths.len()==1 {
+                            let path=&paths[0];
+                            let err=failures.first().cloned().unwrap_or_else(||tr(lang,
+                                "Brush import failed","فشل استيراد الفرشة").to_owned());
+                            if let Some(required)=custom_brush::required_krita_resource(path) {
+                                let selected=rfd::FileDialog::new()
+                                    .set_title(tr(lang,
+                                        "Choose the required Krita brush tip",
+                                        "اختار ملف سن فرشة Krita المطلوب"))
+                                    .set_file_name(&required)
+                                    .add_filter("Krita brush tip",&["gih","gbr","png","jpg","jpeg","webp","bmp"])
+                                    .add_filter("All files",&["*"])
+                                    .pick_file();
+                                if let Some(resource)=selected {
+                                    match custom_brush::import_file_with_resource(path,&resource) {
+                                        Ok(drafts) if !drafts.is_empty()=>{
+                                            self.pending_brush_imports=drafts;
+                                            self.pending_brush_name=self.pending_brush_imports[0].suggested_name.clone();
+                                            self.pending_brush_icon_path=None;
+                                            self.brush_import_message=format!("{} {}",
+                                                tr(lang,"Loaded required resource:","تم تحميل ملف السن المطلوب:"),
+                                                required);
                                         }
-                                    } else {
-                                        self.brush_import_message=format!(
-                                            "{}: {err}\n{}: {required}",
-                                            tr(lang,"Brush import failed","فشل استيراد الفرشة"),
-                                            tr(lang,"Required file","الملف المطلوب"));
+                                        Ok(_)=>self.brush_import_message=tr(lang,
+                                            "The selected resource did not create a usable brush.",
+                                            "ملف السن المحدد لم ينتج فرشة قابلة للاستخدام.").to_owned(),
+                                        Err(resource_err)=>self.brush_import_message=format!(
+                                            "{}: {resource_err}",
+                                            tr(lang,"Brush resource failed","فشل ملف سن الفرشة")),
                                     }
                                 } else {
-                                    self.brush_import_message=format!("{}: {err}",
-                                        tr(lang,"Brush import failed","فشل استيراد الفرشة"));
+                                    self.brush_import_message=format!(
+                                        "{err}\n{}: {required}",
+                                        tr(lang,"Required file","الملف المطلوب"));
                                 }
-                            },
+                            } else {
+                                self.brush_import_message=err;
+                            }
+                        } else {
+                            self.brush_import_message=format!(
+                                "{}\n{}",
+                                tr(lang,"No selected brush files could be imported.","تعذر استيراد ملفات الفرش المحددة."),
+                                failures.join("\n"));
                         }
                     }
                 }
@@ -8777,7 +8802,13 @@ impl eframe::App for StickApp {
                 && self.active_tool_ui != ActiveToolUI::HandCanvas;
             let tool_cursor = if !is_inside_workspace || any_modal_open {
                 egui::CursorIcon::Default
-            } else if show_dot || show_tool_icon {
+            } else if show_dot {
+                // Drawing tools keep a native OS crosshair visible. The
+                // painted brush-radius ring remains as extra feedback, but
+                // never replaces the hardware cursor, eliminating the
+                // one-frame "heavy mouse" feeling.
+                egui::CursorIcon::Crosshair
+            } else if show_tool_icon {
                 egui::CursorIcon::None
             } else if space_down || self.active_tool_ui == ActiveToolUI::HandCanvas {
                 if pointer_down || ctx.input(|i| i.pointer.secondary_down()) {
@@ -9349,7 +9380,14 @@ impl eframe::App for StickApp {
                             }
                         }
                         ActiveToolUI::VectorPen if pointer_down => {
-                            let stab = self.vector_stabilizer_strength.clamp(0.0, 0.70);
+                            // Mouse input has no pressure jitter to smooth and
+                            // should track the hand almost immediately. Keep
+                            // the full user stabilizer for pressure-capable pens.
+                            let stab = (if pressure_available {
+                                self.vector_stabilizer_strength
+                            } else {
+                                self.vector_stabilizer_strength * 0.45
+                            }).clamp(0.0, 0.70);
                             let mut raw_previous=self.last_pointer_pos.map(|p|to_stage(p));
                             for sample_screen in pointer_samples.iter().copied()
                                 .filter(|sample|canvas_rect.contains(*sample)) {
@@ -9386,7 +9424,11 @@ impl eframe::App for StickApp {
                             }
                         }
                         ActiveToolUI::Brush if pointer_down => {
-                            let stab=self.stabilizer_strength.clamp(0.0,0.75);
+                            let stab=(if pressure_available {
+                                self.stabilizer_strength
+                            } else {
+                                self.stabilizer_strength * 0.45
+                            }).clamp(0.0,0.75);
                             let mut raw_previous=self.last_pointer_pos.map(|p|to_stage(p));
                             // Zero pressure after a real pressure-capable sample
                             // means lift-off. Do not turn it into a full-width dab.
