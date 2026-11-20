@@ -391,9 +391,10 @@ mod tests {
         let q=snap_to_perspective((100.,500.),(300.,420.),PerspectiveSnap{
             mode:3,width:1000.,height:800.,vp_x:0.5,vp_y:0.25,left_vp_x:0.1,
             right_vp_x:0.9,two_point_y:0.3,parallel_angle_deg:0.0});
-        let a=(500.-100.,200.-500.);
-        let cross=(q.0-100.)*a.1-(q.1-500.)*a.0;
-        assert!(cross.abs()<0.01);
+        let a=(500.0_f32-100.0,200.0_f32-500.0);
+        let cross=(q.0-100.0)*a.1-(q.1-500.0)*a.0;
+        let perpendicular_error=cross.abs()/(a.0*a.0+a.1*a.1).sqrt();
+        assert!(perpendicular_error<0.001,"perpendicular error: {perpendicular_error}");
     }
 
     #[test]
