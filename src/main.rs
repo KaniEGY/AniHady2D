@@ -1782,6 +1782,7 @@ struct StickApp {
     shape_opacity: f32,
     text_opacity: f32,
     selected_shape_kind: GeometricShapeKind,
+    shape_vector_outline: bool,
     shape_fill_enabled: bool,
     pending_delete_layer: Option<usize>,
     advanced_selected_cels: Vec<advanced_timeline::CelAddress>,
@@ -1986,6 +1987,7 @@ impl StickApp {
             shape_opacity: 1.0,
             text_opacity: 1.0,
             selected_shape_kind: GeometricShapeKind::StraightLine,
+            shape_vector_outline: true,
             shape_fill_enabled: false,
             pending_delete_layer: None,
             advanced_selected_cels: Vec::new(),
@@ -8848,7 +8850,8 @@ impl eframe::App for StickApp {
                 };
                 if let Some(action)=canvas_quick_menu::show(
                     ctx,menu,&["／","○","□","▭","△","⬠"],&colors,
-                    selected_shape,self.brush_color,&tr(lang,"CUSTOM","مخصص")
+                    selected_shape,self.shape_vector_outline,self.brush_color,
+                    &tr(lang,"CUSTOM","مخصص")
                 ) {
                     match action {
                         canvas_quick_menu::QuickMenuAction::Shape(index)=>{
@@ -8862,6 +8865,10 @@ impl eframe::App for StickApp {
                             };
                             self.play_sfx(SfxType::UiClick);
                             self.canvas_quick_menu=None;
+                        }
+                        canvas_quick_menu::QuickMenuAction::ToggleShapeVector=>{
+                            self.shape_vector_outline=!self.shape_vector_outline;
+                            self.play_sfx(SfxType::UiClick);
                         }
                         canvas_quick_menu::QuickMenuAction::Color(color)=>{
                             self.brush_color=color;
@@ -8900,8 +8907,10 @@ impl eframe::App for StickApp {
                         let label=if self.active_tool_ui==ActiveToolUI::Sculpt {
                             tr(lang,"Radius","نطاق")
                         } else {tr(lang,"Thickness","السُمك")};
+                        let overlay=ctx.layer_painter(egui::LayerId::new(
+                            egui::Order::Foreground,egui::Id::new("canvas_size_feedback")));
                         canvas_quick_menu::draw_size_feedback(
-                            &painter,pos,radius,
+                            &overlay,pos,radius,
                             egui::Color32::from_rgb(
                                 self.brush_color[0],self.brush_color[1],self.brush_color[2]),
                             value,percent,&label
@@ -8924,8 +8933,10 @@ impl eframe::App for StickApp {
                     }
                 }
                 if let (Some(pos),Some(opacity))=(pointer_pos,self.active_tool_opacity()) {
+                    let overlay=ctx.layer_painter(egui::LayerId::new(
+                        egui::Order::Foreground,egui::Id::new("canvas_opacity_feedback")));
                     canvas_quick_menu::draw_opacity_feedback(
-                        &painter,pos,self.brush_color,opacity);
+                        &overlay,pos,self.brush_color,opacity);
                 }
                 ctx.set_cursor_icon(egui::CursorIcon::None);
                 ctx.request_repaint();
@@ -9366,7 +9377,7 @@ impl eframe::App for StickApp {
                                         points:vec![StrokePoint{x:smooth.x,y:smooth.y,pressure:1.0}],
                                         color:self.brush_color,fill_color:None,
                                         base_width:self.vector_pen_size,is_vector:true,
-                                        brush_preset:KritaBrushPreset::GPenInk,
+                                        brush_preset:KritaBrushPreset::SmoothInk,
                                         opacity:self.vector_pen_opacity,brush_texture_id:None,
                                         tip_shape:self.vector_pen_cap
                                     });
@@ -9730,6 +9741,7 @@ impl eframe::App for StickApp {
                         self.save_undo_state();
                         let mut shape = build_geometric_stroke(self.selected_shape_kind, p0, p1, self.brush_color, self.shape_outline_size);
                         shape.opacity = self.shape_opacity;
+                        shape.is_vector = self.shape_vector_outline;
                         if self.shape_fill_enabled && self.selected_shape_kind != GeometricShapeKind::StraightLine {
                             shape.fill_color = Some(self.brush_color);
                         }
