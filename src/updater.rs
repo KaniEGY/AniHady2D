@@ -9,6 +9,7 @@ use std::time::Duration;
 
 const MAX_EXE_SIZE: u64 = 350 * 1024 * 1024;
 const RELEASE_EXE_NAME: &str = "Stick.exe";
+const RELEASE_ZIP_NAME: &str = "Stick-update.zip";
 const RELEASE_URL_PREFIX: &str = "https://github.com/KaniEGY/Stick/releases/download/";
 
 /** The version compiled INTO Stick.exe (not a potentially stale sidecar file).
@@ -55,13 +56,19 @@ pub fn parse_latest_release(json: &Value, current: &str) -> Result<Option<Releas
     if !is_newer(version, current)? {
         return Ok(None);
     }
-    let asset = json.get("assets").and_then(Value::as_array)
-        .and_then(|v| v.iter().find(|a| a.get("name").and_then(Value::as_str) == Some(RELEASE_EXE_NAME)))
-        .ok_or("The newer release has no Stick.exe download.")?;
+    let assets = json.get("assets").and_then(Value::as_array)
+        .ok_or("The newer release has no downloadable assets.")?;
+    let asset = assets.iter()
+        .find(|a| a.get("name").and_then(Value::as_str) == Some(RELEASE_ZIP_NAME))
+        .or_else(|| assets.iter()
+            .find(|a| a.get("name").and_then(Value::as_str) == Some(RELEASE_EXE_NAME)))
+        .ok_or("The newer release has no Stick update package.")?;
     let url = asset.get("browser_download_url").and_then(Value::as_str)
         .ok_or("The release download URL is missing.")?;
-    if !url.starts_with(RELEASE_URL_PREFIX) || !url.ends_with("/Stick.exe") {
-        return Err("The release download is not the official Stick GitHub asset.".into());
+    let is_official_package = url.starts_with(RELEASE_URL_PREFIX)
+        && (url.ends_with("/Stick-update.zip") || url.ends_with("/Stick.exe"));
+    if !is_official_package {
+        return Err("The release download is not an official Stick GitHub asset.".into());
     }
     let digest = asset.get("digest").and_then(Value::as_str)
         .and_then(|v| v.strip_prefix("sha256:"))
@@ -142,7 +149,9 @@ pub fn download_verified_with_progress<F: FnMut(u64, u64)>(
 ) -> Result<PathBuf, String> {
     use std::io::Write;
 
-    if !info.url.starts_with(RELEASE_URL_PREFIX) || !info.url.ends_with("/Stick.exe") {
+    let official = info.url.starts_with(RELEASE_URL_PREFIX)
+        && (info.url.ends_with("/Stick-update.zip") || info.url.ends_with("/Stick.exe"));
+    if !official {
         return Err("Only official Stick GitHub release downloads are allowed.".into());
     }
     if !(1024..=MAX_EXE_SIZE).contains(&info.size) {
@@ -151,26 +160,27 @@ pub fn download_verified_with_progress<F: FnMut(u64, u64)>(
 
     let parent = current_exe.parent().ok_or("Couldn't locate the program folder.")?;
     let staged = parent.join("Stick_new.exe");
-    let tmp = parent.join("Stick_new.download");
-    let _ = std::fs::remove_file(&tmp);
+    let package_tmp = parent.join("Stick_update.download");
+    let extracted_tmp = parent.join("Stick_new.download");
+    let _ = std::fs::remove_file(&package_tmp);
+    let _ = std::fs::remove_file(&extracted_tmp);
 
-    // Stream to disk in 64 KiB chunks, keeping RAM low on older PCs.
-    // Never replace the running Stick.exe until all checks have passed.
+    // Download the published package exactly as GitHub hashed it. New releases
+    // use a compressed ZIP; older releases keep working through the legacy EXE.
     on_progress(0, info.size);
-    let result = (|| -> Result<(), String> {
+    let download_result = (|| -> Result<(), String> {
         let response = ureq::AgentBuilder::new()
             .timeout_connect(Duration::from_secs(25))
             .timeout_read(Duration::from_secs(90))
             .build()
             .get(&info.url)
-            .set("User-Agent", "Stick-Studio-Updater")
+            .set("User-Agent", "Stick-Updater")
             .call().map_err(|e| format!("Couldn't download the update: {e}"))?;
 
         let mut reader = response.into_reader();
-        let mut file = std::fs::File::create(&tmp)
+        let mut file = std::fs::File::create(&package_tmp)
             .map_err(|e| format!("Can't write to the Stick install folder: {e}"))?;
         let mut hasher = Sha256::new();
-        let mut first_bytes = Vec::with_capacity(4096);
         let mut total = 0u64;
         let mut chunk = [0u8; 64 * 1024];
 
@@ -180,11 +190,7 @@ pub fn download_verified_with_progress<F: FnMut(u64, u64)>(
             if n == 0 { break; }
             total += n as u64;
             if total > info.size || total > MAX_EXE_SIZE {
-                return Err("Update file is larger than the published release.".into());
-            }
-            if first_bytes.len() < 4096 {
-                let count = (4096 - first_bytes.len()).min(n);
-                first_bytes.extend_from_slice(&chunk[..count]);
+                return Err("Update package is larger than the published release.".into());
             }
             hasher.update(&chunk[..n]);
             file.write_all(&chunk[..n])
@@ -192,8 +198,8 @@ pub fn download_verified_with_progress<F: FnMut(u64, u64)>(
             on_progress(total, info.size);
         }
         file.sync_all().map_err(|e| format!("Couldn't finish writing the update: {e}"))?;
-        if total != info.size || !verify_pe_file(&first_bytes) {
-            return Err("The downloaded Windows executable is incomplete or invalid.".into());
+        if total != info.size {
+            return Err("The downloaded update package is incomplete.".into());
         }
         let digest = format!("{:x}", hasher.finalize());
         if digest != info.sha256 {
@@ -202,17 +208,67 @@ pub fn download_verified_with_progress<F: FnMut(u64, u64)>(
         Ok(())
     })();
 
-    if let Err(error) = result {
-        let _ = std::fs::remove_file(&tmp);
+    if let Err(error) = download_result {
+        let _ = std::fs::remove_file(&package_tmp);
         return Err(error);
     }
 
-    // Remove an older staged download only after the new one passes verification.
+    let prepare_result = if info.url.ends_with("/Stick-update.zip") {
+        (|| -> Result<(), String> {
+            let package = std::fs::File::open(&package_tmp)
+                .map_err(|e| format!("Couldn't open the downloaded update package: {e}"))?;
+            let mut archive = zip::ZipArchive::new(package)
+                .map_err(|e| format!("The update ZIP is invalid: {e}"))?;
+            let mut entry = archive.by_name(RELEASE_EXE_NAME)
+                .map_err(|_| "The update ZIP does not contain Stick.exe.".to_string())?;
+            if entry.is_dir() || !(1024..=MAX_EXE_SIZE).contains(&entry.size()) {
+                return Err("The Stick.exe inside the update ZIP has an invalid size.".into());
+            }
+            let mut output = std::fs::File::create(&extracted_tmp)
+                .map_err(|e| format!("Couldn't prepare the updated executable: {e}"))?;
+            std::io::copy(&mut entry, &mut output)
+                .map_err(|e| format!("Couldn't extract Stick.exe: {e}"))?;
+            output.sync_all().map_err(|e| format!("Couldn't finish extracting Stick.exe: {e}"))?;
+
+            let mut exe = std::fs::File::open(&extracted_tmp)
+                .map_err(|e| format!("Couldn't verify extracted Stick.exe: {e}"))?;
+            let mut first_bytes = vec![0u8; 4096];
+            let n = exe.read(&mut first_bytes).map_err(|e| format!("Couldn't verify Stick.exe: {e}"))?;
+            first_bytes.truncate(n);
+            if !verify_pe_file(&first_bytes) {
+                return Err("The extracted update is not a valid Windows executable.".into());
+            }
+            Ok(())
+        })()
+    } else {
+        (|| -> Result<(), String> {
+            let mut exe = std::fs::File::open(&package_tmp)
+                .map_err(|e| format!("Couldn't verify the downloaded executable: {e}"))?;
+            let mut first_bytes = vec![0u8; 4096];
+            let n = exe.read(&mut first_bytes).map_err(|e| format!("Couldn't verify Stick.exe: {e}"))?;
+            first_bytes.truncate(n);
+            if !verify_pe_file(&first_bytes) {
+                return Err("The downloaded update is not a valid Windows executable.".into());
+            }
+            std::fs::rename(&package_tmp, &extracted_tmp)
+                .map_err(|e| format!("Couldn't stage the downloaded update: {e}"))?;
+            Ok(())
+        })()
+    };
+
+    if let Err(error) = prepare_result {
+        let _ = std::fs::remove_file(&package_tmp);
+        let _ = std::fs::remove_file(&extracted_tmp);
+        return Err(error);
+    }
+    let _ = std::fs::remove_file(&package_tmp);
+
+    // Remove an older staged update only after the new executable passes all checks.
     if staged.exists() {
         std::fs::remove_file(&staged)
             .map_err(|e| format!("Can't remove a previous update package: {e}"))?;
     }
-    std::fs::rename(&tmp, &staged)
+    std::fs::rename(&extracted_tmp, &staged)
         .map_err(|e| format!("Couldn't prepare the update for restart: {e}"))?;
     Ok(staged)
 }
@@ -281,16 +337,19 @@ try {
 #[cfg(test)]
 mod tests {
     use super::*;
-    fn fixture(tag: &str, digest: &str) -> Value {
+    fn fixture_with_asset(tag: &str, digest: &str, name: &str, size: u64) -> Value {
         serde_json::json!({
             "tag_name":tag,
             "assets":[{
-                "name":"Stick.exe",
-                "browser_download_url":format!("https://github.com/KaniEGY/Stick/releases/download/{tag}/Stick.exe"),
-                "size":25000000,
+                "name":name,
+                "browser_download_url":format!("https://github.com/KaniEGY/Stick/releases/download/{tag}/{name}"),
+                "size":size,
                 "digest":format!("sha256:{digest}")
             }]
         })
+    }
+    fn fixture(tag: &str, digest: &str) -> Value {
+        fixture_with_asset(tag,digest,RELEASE_EXE_NAME,25_000_000)
     }
     #[test] fn bundled_build_version_is_always_comparable() {
         let compiled = embedded_build_version();
@@ -305,6 +364,26 @@ mod tests {
         assert!(!is_newer("4.1.0.72","4.1.0.72").unwrap());
         assert!(!is_newer("2.2.71","4.1.0").unwrap());
     }
+    #[test] fn compressed_update_is_preferred_over_raw_exe() {
+        let digest = "d".repeat(64);
+        let mut r = fixture_with_asset("v4.1.0.73",&digest,RELEASE_EXE_NAME,31_000_000);
+        r["assets"].as_array_mut().unwrap().push(serde_json::json!({
+            "name":RELEASE_ZIP_NAME,
+            "browser_download_url":"https://github.com/KaniEGY/Stick/releases/download/v4.1.0.73/Stick-update.zip",
+            "size":12_000_000u64,
+            "digest":format!("sha256:{}", "e".repeat(64))
+        }));
+        let parsed=parse_latest_release(&r,"4.1.0.72").unwrap().unwrap();
+        assert!(parsed.url.ends_with("/Stick-update.zip"));
+        assert_eq!(parsed.size,12_000_000);
+    }
+
+    #[test] fn legacy_raw_exe_release_still_updates() {
+        let r=fixture("v4.1.0.73",&"a".repeat(64));
+        let parsed=parse_latest_release(&r,"4.1.0.72").unwrap().unwrap();
+        assert!(parsed.url.ends_with("/Stick.exe"));
+    }
+
     #[test] fn matching_release_is_not_downloaded_again() {
         let r=fixture("v4.1.0.72", &"a".repeat(64));
         assert!(parse_latest_release(&r,"4.1.0.72").unwrap().is_none());
