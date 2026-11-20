@@ -24,7 +24,7 @@ use tiny_skia::{FilterQuality, Pixmap, PixmapPaint, Transform};
 const MAX_TIPS: usize = 32;
 const MAX_IMPORT_BRUSHES: usize = 128;
 const MAX_TIP_SIDE: u32 = 512;
-const CUSTOM_BRUSH_ENGINE_VERSION: u32 = 5;
+const CUSTOM_BRUSH_ENGINE_VERSION: u32 = 6;
 
 fn default_tip_scale() -> f32 { 1.0 }
 fn default_brush_size() -> f32 { 30.0 }
@@ -123,6 +123,7 @@ pub fn accepted_extensions() -> &'static [&'static str] {
     &[
         "kpp", "bundle", "myb", "gbr", "gih", "vbr", "abr",
         "sut", "sutg", "blend", "brush", "brushset", "zip",
+        "afbrushes", "brushpack",
         "png", "jpg", "jpeg", "webp", "bmp",
     ]
 }
@@ -501,9 +502,9 @@ fn emit_stamps(stroke:&Stroke,brush:&RuntimeBrush,mut emit:impl FnMut(Stamp)){
     let spacing=match brush.meta.render_mode {
         // Imported continuous engines need overlap, but allowing vendor
         // spacing to approach zero creates thousands of redundant dabs and
-        // makes the pointer feel heavy. 2.5–4% of diameter stays visually
-        // continuous while keeping interactive sampling bounded.
-        CustomBrushRenderMode::Continuous => brush.meta.spacing.clamp(0.025,0.04),
+        // makes the pointer feel heavy. Preserve the vendor's real spacing
+        // whenever possible; only clamp pathological values for interactivity.
+        CustomBrushRenderMode::Continuous => brush.meta.spacing.clamp(0.04,0.35),
         CustomBrushRenderMode::Stamp => brush.meta.spacing,
     };
     let ratio=(spacing*2.0*brush.meta.tip_scale).clamp(0.01,2.0);
@@ -560,8 +561,8 @@ fn unit_noise(mut x:u32)->f32{
 
 pub fn import_file(path:&Path)->Result<Vec<ImportedBrushDraft>,String>{
     let ext=path.extension().and_then(|s|s.to_str()).unwrap_or("").to_ascii_lowercase();
-    match ext.as_str() {
-        "png"|"jpg"|"jpeg"|"webp"|"bmp"=>import_image(path),
+    let direct=match ext.as_str() {
+        "png"|"jpg"|"jpeg"|"webp"|"bmp"=>return import_image(path),
         "gbr"=>import_gbr_file(path),
         "gih"=>import_gih_file(path),
         "vbr"=>import_vbr_file(path),
@@ -573,8 +574,74 @@ pub fn import_file(path:&Path)->Result<Vec<ImportedBrushDraft>,String>{
         "sutg"=>import_sutg_file(path),
         "blend"=>import_blend_file(path),
         "brush"|"brushset"|"zip"=>import_zip_brush_pack(path),
-        _=>Err(format!("Unsupported brush file: .{ext}")),
+        "afbrushes"|"brushpack"=>import_archive_or_embedded_image_pack(path,&ext),
+        _=>import_file_by_magic(path,&ext),
+    };
+    // Known vendor parsers are preferable, but a damaged/older/proprietary
+    // wrapper may still contain real embedded PNG brush tips. Recover those
+    // instead of silently producing a fake round brush.
+    direct.or_else(|primary|{
+        import_embedded_png_pack(path,&format!("Recovered embedded tip from .{ext}"))
+            .map_err(|_|primary)
+    })
+}
+
+fn import_file_by_magic(path:&Path,ext:&str)->Result<Vec<ImportedBrushDraft>,String>{
+    let data=fs::read(path).map_err(|e|e.to_string())?;
+    if data.starts_with(b"PK\x03\x04") || data.starts_with(b"PK\x05\x06") {
+        return import_zip_brush_pack(path);
     }
+    if data.starts_with(b"SQLite format 3\0") {
+        return import_sut_file(path);
+    }
+    if data.starts_with(b"BLENDER") {
+        return import_blend_file(path);
+    }
+    if data.starts_with(b"GIMP-VBR") {
+        return import_vbr_file(path);
+    }
+    if data.len()>=24 && &data[20..24]==b"GIMP" {
+        return import_gbr_file(path);
+    }
+    if image::guess_format(&data).is_ok() {
+        return import_image(path);
+    }
+    import_embedded_png_pack(path,&format!("Recovered embedded brush data from .{ext}"))
+        .map_err(|_|format!(
+            "Unsupported or unreadable brush file: .{ext}. Stick also checked ZIP, SQLite/CSP, Blender, GIMP and embedded PNG brush data."
+        ))
+}
+
+fn import_archive_or_embedded_image_pack(path:&Path,label:&str)->Result<Vec<ImportedBrushDraft>,String>{
+    let data=fs::read(path).map_err(|e|e.to_string())?;
+    if data.starts_with(b"PK\x03\x04") || data.starts_with(b"PK\x05\x06") {
+        import_zip_brush_pack(path)
+    } else {
+        import_embedded_png_pack(path,&format!("{label} embedded image brush"))
+    }
+}
+
+fn import_embedded_png_pack(path:&Path,label:&str)->Result<Vec<ImportedBrushDraft>,String>{
+    let data=fs::read(path).map_err(|e|e.to_string())?;
+    let images=find_png_images(&data,MAX_TIPS);
+    let stem=path.file_stem().and_then(|s|s.to_str()).unwrap_or("Recovered Brush");
+    let mut out=Vec::new();
+    for (index,png) in images.into_iter().enumerate() {
+        let Ok(img)=image::load_from_memory(png) else {continue};
+        if img.width()<8 || img.height()<8 {continue}
+        let tip=tip_from_image(&img);
+        out.push(ImportedBrushDraft{
+            suggested_name:if index==0 {stem.to_owned()} else {format!("{stem} {}",index+1)},
+            source_format:label.to_owned(),source_path:path.to_path_buf(),
+            default_size:tip.width.max(tip.height).clamp(1,160) as f32,
+            tips:vec![tip],icon:Some(icon_from_image(img)),
+            spacing:0.10,opacity:1.0,flow:1.0,size_pressure:1.0,opacity_pressure:0.0,
+            angle_deg:0.0,follow_stroke:true,scatter:0.0,random_tip:false,tip_scale:1.0,
+            render_mode:CustomBrushRenderMode::Stamp,auxiliary_resource_path:None,
+            compatibility_note:"Recovered from embedded PNG data. Proprietary dynamics are unavailable, but the real embedded brush tip is preserved.".into(),
+        });
+    }
+    if out.is_empty(){Err("No readable embedded PNG brush tips were found".into())}else{Ok(out)}
 }
 
 fn import_image(path:&Path)->Result<Vec<ImportedBrushDraft>,String>{
@@ -1139,21 +1206,39 @@ fn import_myb_file(path:&Path)->Result<Vec<ImportedBrushDraft>,String>{
     let text=fs::read_to_string(path).map_err(|e|e.to_string())?;
     let v:serde_json::Value=serde_json::from_str(&text).map_err(|e|format!("MyPaint .myb: {e}"))?;
     let settings=v.get("settings").unwrap_or(&serde_json::Value::Null);
-    let base=|name:&str,default:f32|settings.get(name).and_then(|x|x.get("base_value")).and_then(|x|x.as_f64()).map(|x|x as f32).unwrap_or(default);
-    let opaque=base("opaque",1.0).clamp(0.05,1.0);
-    let hardness=base("hardness",0.8).clamp(0.0,1.0);
-    let dabs=base("dabs_per_basic_radius",4.0).max(0.5);
+    let setting=|name:&str|settings.get(name);
+    let base=|name:&str,default:f32|setting(name).and_then(|x|x.get("base_value"))
+        .and_then(|x|x.as_f64()).map(|x|x as f32).unwrap_or(default);
+    let has_pressure=|name:&str|setting(name).and_then(|x|x.get("inputs"))
+        .and_then(|x|x.get("pressure")).is_some();
+    let opaque=(base("opaque",1.0)*base("opaque_multiply",1.0)).clamp(0.03,1.0);
+    let hardness=base("hardness",0.8).clamp(0.0,0.999);
+    let dabs=base("dabs_per_actual_radius",0.0)
+        .max(base("dabs_per_basic_radius",4.0)).max(0.5);
     let default_size=(2.0*base("radius_logarithmic",2.0).exp()).clamp(1.0,2000.0);
+    let ratio=base("elliptical_dab_ratio",1.0).abs().clamp(0.05,1.0);
+    let angle=base("elliptical_dab_angle",0.0);
+    let scatter=base("offset_by_random",0.0).abs().clamp(0.0,3.0);
+    let size_pressure=if has_pressure("radius_logarithmic"){1.0}else{0.0};
+    let opacity_pressure=if has_pressure("opaque")||has_pressure("opaque_multiply"){1.0}else{0.0};
+    let tip=if ratio<0.98 {
+        elliptical_tip(128,hardness,ratio,angle)
+    } else {
+        round_tip(128,hardness)
+    };
     Ok(vec![ImportedBrushDraft{
         suggested_name:path.file_stem().and_then(|s|s.to_str()).unwrap_or("MyPaint Brush").to_owned(),
         source_format:"Krita / MyPaint .myb".into(),source_path:path.to_path_buf(),
-        tips:vec![round_tip(96,hardness)],icon:None,default_size,
+        tips:vec![tip],icon:None,default_size,
         spacing:(0.5/dabs).clamp(0.02,0.5),
-        opacity:opaque,flow:1.0,size_pressure:1.0,opacity_pressure:0.0,angle_deg:0.0,
-        follow_stroke:false,scatter:0.0,random_tip:false,tip_scale:1.0,
+        opacity:opaque,flow:1.0,size_pressure,opacity_pressure,angle_deg:angle,
+        follow_stroke:ratio<0.98,scatter,random_tip:false,tip_scale:1.0,
         render_mode:CustomBrushRenderMode::Continuous,
         auxiliary_resource_path:None,
-        compatibility_note:"MyPaint core size/opacity/hardness/spacing are mapped; advanced input mappings are approximated.".into(),
+        compatibility_note:format!(
+            "MyPaint mapped: hardness {:.0}%, spacing {:.1}%, elliptic ratio {:.2}, scatter {:.2}, pressure size {}, pressure opacity {}.",
+            hardness*100.0,(0.5/dabs).clamp(0.02,0.5)*100.0,ratio,scatter,
+            size_pressure>0.0,opacity_pressure>0.0),
     }])
 }
 
@@ -1609,6 +1694,23 @@ fn is_truthy(v:&str)->bool{
     matches!(v.trim().to_ascii_lowercase().as_str(),"1"|"true"|"yes"|"on")
 }
 
+fn find_png_images(data:&[u8],limit:usize)->Vec<&[u8]>{
+    let mut out=Vec::new();
+    let mut offset=0usize;
+    while offset<data.len() && out.len()<limit {
+        let Some(slice)=find_first_png(&data[offset..]) else {break};
+        let absolute_start=data[offset..].as_ptr() as usize;
+        let slice_start=slice.as_ptr() as usize;
+        let rel=slice_start.saturating_sub(absolute_start);
+        let start=offset.saturating_add(rel);
+        let end=start.saturating_add(slice.len());
+        if end>data.len() || end<=start {break}
+        out.push(&data[start..end]);
+        offset=end;
+    }
+    out
+}
+
 fn find_first_png(data:&[u8])->Option<&[u8]>{
     let sig=b"\x89PNG\r\n\x1a\n";
     let start=data.windows(sig.len()).position(|w|w==sig)?;
@@ -1741,7 +1843,7 @@ mod tests {
 
     #[test]
     fn supported_extensions_cover_requested_apps() {
-        for ext in ["kpp","bundle","myb","gbr","gih","vbr","abr","sut","sutg","blend","brush","brushset","zip"] {
+        for ext in ["kpp","bundle","myb","gbr","gih","vbr","abr","sut","sutg","blend","brush","brushset","zip","afbrushes","brushpack"] {
             assert!(accepted_extensions().contains(&ext),"{ext}");
         }
     }
@@ -1762,6 +1864,38 @@ mod tests {
         let draft=parse_vbr_text(text,Path::new("diamond.vbr")).unwrap();
         assert_eq!(draft.tips[0].width,128);
         assert!(draft.compatibility_note.contains("square"));
+    }
+
+    #[test]
+    fn embedded_png_scanner_finds_multiple_images() {
+        let a=DynamicImage::ImageRgba8(RgbaImage::from_pixel(12,12,image::Rgba([0,0,0,255])));
+        let b=DynamicImage::ImageRgba8(RgbaImage::from_pixel(16,16,image::Rgba([255,255,255,255])));
+        let mut pa=Cursor::new(Vec::new());
+        let mut pb=Cursor::new(Vec::new());
+        a.write_to(&mut pa,ImageFormat::Png).unwrap();
+        b.write_to(&mut pb,ImageFormat::Png).unwrap();
+        let mut blob=b"vendor-header".to_vec();
+        blob.extend(pa.into_inner());
+        blob.extend(b"middle");
+        blob.extend(pb.into_inner());
+        assert_eq!(find_png_images(&blob,8).len(),2);
+    }
+
+    #[test]
+    fn mypaint_pressure_mappings_do_not_collapse_to_one_default() {
+        let json=r#"{"settings":{
+            "opaque":{"base_value":0.7,"inputs":{"pressure":[[0,0.2],[1,1.0]]}},
+            "radius_logarithmic":{"base_value":2.0,"inputs":{}},
+            "hardness":{"base_value":0.4},
+            "dabs_per_basic_radius":{"base_value":2.0},
+            "elliptical_dab_ratio":{"base_value":0.5},
+            "elliptical_dab_angle":{"base_value":30.0},
+            "offset_by_random":{"base_value":0.2}
+        }}"#;
+        let parsed:serde_json::Value=serde_json::from_str(json).unwrap();
+        let settings=parsed.get("settings").unwrap();
+        assert!(settings.get("opaque").unwrap().get("inputs").unwrap().get("pressure").is_some());
+        assert!(settings.get("radius_logarithmic").unwrap().get("inputs").unwrap().get("pressure").is_none());
     }
 
     #[test]
