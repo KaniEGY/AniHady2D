@@ -5828,6 +5828,8 @@ impl eframe::App for StickApp {
             self.show_quick_custom_color=open && !done;
         }
 
+        self.render_drawing_power_windows(ctx,lang);
+
         let transient_system_overlay = artist_intro_visible || now_time < self.level_up_banner_timer;
         let any_modal_open = self.show_symbol_dialog || self.show_text_dialog || self.show_export_studio
             || self.show_command_palette || self.show_exit_dialog || self.show_update_dialog
@@ -5837,6 +5839,7 @@ impl eframe::App for StickApp {
             || self.show_timeline_settings || self.show_project_notice
             || self.show_recovery_dialog || self.show_project_details
             || self.show_feedback_dialog || self.show_quick_custom_color
+            || self.show_assets_library
             || transient_system_overlay;
         if any_modal_open { typing_in_textbox = true; }
 
@@ -7388,6 +7391,26 @@ impl eframe::App for StickApp {
                     ui.strong(tr(lang, "Drawing Tools", "أدوات الرسم"));
                 });
                 ui.add_space(4.0);
+                ui.horizontal_wrapped(|ui|{
+                    if ui.small_button("⚡")
+                        .on_hover_text(tr(lang,"Quick Access / Commands","الوصول السريع / الأوامر"))
+                        .clicked(){self.show_command_palette=true;}
+                    if ui.small_button(tr(lang,"Assets","المكتبة"))
+                        .clicked(){self.show_assets_library=true;}
+                    if ui.small_button(tr(lang,"Pose","وضعية"))
+                        .clicked(){self.show_pose_guide=true;self.pose_guide.visible=true;}
+                });
+                let quick_ids=self.drawing_assets.quick_access.clone();
+                let mut quick_command:Option<String>=None;
+                ui.horizontal_wrapped(|ui|{
+                    for id in quick_ids {
+                        let (en,ar)=drawing_assets::command_label(&id);
+                        let label=tr(lang,en,ar);
+                        if ui.small_button(label).clicked(){quick_command=Some(id);}
+                    }
+                });
+                if let Some(id)=quick_command {self.execute_drawing_command(&id);}
+                ui.separator();
                 egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
                     for tool in TOOLBAR_ITEMS {
                         let selected = self.active_tool_ui == tool;
