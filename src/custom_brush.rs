@@ -1177,6 +1177,110 @@ mod tests {
     }
 
     #[test]
+    fn krita_kpp_uses_brush_definition_spacing_not_spacingvalue_multiplier() {
+        let xml=r#"<Preset paintopid="paintbrush" name="GDquest_Ink_Sketch">
+            <param name="PressureSize" type="internal">true</param>
+            <param name="SizeSensor" type="string"><![CDATA[<!DOCTYPE params><params id="pressure"/>]]></param>
+            <param name="PressureOpacity" type="internal">true</param>
+            <param name="OpacitySensor" type="string"><![CDATA[<!DOCTYPE params><params id="pressure"/>]]></param>
+            <param name="PressureScatter" type="internal">false</param>
+            <param name="ScatterValue" type="internal">1</param>
+            <param name="Scattering/Amount" type="internal">1</param>
+            <param name="SpacingValue" type="internal">1</param>
+            <param name="brush_definition" type="string"><![CDATA[
+                <Brush type="auto_brush" spacing="0.1" angle="0" scale="1">
+                    <MaskGenerator ratio="1" hfade="0.9" vfade="0.9" type="circle" diameter="11"/>
+                </Brush>
+            ]]></param>
+        </Preset>"#;
+        let draft=parse_krita_preset_xml(xml,None,Path::new("GDquest_Ink_Sketch.kpp"),|_|None).unwrap();
+        assert!((draft.spacing-0.1).abs()<0.0001,"spacing={}",draft.spacing);
+        assert_eq!(draft.scatter,0.0,"disabled Krita scatter must stay disabled");
+        assert_eq!(draft.size_pressure,1.0);
+        assert_eq!(draft.opacity_pressure,1.0);
+        assert_eq!(draft.tips.len(),1);
+    }
+
+    #[test]
+    fn krita_predefined_tip_is_not_silently_replaced_with_round_fallback() {
+        let xml=r#"<Preset paintopid="paintbrush" name="Water_Waves">
+            <param name="PressureSize" type="internal">true</param>
+            <param name="SizeSensor" type="string"><![CDATA[<!DOCTYPE params><params id="pressure"/>]]></param>
+            <param name="requiredBrushFile" type="string"><![CDATA[LJF_Water_Brush_03.gih]]></param>
+            <param name="brush_definition" type="string"><![CDATA[
+                <Brush type="gbr_brush" filename="LJF_Water_Brush_03.gih" spacing="0.1" scale="2.80406"/>
+            ]]></param>
+        </Preset>"#;
+        let err=parse_krita_preset_xml(xml,None,Path::new("water.kpp"),|_|None).unwrap_err();
+        assert!(err.contains("LJF_Water_Brush_03.gih"));
+        assert!(err.contains("fake round brush"));
+    }
+
+    #[test]
+    fn krita_predefined_gbr_resource_preserves_tip_and_scale() {
+        let name=b"water\0";
+        let header=(28+name.len()) as u32;
+        let mut gbr=Vec::new();
+        for v in [header,2,2,1,1,u32::from_be_bytes(*b"GIMP"),10] {
+            gbr.extend(v.to_be_bytes());
+        }
+        gbr.extend(name);
+        gbr.extend([12,240]);
+
+        let xml=r#"<Preset paintopid="paintbrush" name="Resource_Brush">
+            <param name="requiredBrushFile" type="string">water.gbr</param>
+            <param name="brush_definition" type="string"><![CDATA[
+                <Brush type="gbr_brush" filename="water.gbr" spacing="0.1" scale="2.5"/>
+            ]]></param>
+        </Preset>"#;
+        let draft=parse_krita_preset_xml(xml,None,Path::new("resource.kpp"),|wanted|{
+            (wanted=="water.gbr").then(||gbr.clone())
+        }).unwrap();
+        assert_eq!(draft.tips.len(),1);
+        assert_eq!(draft.tips[0].data,vec![12,240]);
+        assert!((draft.tip_scale-2.5).abs()<0.001);
+        assert!((draft.spacing-0.1).abs()<0.001);
+    }
+
+    #[test]
+    fn imported_krita_ten_percent_spacing_is_dense_not_beads() {
+        let meta=CustomBrushMeta{
+            id:"test".into(),name:"test".into(),source_format:"Krita .kpp".into(),
+            source_path:String::new(),icon_path:String::new(),tip_paths:vec![],
+            spacing:0.1,opacity:1.0,flow:1.0,size_pressure:0.0,opacity_pressure:0.0,
+            angle_deg:0.0,follow_stroke:false,scatter:0.0,random_tip:false,tip_scale:1.0,
+            compatibility_note:String::new(),
+        };
+        let brush=RuntimeBrush{meta,tips:vec![round_tip(64,0.9)],icon:None};
+        let stroke=Stroke{
+            points:vec![
+                crate::project::StrokePoint{x:0.0,y:0.0,pressure:1.0},
+                crate::project::StrokePoint{x:100.0,y:0.0,pressure:1.0},
+            ],
+            color:[0,0,0,255],fill_color:None,base_width:20.0,is_vector:false,
+            brush_preset:crate::project::KritaBrushPreset::GPenInk,opacity:1.0,
+            brush_texture_id:Some("custom:test".into()),tip_shape:crate::project::BrushTipShape::Round,
+        };
+        let mut centers=Vec::new();
+        emit_stamps(&stroke,&brush,|stamp|centers.push(stamp.center[0]));
+        assert!(centers.len()>40,"only {} stamps",centers.len());
+        let max_gap=centers.windows(2).map(|w|w[1]-w[0]).fold(0.0_f32,f32::max);
+        assert!(max_gap<=2.1,"visible bead gap: {max_gap}");
+    }
+
+    #[test]
+    fn old_custom_brush_metadata_defaults_tip_scale_to_one() {
+        let json=r#"{
+          "id":"old","name":"old","source_format":"Krita .kpp","source_path":"",
+          "icon_path":"","tip_paths":[],"spacing":0.1,"opacity":1.0,"flow":1.0,
+          "size_pressure":1.0,"opacity_pressure":0.0,"angle_deg":0.0,
+          "follow_stroke":false,"scatter":0.0,"random_tip":false
+        }"#;
+        let meta:CustomBrushMeta=serde_json::from_str(json).unwrap();
+        assert_eq!(meta.tip_scale,1.0);
+    }
+
+    #[test]
     fn round_tip_is_bounded_and_visible() {
         let t=round_tip(64,0.8);
         assert_eq!(t.data.len(),64*64);
