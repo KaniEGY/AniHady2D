@@ -563,7 +563,8 @@ fn baseline_draft(path:&Path,format:&str,note:&str)->ImportedBrushDraft{
         source_format:format.to_owned(),source_path:path.to_path_buf(),
         tips:vec![round_tip(96,0.9)],icon:None,spacing:0.10,opacity:1.0,flow:1.0,
         size_pressure:1.0,opacity_pressure:0.0,angle_deg:0.0,follow_stroke:false,
-        scatter:0.0,random_tip:false,tip_scale:1.0,compatibility_note:note.to_owned(),
+        scatter:0.0,random_tip:false,tip_scale:1.0,
+        render_mode:CustomBrushRenderMode::Continuous,compatibility_note:note.to_owned(),
     }
 }
 
@@ -575,7 +576,8 @@ fn import_image(path:&Path)->Result<Vec<ImportedBrushDraft>,String>{
         source_format:"Image brush tip".into(),source_path:path.to_path_buf(),
         tips:vec![tip],icon:Some(icon_from_image(img)),spacing:0.10,opacity:1.0,flow:1.0,
         size_pressure:1.0,opacity_pressure:0.0,angle_deg:0.0,follow_stroke:true,
-        scatter:0.0,random_tip:false,tip_scale:1.0,compatibility_note:String::new(),
+        scatter:0.0,random_tip:false,tip_scale:1.0,
+        render_mode:CustomBrushRenderMode::Stamp,compatibility_note:String::new(),
     }])
 }
 
@@ -594,6 +596,7 @@ fn import_abr_file(path:&Path)->Result<Vec<ImportedBrushDraft>,String>{
                 tips:vec![TipMask{width:bitmap.width,height:bitmap.height,data:bitmap.data}],
                 icon:None,spacing:0.10,opacity:1.0,flow:1.0,size_pressure:1.0,opacity_pressure:0.0,
                 angle_deg:0.0,follow_stroke:false,scatter:0.0,random_tip:false,tip_scale:1.0,
+                render_mode:CustomBrushRenderMode::Stamp,
                 compatibility_note:"ABR tip shape is preserved; vendor-only brush dynamics are mapped to Stick defaults.".into(),
             });
         }
@@ -610,7 +613,8 @@ fn import_gbr_file(path:&Path)->Result<Vec<ImportedBrushDraft>,String>{
         source_format:"Krita / GIMP .gbr".into(),source_path:path.to_path_buf(),
         tips:vec![tip],icon:None,spacing:(spacing as f32/100.0).clamp(0.02,2.0),
         opacity:1.0,flow:1.0,size_pressure:1.0,opacity_pressure:0.0,angle_deg:0.0,
-        follow_stroke:false,scatter:0.0,random_tip:false,tip_scale:1.0,compatibility_note:String::new(),
+        follow_stroke:false,scatter:0.0,random_tip:false,tip_scale:1.0,
+        render_mode:CustomBrushRenderMode::Stamp,compatibility_note:String::new(),
     }])
 }
 
@@ -642,6 +646,7 @@ fn parse_gih_bytes(data:&[u8],path:&Path)->Result<Vec<ImportedBrushDraft>,String
         source_format:"Krita / GIMP .gih".into(),source_path:path.to_path_buf(),tips,icon:None,
         spacing:(spacing as f32/100.0).clamp(0.02,2.0),opacity:1.0,flow:1.0,size_pressure:1.0,
         opacity_pressure:0.0,angle_deg:0.0,follow_stroke:false,scatter:0.0,random_tip:random,tip_scale:1.0,
+        render_mode:CustomBrushRenderMode::Stamp,
         compatibility_note:"Multi-tip GIH order is preserved as sequential/random in Stick.".into(),
     }])
 }
@@ -861,6 +866,11 @@ Stick refused the old round-tip fallback because it changes the brush."
         suggested_name:name,source_format:"Krita .kpp".into(),source_path:source_path.to_path_buf(),
         tips,icon,spacing,opacity,flow,size_pressure:if size_pressure{1.0}else{0.0},
         opacity_pressure,angle_deg,follow_stroke,scatter,random_tip:false,tip_scale,
+        render_mode:if brush_type=="auto_brush" {
+            CustomBrushRenderMode::Continuous
+        } else {
+            CustomBrushRenderMode::Stamp
+        },
         compatibility_note:note,
     })
 }
@@ -925,6 +935,7 @@ fn import_myb_file(path:&Path)->Result<Vec<ImportedBrushDraft>,String>{
         tips:vec![round_tip(96,hardness)],icon:None,spacing:(0.5/dabs).clamp(0.02,0.5),
         opacity:opaque,flow:1.0,size_pressure:1.0,opacity_pressure:0.0,angle_deg:0.0,
         follow_stroke:false,scatter:0.0,random_tip:false,tip_scale:1.0,
+        render_mode:CustomBrushRenderMode::Continuous,
         compatibility_note:"MyPaint core size/opacity/hardness/spacing are mapped; advanced input mappings are approximated.".into(),
     }])
 }
@@ -963,6 +974,7 @@ fn import_sut_file(path:&Path)->Result<Vec<ImportedBrushDraft>,String>{
             }
         }
     }
+    let has_embedded_tip=!tips.is_empty();
     let num=|k:&str,d:f32|value_f32(variant.get(k)).unwrap_or(d);
     let size=num("BrushSize",30.0);
     let _=size;
@@ -978,7 +990,12 @@ fn import_sut_file(path:&Path)->Result<Vec<ImportedBrushDraft>,String>{
         suggested_name:name,source_format:"Clip Studio Paint .sut".into(),source_path:path.to_path_buf(),
         tips,icon,spacing,opacity,flow,size_pressure:1.0,opacity_pressure:0.0,angle_deg:rotation,
         follow_stroke:false,scatter,random_tip:num("BrushPatternOrderType",0.0) as i32==3,tip_scale:1.0,
-        compatibility_note:"CSP size/opacity/flow/spacing/rotation and readable embedded tip thumbnails are mapped. CSP-only mixing, encrypted material internals and some dynamics are approximated.".into(),
+        render_mode:if has_embedded_tip {
+            CustomBrushRenderMode::Stamp
+        } else {
+            CustomBrushRenderMode::Continuous
+        },
+        compatibility_note:"CSP size/opacity/flow/spacing/rotation and readable embedded tip material are mapped. Auto/round tools render continuously; bitmap material brushes keep stamp mode. CSP-only color mixing remains approximated.".into(),
     }])
 }
 
@@ -1066,6 +1083,7 @@ fn import_blend_file(path:&Path)->Result<Vec<ImportedBrushDraft>,String>{
                 source_path:path.to_path_buf(),tips:vec![round_tip(96,hardness)],icon:None,
                 spacing,opacity:alpha,flow,size_pressure,opacity_pressure,angle_deg:0.0,
                 follow_stroke:false,scatter:jitter,random_tip:false,tip_scale:1.0,
+                render_mode:CustomBrushRenderMode::Continuous,
                 compatibility_note:format!(
                     "Blender Brush settings mapped: size {size}px, spacing {:.0}%, opacity {:.0}%, jitter {:.2}, smooth {:.2}, Grease Pencil type {}. Asset materials/textures without a Stick equivalent are approximated.",
                     spacing*100.0,alpha*100.0,jitter,smooth,gp_type),
