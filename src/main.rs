@@ -10103,6 +10103,9 @@ impl eframe::App for StickApp {
                 ) {
                     let rect = egui::Rect::from_two_pos(start, end);
                     if rect.width() > 3.0 || rect.height() > 3.0 {
+                        self.last_selection_polygon=vec![
+                            rect.left_top(),rect.right_top(),rect.right_bottom(),rect.left_bottom()
+                        ];
                         if let Some(layer) = self.project.layers.get(self.active_layer_idx) {
                             let frame = self.project.evaluate_layer_at_frame(layer, self.current_frame);
                             self.selected_stroke_indices = frame.strokes.iter().enumerate()
@@ -10115,6 +10118,7 @@ impl eframe::App for StickApp {
                     }
                 }
                 if self.lasso_points.len() >= 3 {
+                    self.last_selection_polygon=self.lasso_points.clone();
                     if let Some(layer) = self.project.layers.get(self.active_layer_idx) {
                         let frame = self.project.evaluate_layer_at_frame(layer, self.current_frame);
                         self.selected_stroke_indices = frame.strokes.iter().enumerate()
@@ -10144,7 +10148,10 @@ impl eframe::App for StickApp {
                     // strokes don't visibly stop short or leave a tiny loop gap.
                     if !stroke.is_vector && drawing_pressure>0.001 {
                         if let Some(pointer) = pointer_pos.filter(|p| canvas_rect.contains(*p)) {
-                            let last_stage = to_stage(pointer);
+                            let raw_last=to_stage(pointer);
+                            let last_stage=stroke.points.last()
+                                .map(|p|self.snap_drawing_point(egui::pos2(p.x,p.y),raw_last))
+                                .unwrap_or(raw_last);
                             if stroke.points.last().is_some_and(|p|
                                 (p.x-last_stage.x).hypot(p.y-last_stage.y)>0.75) {
                                 let pressure=stroke.points.last()
@@ -10155,17 +10162,23 @@ impl eframe::App for StickApp {
                             }
                         }
                     }
-                    if stroke.is_vector {
+                    let smart_shape=if self.config.smart_shape_enabled {
+                        drawing_power::recognize_smart_shape(&stroke.points)
+                    } else {None};
+                    if let Some(recognized)=smart_shape {
+                        stroke.points=recognized.points;
+                        self.status_message=match recognized.kind {
+                            drawing_power::SmartShapeKind::Line=>tr(lang,"Smart Shape: line","شكل ذكي: خط"),
+                            drawing_power::SmartShapeKind::Ellipse=>tr(lang,"Smart Shape: ellipse","شكل ذكي: دائرة/بيضاوي"),
+                            drawing_power::SmartShapeKind::Rectangle=>tr(lang,"Smart Shape: rectangle","شكل ذكي: مستطيل"),
+                            drawing_power::SmartShapeKind::Triangle=>tr(lang,"Smart Shape: triangle","شكل ذكي: مثلث"),
+                        };
+                    } else if stroke.is_vector {
                         // Vector Pen input keeps editable nodes, but remove
                         // high-frequency mouse/tablet zig-zag before reducing
                         // node count. Geometric shapes use a separate path.
                         vector_path::smooth_freehand_nodes(&mut stroke.points,0.58);
                         stroke.simplify_vector_nodes(self.vector_tolerance);
-                    } else {
-                        // Freehand already has samples + smoothing stabilizer.
-                        // Adding four Catmull-Rom subdivisions overshoots sharp
-                        // turns and makes visibly broken/looped brush segments.
-                        // Keep the true pointer trajectory.
                     }
                     self.commit_stroke_with_symmetry(stroke, now_time);
                 }
