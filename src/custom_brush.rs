@@ -748,22 +748,58 @@ fn value_f32(v:Option<&Value>)->Option<f32>{
 fn import_blend_file(path:&Path)->Result<Vec<ImportedBrushDraft>,String>{
     let result=std::panic::catch_unwind(std::panic::AssertUnwindSafe(||{
         let blend=blend::Blend::from_path(path).map_err(|e|format!("Blender .blend: {e:?}"))?;
-        let mut names=Vec::new();
-        for brush in blend.instances_with_code(*b"BR").take(MAX_IMPORT_BRUSHES) {
-            let raw=brush.get("id").get_string("name");
-            let name=raw.strip_prefix("BR").unwrap_or(&raw).trim().to_owned();
-            if !name.is_empty(){names.push(name);}
+        let mut out=Vec::new();
+        for (index,brush) in blend.instances_with_code(*b"BR").take(MAX_IMPORT_BRUSHES).enumerate() {
+            let safe_f32=|field:&str,default:f32| -> f32 {
+                if !brush.is_valid(field){return default}
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(||brush.get_f32(field)))
+                    .unwrap_or(default)
+            };
+            let safe_i32=|field:&str,default:i32| -> i32 {
+                if !brush.is_valid(field){return default}
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(||brush.get_i32(field)))
+                    .unwrap_or(default)
+            };
+            let safe_u32=|field:&str,default:u32| -> u32 {
+                if !brush.is_valid(field){return default}
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(||brush.get_u32(field)))
+                    .unwrap_or_else(|_|safe_i32(field,default as i32) as u32)
+            };
+            let raw_name=std::panic::catch_unwind(std::panic::AssertUnwindSafe(||{
+                brush.get("id").get_string("name")
+            })).unwrap_or_else(|_|format!("BRBrush {}",index+1));
+            let name=raw_name.strip_prefix("BR").unwrap_or(&raw_name).trim().to_owned();
+            let size=safe_i32("size",30).clamp(1,5000);
+            let alpha=safe_f32("alpha",1.0).clamp(0.05,1.0);
+            let raw_flow=safe_f32("flow",1.0);
+            let flow=if raw_flow<=0.001{1.0}else{raw_flow.clamp(0.02,1.0)};
+            let spacing=(safe_i32("spacing",10) as f32/100.0).clamp(0.02,2.0);
+            let jitter=safe_f32("jitter",0.0).clamp(0.0,3.0);
+            let hardness=safe_f32("hardness",0.95).clamp(0.0,0.999);
+            let smooth=safe_f32("smooth_stroke_factor",0.0).clamp(0.0,1.0);
+            let flags=safe_u32("flag",0);
+            let size_pressure=if flags&(1<<3)!=0{1.0}else{0.0};
+            let opacity_pressure=if flags&(1<<2)!=0{1.0}else{0.0};
+            let gp_type=safe_i32("gpencil_brush_type",0);
+            out.push(ImportedBrushDraft{
+                suggested_name:if name.is_empty(){format!("Blender Brush {}",index+1)}else{name},
+                source_format:"Blender Grease Pencil .blend/.asset.blend".into(),
+                source_path:path.to_path_buf(),tips:vec![round_tip(96,hardness)],icon:None,
+                spacing,opacity:alpha,flow,size_pressure,opacity_pressure,angle_deg:0.0,
+                follow_stroke:false,scatter:jitter,random_tip:false,
+                compatibility_note:format!(
+                    "Blender Brush settings mapped: size {size}px, spacing {:.0}%, opacity {:.0}%, jitter {:.2}, smooth {:.2}, Grease Pencil type {}. Asset materials/textures without a Stick equivalent are approximated.",
+                    spacing*100.0,alpha*100.0,jitter,smooth,gp_type),
+            });
         }
-        Ok::<_,String>(names)
+        Ok::<_,String>(out)
     })).map_err(|_|"Blender asset parser rejected this .blend safely".to_string())??;
-    let names=if result.is_empty(){vec![path.file_stem().and_then(|s|s.to_str()).unwrap_or("Blender Brush").to_owned()]}else{result};
-    Ok(names.into_iter().map(|name|ImportedBrushDraft{
-        suggested_name:name,source_format:"Blender Grease Pencil .blend/.asset.blend".into(),
-        source_path:path.to_path_buf(),tips:vec![round_tip(96,0.95)],icon:None,spacing:0.08,
-        opacity:1.0,flow:1.0,size_pressure:1.0,opacity_pressure:0.0,angle_deg:0.0,
-        follow_stroke:false,scatter:0.0,random_tip:false,
-        compatibility_note:"Blender Brush datablock name is preserved. Grease Pencil Draw Brush settings are normalized to Stick's raster engine; Blender-only asset/material dynamics are approximated.".into(),
-    }).collect())
+    if result.is_empty() {
+        Ok(vec![baseline_draft(path,"Blender Grease Pencil .blend/.asset.blend",
+            "No Brush datablocks were found; Stick created a safe raster baseline.")])
+    } else {
+        Ok(result)
+    }
 }
 
 fn tip_from_resource(filename:&str,data:&[u8])->Option<TipMask>{
