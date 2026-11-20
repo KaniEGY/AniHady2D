@@ -568,45 +568,101 @@ fn parse_kpp_bytes(data:&[u8],source_path:&Path)->Result<ImportedBrushDraft,Stri
     let img=image::load_from_memory(data).map_err(|e|format!("KPP preview PNG: {e}"))?;
     let icon=Some(icon_from_image(img));
     let text=png_text_chunks(data);
-    let xml=text.get("preset").cloned().unwrap_or_default();
-    let doc=roxmltree::Document::parse(&xml).ok();
-    let root=doc.as_ref().and_then(|d|d.descendants().find(|n|n.has_tag_name("Preset")));
-    let name=root.and_then(|n|n.attribute("name")).unwrap_or_else(||source_path.file_stem().and_then(|s|s.to_str()).unwrap_or("Krita Brush")).replace('_'," ");
-    let paintop=root.and_then(|n|n.attribute("paintopid")).unwrap_or("paintbrush").to_owned();
+    let xml=text.get("preset").cloned().ok_or("KPP has no preset metadata")?;
+    let doc=roxmltree::Document::parse(&xml).map_err(|e|format!("KPP preset XML: {e}"))?;
+    let root=doc.descendants().find(|n|n.has_tag_name("Preset")).ok_or("KPP Preset element missing")?;
+    let name=root.attribute("name")
+        .unwrap_or_else(||source_path.file_stem().and_then(|s|s.to_str()).unwrap_or("Krita Brush"))
+        .replace('_'," ");
+    let paintop=root.attribute("paintopid").unwrap_or("paintbrush").to_owned();
+
     let mut params=HashMap::<String,String>::new();
-    if let Some(d)=doc.as_ref() {
-        for n in d.descendants().filter(|n|n.has_tag_name("param")) {
-            if let Some(k)=n.attribute("name") {
-                params.insert(k.to_owned(),n.text().unwrap_or("").to_owned());
-            }
-        }
+    for n in doc.descendants().filter(|n|n.has_tag_name("param")) {
+        let Some(k)=n.attribute("name") else {continue};
+        let raw=n.text().unwrap_or("");
+        let value=if n.attribute("type")==Some("bytearray") {
+            base64::engine::general_purpose::STANDARD
+                .decode(raw.split_whitespace().collect::<String>())
+                .ok()
+                .map(|bytes|String::from_utf8_lossy(&bytes).into_owned())
+                .unwrap_or_default()
+        } else {
+            raw.to_owned()
+        };
+        params.insert(k.to_owned(),value);
     }
+
     let mut tips=Vec::new();
-    if let Some(d)=doc.as_ref() {
-        for r in d.descendants().filter(|n|n.has_tag_name("resource")).take(MAX_TIPS) {
-            let filename=r.attribute("filename").unwrap_or("");
-            let raw=r.text().and_then(|t|base64::engine::general_purpose::STANDARD.decode(t.split_whitespace().collect::<String>()).ok());
-            if let Some(raw)=raw {
-                if let Some(tip)=tip_from_resource(filename,&raw) {tips.push(tip);}
+    for r in doc.descendants().filter(|n|n.has_tag_name("resource")).take(MAX_TIPS) {
+        let rtype=r.attribute("type").unwrap_or("");
+        if !rtype.to_ascii_lowercase().contains("brush") {continue}
+        let filename=r.attribute("filename").or_else(||r.attribute("name")).unwrap_or("");
+        let raw=r.text().and_then(|t|
+            base64::engine::general_purpose::STANDARD
+                .decode(t.split_whitespace().collect::<String>()).ok());
+        if let Some(raw)=raw {
+            if let Some(tip)=tip_from_resource(filename,&raw) {tips.push(tip);}
+        }
+    }
+
+    let mut spacing=0.10_f32;
+    let mut angle_deg=0.0_f32;
+    let mut auto_hardness=0.90_f32;
+    let mut auto_ratio=1.0_f32;
+    if let Some(def)=params.get("brush_definition") {
+        let cleaned=def.replace("<!DOCTYPE BrushTip>", "");
+        if let Ok(bdoc)=roxmltree::Document::parse(cleaned.trim()) {
+            if let Some(brush)=bdoc.descendants().find(|n|n.has_tag_name("Brush")) {
+                spacing=brush.attribute("spacing").and_then(|v|v.parse::<f32>().ok())
+                    .unwrap_or(spacing).clamp(0.02,2.0);
+                angle_deg=brush.attribute("angle").and_then(|v|v.parse::<f32>().ok())
+                    .map(|r|r.to_degrees()).unwrap_or(0.0);
+                if let Some(mask)=brush.descendants().find(|n|n.has_tag_name("MaskGenerator")) {
+                    let h=mask.attribute("hfade").and_then(|v|v.parse::<f32>().ok()).unwrap_or(0.9);
+                    let v=mask.attribute("vfade").and_then(|v|v.parse::<f32>().ok()).unwrap_or(h);
+                    auto_hardness=((h+v)*0.5).clamp(0.02,0.999);
+                    auto_ratio=mask.attribute("ratio").and_then(|v|v.parse::<f32>().ok())
+                        .unwrap_or(1.0).clamp(0.05,1.0);
+                }
             }
         }
     }
-    let size=find_number_in_params(&params,&["diameter","size","SizeValue"]).unwrap_or(30.0).clamp(1.0,5000.0);
-    let spacing=find_number_in_params(&params,&["Spacing","spacing"]).map(|v|if v>2.0{v/100.0}else{v}).unwrap_or(0.10).clamp(0.02,2.0);
-    let opacity=find_number_in_params(&params,&["OpacityValue","opacity"]).map(|v|if v>1.0{v/100.0}else{v}).unwrap_or(1.0).clamp(0.05,1.0);
-    let flow=find_number_in_params(&params,&["FlowValue","flow"]).map(|v|if v>1.0{v/100.0}else{v}).unwrap_or(1.0).clamp(0.02,1.0);
-    let size_pressure=params.iter().any(|(k,v)|k.to_ascii_lowercase().contains("size")&&k.to_ascii_lowercase().contains("curve")&&is_truthy(v));
-    let note=if tips.is_empty(){
-        format!("Krita {paintop} preset imported with its settings/preview; no embedded custom tip was present, so Stick uses a generated round tip.")
-    }else{
-        format!("Krita {paintop} preset imported; embedded tip resources were preserved where readable.")
+    if let Some(v)=find_number_in_params(&params,&["SpacingValue","Spacing"]) {
+        spacing=if v>2.0{v/100.0}else{v};
+    }
+    spacing=spacing.clamp(0.02,2.0);
+    let opacity=find_number_in_params(&params,&["OpacityValue","opacity"])
+        .map(|v|if v>1.0{v/100.0}else{v}).unwrap_or(1.0).clamp(0.05,1.0);
+    let flow=find_number_in_params(&params,&["FlowValue","flow"])
+        .map(|v|if v>1.0{v/100.0}else{v}).unwrap_or(1.0).clamp(0.02,1.0);
+    let size_sensor=params.get("SizeSensor").map(String::as_str).unwrap_or("");
+    let size_pressure=params.get("PressureSize").is_some_and(|v|is_truthy(v))
+        && size_sensor.to_ascii_lowercase().contains("pressure");
+    let opacity_sensor=params.get("OpacitySensor").map(String::as_str).unwrap_or("");
+    let opacity_pressure=if opacity_sensor.to_ascii_lowercase().contains("pressure"){1.0}else{0.0};
+    let rotation_sensor=params.get("RotationSensor").map(String::as_str).unwrap_or("").to_ascii_lowercase();
+    let follow_stroke=rotation_sensor.contains("drawingangle");
+    let scatter=find_number_in_params(&params,&["ScatterValue","Scattering/Amount"])
+        .unwrap_or(0.0).clamp(0.0,3.0);
+
+    if tips.is_empty() {
+        let tip=if auto_ratio<0.96 {
+            elliptical_tip(96,auto_hardness,auto_ratio,angle_deg)
+        } else {
+            round_tip(96,auto_hardness)
+        };
+        tips.push(tip);
+    }
+    let note=if matches!(paintop.as_str(),"paintbrush"|"roundmarker"|"sketchbrush"|"chalkbrush"|"mypaintbrush") {
+        format!("Krita {paintop} preset mapped to Stick raster dynamics; embedded brush tips and pressure sensors are preserved where representable.")
+    } else {
+        format!("Krita {paintop} brush engine has no exact Stick equivalent; tip, spacing, flow, opacity and available pressure dynamics were normalized.")
     };
-    let _=size;
     Ok(ImportedBrushDraft{
         suggested_name:name,source_format:"Krita .kpp".into(),source_path:source_path.to_path_buf(),
-        tips:if tips.is_empty(){vec![round_tip(96,0.9)]}else{tips},icon,spacing,opacity,flow,
-        size_pressure:if size_pressure{1.0}else{0.85},opacity_pressure:0.0,angle_deg:0.0,
-        follow_stroke:false,scatter:0.0,random_tip:false,compatibility_note:note,
+        tips,icon,spacing,opacity,flow,size_pressure:if size_pressure{1.0}else{0.0},
+        opacity_pressure,angle_deg,follow_stroke,scatter,random_tip:false,
+        compatibility_note:note,
     })
 }
 
@@ -922,6 +978,20 @@ fn load_icon(path:&Path)->Option<IconImage>{image::open(path).ok().map(icon_from
 fn load_tip(path:&Path)->Option<TipMask>{
     let img=image::open(path).ok()?.to_luma8();
     Some(TipMask{width:img.width(),height:img.height(),data:img.into_raw()})
+}
+
+fn elliptical_tip(size:u32,hardness:f32,ratio:f32,angle_deg:f32)->TipMask{
+    let size=size.max(8);let r=size as f32/2.0;let hard=hardness.clamp(0.0,0.999);
+    let ratio=ratio.clamp(0.05,1.0);let a=angle_deg.to_radians();let (sin,cos)=a.sin_cos();
+    let mut data=Vec::with_capacity((size*size) as usize);
+    for y in 0..size {for x in 0..size {
+        let dx=(x as f32+0.5-r)/r;let dy=(y as f32+0.5-r)/r;
+        let xr=dx*cos+dy*sin;let yr=(-dx*sin+dy*cos)/ratio;
+        let d=(xr*xr+yr*yr).sqrt();
+        let alpha=if d<=hard{1.0}else{((1.0-d)/(1.0-hard)).clamp(0.0,1.0)};
+        data.push((alpha*255.0).round() as u8);
+    }}
+    TipMask{width:size,height:size,data}
 }
 
 fn round_tip(size:u32,hardness:f32)->TipMask{
