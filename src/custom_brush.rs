@@ -584,7 +584,8 @@ fn baseline_draft(path:&Path,format:&str,note:&str)->ImportedBrushDraft{
         tips:vec![round_tip(96,0.9)],icon:None,default_size:30.0,spacing:0.10,opacity:1.0,flow:1.0,
         size_pressure:1.0,opacity_pressure:0.0,angle_deg:0.0,follow_stroke:false,
         scatter:0.0,random_tip:false,tip_scale:1.0,
-        render_mode:CustomBrushRenderMode::Continuous,compatibility_note:note.to_owned(),
+        render_mode:CustomBrushRenderMode::Continuous,
+        auxiliary_resource_path:None,compatibility_note:note.to_owned(),
     }
 }
 
@@ -598,7 +599,8 @@ fn import_image(path:&Path)->Result<Vec<ImportedBrushDraft>,String>{
         tips:vec![tip],icon:Some(icon_from_image(img)),spacing:0.10,opacity:1.0,flow:1.0,
         size_pressure:1.0,opacity_pressure:0.0,angle_deg:0.0,follow_stroke:true,
         scatter:0.0,random_tip:false,tip_scale:1.0,
-        render_mode:CustomBrushRenderMode::Stamp,compatibility_note:String::new(),
+        render_mode:CustomBrushRenderMode::Stamp,
+        auxiliary_resource_path:None,compatibility_note:String::new(),
     }])
 }
 
