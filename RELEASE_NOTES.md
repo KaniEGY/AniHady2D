@@ -89,6 +89,10 @@
 - Artist System and level-up overlays now block canvas/tool input behind the popup, preventing custom cursor and drawing interactions from leaking into background windows.
 
 ### What's new
+- **Krita KPP spacing/import fix:** Stick now keeps the real `brush_definition` spacing (for example 0.1 = 10%) instead of incorrectly replacing it with Krita's `SpacingValue` dynamics multiplier. This fixes imported brushes appearing as rows of separated dots.
+- Disabled Krita dynamics are now respected: stale `ScatterValue`, rotation or opacity sensor data is ignored unless the corresponding pressure option is enabled.
+- Predefined Krita brushes now load their real `.gbr` / `.gih` tip resources from beside the KPP, a sibling `brushes` folder, the local Krita resource folder, or from inside a `.bundle`. Multi-tip GIH data and brush-tip scale are preserved.
+- If a KPP requires an external brush tip that is missing, Stick now refuses the fake round-tip fallback and reports the missing filename instead of silently creating the wrong brush.
 - Launcher branding now shows **Stick + the app icon** instead of “Stick Studio”, and the mode prompt is now “What are you here to do?” / «انت داخل تعمل ايه ؟».
 - The in-app updater now prefers a **compressed `Stick-update.zip`** from GitHub Releases, verifies its SHA-256, extracts and validates `Stick.exe`, then performs the existing safe restart swap. Legacy releases containing only `Stick.exe` still work.
 - GitHub Actions keeps the normal `Stick-Windows` artifact small by not nesting the updater ZIP inside it; the compressed updater package is published separately to Releases.
@@ -375,6 +379,10 @@
 - اتضاف ملف `ONLINE_ARCHITECTURE_REVIEW_2026-11-19.md` لمراجعة بنية الشبكات والخطوات المستقبلية. صيغة المشاريع وبروتوكول التعاون الحالي ما اتغيروش.
 
 ### إيه الجديد؟
+- **إصلاح استيراد فرش Krita KPP:** البرنامج بقى يحافظ على الـspacing الحقيقي الموجود في `brush_definition` (مثلاً 0.1 = 10%) بدل ما كان يستبدله غلط بـ`SpacingValue`، وده كان سبب إن الفرشة تطلع نقط/خرز منفصل.
+- لو Scatter أو Rotation أو Opacity pressure مقفولين في Krita، Stick مش هيطبق قيم قديمة مخزنة جوه الـpreset من ورا المستخدم.
+- فرش Krita اللي بتعتمد على سن خارجي `.gbr` أو `.gih` بقت تدور على السن الحقيقي جنب ملف KPP، أو في فولدر `brushes` المجاور، أو موارد Krita المحلية، أو جوه `.bundle`، مع الحفاظ على multi-tip والـscale.
+- لو ملف KPP محتاج سن خارجي ومش موجود، Stick مش هيعمل دايرة عادية مزيفة مكانه؛ هيقول اسم الملف الناقص بوضوح عشان الفرشة متظهرش بشكل غلط.
 - اتضاف خيار **أضف فرشة / Add brush** جنب الفرش العادية. تقدر تستورد أكتر من فرشة، تسمي كل واحدة، تختار لها صورة لو حابب، وتفضل محفوظة في البرنامج بعد القفل والفتح. وكلك يمين على أي فرشة مستوردة يظهر **حذف الفرشة**.
 - الخطوط المرسومة بالفرش المستوردة بتستخدم نفس محرك المعاينة والتصدير، وبتتحفظ بمعرّف الفرشة داخل صيغة المشروع الحالية من غير تغيير الـschema. **قلم الحبر/الفيكتور متساب زي ما هو**.
 - دعم استيراد عائلات فرش **Krita** (`.kpp` و`.bundle` و`.myb` و`.gbr` و`.gih` و`.abr`)، و**Clip Studio Paint** (`.sut` و`.sutg` و`.abr` مع fallback للصيغة القديمة `.tos`)، وBrush Assets الخاصة بـ**Blender Grease Pencil** (`.blend` و`.asset.blend`)، بالإضافة لصور سن الفرشة العادية.
