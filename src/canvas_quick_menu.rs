@@ -30,18 +30,18 @@ const RING_RADIUS: f32 = 78.0;
 fn draw_shape_icon(painter:&egui::Painter, center:egui::Pos2, index:usize, color:egui::Color32) {
     let stroke=egui::Stroke::new(2.0,color);
     match index {
-        0 => painter.line_segment(
-            [center+egui::vec2(-9.0,7.0),center+egui::vec2(9.0,-7.0)],stroke),
-        1 => painter.circle_stroke(center,7.5,stroke),
-        2 => painter.rect_stroke(
-            egui::Rect::from_center_size(center,egui::vec2(14.0,14.0)),1.5,stroke),
-        3 => painter.rect_stroke(
-            egui::Rect::from_center_size(center,egui::vec2(17.0,11.0)),1.5,stroke),
-        4 => painter.add(egui::Shape::closed_line(vec![
+        0 => { painter.line_segment(
+            [center+egui::vec2(-9.0,7.0),center+egui::vec2(9.0,-7.0)],stroke); }
+        1 => { painter.circle_stroke(center,7.5,stroke); }
+        2 => { painter.rect_stroke(
+            egui::Rect::from_center_size(center,egui::vec2(14.0,14.0)),1.5,stroke); }
+        3 => { painter.rect_stroke(
+            egui::Rect::from_center_size(center,egui::vec2(17.0,11.0)),1.5,stroke); }
+        4 => { painter.add(egui::Shape::closed_line(vec![
             center+egui::vec2(0.0,-8.0),
             center+egui::vec2(8.0,7.0),
             center+egui::vec2(-8.0,7.0),
-        ],stroke)),
+        ],stroke)); }
         _ => {
             let pts=(0..5).map(|i|{
                 let a=-std::f32::consts::FRAC_PI_2+i as f32*std::f32::consts::TAU/5.0;
