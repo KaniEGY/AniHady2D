@@ -122,7 +122,7 @@ fn runtime() -> &'static RwLock<HashMap<String, RuntimeBrush>> {
 pub fn accepted_extensions() -> &'static [&'static str] {
     &[
         "kpp", "bundle", "myb", "gbr", "gih", "abr",
-        "sut", "sutg", "tos", "blend",
+        "sut", "sutg", "blend",
         "png", "jpg", "jpeg", "webp", "bmp",
     ]
 }
@@ -570,22 +570,8 @@ pub fn import_file(path:&Path)->Result<Vec<ImportedBrushDraft>,String>{
         "myb"=>import_myb_file(path),
         "sut"=>import_sut_file(path),
         "sutg"=>import_sutg_file(path),
-        "tos"=>Ok(vec![baseline_draft(path,"Clip Studio / ComicStudio .tos",
-            "Legacy .tos settings are imported as a safe Stick raster baseline; proprietary dynamics are not exact.")]),
         "blend"=>import_blend_file(path),
         _=>Err(format!("Unsupported brush file: .{ext}")),
-    }
-}
-
-fn baseline_draft(path:&Path,format:&str,note:&str)->ImportedBrushDraft{
-    ImportedBrushDraft{
-        suggested_name:path.file_stem().and_then(|s|s.to_str()).unwrap_or("Imported Brush").to_owned(),
-        source_format:format.to_owned(),source_path:path.to_path_buf(),
-        tips:vec![round_tip(96,0.9)],icon:None,default_size:30.0,spacing:0.10,opacity:1.0,flow:1.0,
-        size_pressure:1.0,opacity_pressure:0.0,angle_deg:0.0,follow_stroke:false,
-        scatter:0.0,random_tip:false,tip_scale:1.0,
-        render_mode:CustomBrushRenderMode::Continuous,
-        auxiliary_resource_path:None,compatibility_note:note.to_owned(),
     }
 }
 
@@ -1157,8 +1143,7 @@ fn import_sutg_file(path:&Path)->Result<Vec<ImportedBrushDraft>,String>{
         }
         if !out.is_empty(){return Ok(out)}
     }
-    Ok(vec![baseline_draft(path,"Clip Studio Paint .sutg",
-        "This tool-group container was accepted, but its vendor-specific grouping could not be decoded; Stick created a safe raster baseline.")])
+    Err("Clip Studio .sutg could not be decoded into real .sut sub-tools. Export/import the individual .sut brush instead; Stick will not create a fake generic brush.".into())
 }
 
 fn row_map_where(
