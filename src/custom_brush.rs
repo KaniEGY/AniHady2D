@@ -84,6 +84,7 @@ pub struct ImportedBrushDraft {
     pub random_tip: bool,
     pub tip_scale: f32,
     pub render_mode: CustomBrushRenderMode,
+    pub auxiliary_resource_path: Option<PathBuf>,
     pub compatibility_note: String,
 }
 
@@ -268,6 +269,15 @@ pub fn install_draft(
     let ext = draft.source_path.extension().and_then(|s| s.to_str()).unwrap_or("brush");
     let source_dst = dir.join(format!("source.{ext}"));
     fs::copy(&draft.source_path, &source_dst).map_err(|e| e.to_string())?;
+    if let Some(resource)=draft.auxiliary_resource_path.as_ref() {
+        if let Some(name)=resource.file_name() {
+            let resource_dst=dir.join(name);
+            if resource_dst!=source_dst {
+                fs::copy(resource,&resource_dst).map_err(|e|
+                    format!("Couldn't save the required brush resource: {e}"))?;
+            }
+        }
+    }
 
     let mut tip_paths = Vec::new();
     let tips = if draft.tips.is_empty() {
@@ -597,6 +607,7 @@ fn import_abr_file(path:&Path)->Result<Vec<ImportedBrushDraft>,String>{
                 icon:None,spacing:0.10,opacity:1.0,flow:1.0,size_pressure:1.0,opacity_pressure:0.0,
                 angle_deg:0.0,follow_stroke:false,scatter:0.0,random_tip:false,tip_scale:1.0,
                 render_mode:CustomBrushRenderMode::Stamp,
+                auxiliary_resource_path:None,
                 compatibility_note:"ABR tip shape is preserved; vendor-only brush dynamics are mapped to Stick defaults.".into(),
             });
         }
@@ -647,6 +658,7 @@ fn parse_gih_bytes(data:&[u8],path:&Path)->Result<Vec<ImportedBrushDraft>,String
         spacing:(spacing as f32/100.0).clamp(0.02,2.0),opacity:1.0,flow:1.0,size_pressure:1.0,
         opacity_pressure:0.0,angle_deg:0.0,follow_stroke:false,scatter:0.0,random_tip:random,tip_scale:1.0,
         render_mode:CustomBrushRenderMode::Stamp,
+        auxiliary_resource_path:None,
         compatibility_note:"Multi-tip GIH order is preserved as sequential/random in Stick.".into(),
     }])
 }
@@ -673,6 +685,58 @@ fn parse_gbr(data:&[u8],offset:usize)->Result<(String,TipMask,u32,usize),String>
     let raw=&d[header..header+need];
     let mask=if nbytes==1 {raw.to_vec()} else {raw.chunks_exact(4).map(|p|p[3]).collect()};
     Ok((name,downsample_tip(TipMask{width:w,height:h,data:mask}),spacing,header+need))
+}
+
+pub fn required_krita_resource(path:&Path)->Option<String>{
+    if path.extension().and_then(|s|s.to_str())
+        .is_none_or(|ext|!ext.eq_ignore_ascii_case("kpp")) { return None; }
+    let data=fs::read(path).ok()?;
+    let xml=png_text_chunks(&data).get("preset")?.clone();
+    let doc=roxmltree::Document::parse(&xml).ok()?;
+    for n in doc.descendants().filter(|n|n.has_tag_name("param")) {
+        if n.attribute("name")==Some("requiredBrushFile") {
+            let value=n.text().unwrap_or("").trim();
+            if !value.is_empty(){return Some(value.to_owned())}
+        }
+    }
+    let def=doc.descendants().find(|n|
+        n.has_tag_name("param") && n.attribute("name")==Some("brush_definition"))
+        .and_then(|n|n.text()).unwrap_or("");
+    let cleaned=def.replace("<!DOCTYPE BrushTip>","");
+    let bdoc=roxmltree::Document::parse(cleaned.trim()).ok()?;
+    let brush=bdoc.descendants().find(|n|n.has_tag_name("Brush"))?;
+    if brush.attribute("type").unwrap_or("auto_brush")=="auto_brush" {return None}
+    brush.attribute("filename").map(str::trim)
+        .filter(|s|!s.is_empty()).map(str::to_owned)
+}
+
+pub fn import_file_with_resource(
+    path:&Path,
+    resource:&Path,
+)->Result<Vec<ImportedBrushDraft>,String>{
+    let required=required_krita_resource(path)
+        .ok_or("This brush does not request an external Krita brush tip.")?;
+    let selected_name=resource.file_name().and_then(|s|s.to_str()).unwrap_or("");
+    let required_name=Path::new(&required).file_name().and_then(|s|s.to_str()).unwrap_or(&required);
+    if !selected_name.eq_ignore_ascii_case(required_name) {
+        return Err(format!(
+            "This Krita preset needs '{required_name}', but you selected '{selected_name}'."
+        ));
+    }
+    let raw_resource=fs::read(resource).map_err(|e|e.to_string())?;
+    let data=fs::read(path).map_err(|e|e.to_string())?;
+    let img=image::load_from_memory(&data).map_err(|e|format!("KPP preview PNG: {e}"))?;
+    let xml=png_text_chunks(&data).get("preset").cloned().ok_or("KPP has no preset metadata")?;
+    let mut draft=parse_krita_preset_xml(&xml,Some(icon_from_image(img)),path,|wanted|{
+        let wanted_name=Path::new(wanted).file_name().and_then(|s|s.to_str()).unwrap_or(wanted);
+        if wanted_name.eq_ignore_ascii_case(required_name) {
+            Some(raw_resource.clone())
+        } else {
+            read_krita_resource_near(path,wanted)
+        }
+    })?;
+    draft.auxiliary_resource_path=Some(resource.to_path_buf());
+    Ok(vec![draft])
 }
 
 fn import_kpp_file(path:&Path)->Result<Vec<ImportedBrushDraft>,String>{
@@ -871,6 +935,7 @@ Stick refused the old round-tip fallback because it changes the brush."
         } else {
             CustomBrushRenderMode::Stamp
         },
+        auxiliary_resource_path:None,
         compatibility_note:note,
     })
 }
@@ -936,6 +1001,7 @@ fn import_myb_file(path:&Path)->Result<Vec<ImportedBrushDraft>,String>{
         opacity:opaque,flow:1.0,size_pressure:1.0,opacity_pressure:0.0,angle_deg:0.0,
         follow_stroke:false,scatter:0.0,random_tip:false,tip_scale:1.0,
         render_mode:CustomBrushRenderMode::Continuous,
+        auxiliary_resource_path:None,
         compatibility_note:"MyPaint core size/opacity/hardness/spacing are mapped; advanced input mappings are approximated.".into(),
     }])
 }
@@ -995,6 +1061,7 @@ fn import_sut_file(path:&Path)->Result<Vec<ImportedBrushDraft>,String>{
         } else {
             CustomBrushRenderMode::Continuous
         },
+        auxiliary_resource_path:None,
         compatibility_note:"CSP size/opacity/flow/spacing/rotation and readable embedded tip material are mapped. Auto/round tools render continuously; bitmap material brushes keep stamp mode. CSP-only color mixing remains approximated.".into(),
     }])
 }
@@ -1084,6 +1151,7 @@ fn import_blend_file(path:&Path)->Result<Vec<ImportedBrushDraft>,String>{
                 spacing,opacity:alpha,flow,size_pressure,opacity_pressure,angle_deg:0.0,
                 follow_stroke:false,scatter:jitter,random_tip:false,tip_scale:1.0,
                 render_mode:CustomBrushRenderMode::Continuous,
+                auxiliary_resource_path:None,
                 compatibility_note:format!(
                     "Blender Brush settings mapped: size {size}px, spacing {:.0}%, opacity {:.0}%, jitter {:.2}, smooth {:.2}, Grease Pencil type {}. Asset materials/textures without a Stick equivalent are approximated.",
                     spacing*100.0,alpha*100.0,jitter,smooth,gp_type),
