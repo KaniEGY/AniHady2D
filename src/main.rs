@@ -10699,8 +10699,8 @@ mod tool_discovery_tests {
     fn quick_canvas_control_shortcut_defaults_are_stable() {
         let config=AppConfig::default();
         assert_eq!(config.quick_color_key,"Z");
-        assert_eq!(config.size_gesture_key,"Alt");
-        assert_eq!(config.opacity_gesture_key,"Ctrl");
+        assert_eq!(config.size_gesture_key,"Ctrl");
+        assert_eq!(config.opacity_gesture_key,"Alt");
     }
 
     #[test]
