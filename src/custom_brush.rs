@@ -24,9 +24,10 @@ use tiny_skia::{FilterQuality, Pixmap, PixmapPaint, Transform};
 const MAX_TIPS: usize = 32;
 const MAX_IMPORT_BRUSHES: usize = 128;
 const MAX_TIP_SIDE: u32 = 512;
-const CUSTOM_BRUSH_ENGINE_VERSION: u32 = 3;
+const CUSTOM_BRUSH_ENGINE_VERSION: u32 = 4;
 
 fn default_tip_scale() -> f32 { 1.0 }
+fn default_brush_size() -> f32 { 30.0 }
 fn default_engine_version() -> u32 { 0 }
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -45,6 +46,8 @@ pub struct CustomBrushMeta {
     pub source_path: String,
     pub icon_path: String,
     pub tip_paths: Vec<String>,
+    #[serde(default = "default_brush_size")]
+    pub default_size: f32,
     pub spacing: f32,
     pub opacity: f32,
     pub flow: f32,
@@ -73,6 +76,7 @@ pub struct ImportedBrushDraft {
     pub source_path: PathBuf,
     pub tips: Vec<TipMask>,
     pub icon: Option<IconImage>,
+    pub default_size: f32,
     pub spacing: f32,
     pub opacity: f32,
     pub flow: f32,
@@ -217,6 +221,7 @@ fn rebuild_saved_brush(meta:&mut CustomBrushMeta)->Result<bool,String>{
 
     meta.tip_paths=tip_paths;
     meta.source_format=draft.source_format;
+    meta.default_size=draft.default_size.clamp(1.0,2000.0);
     meta.spacing=draft.spacing.clamp(0.005,2.0);
     meta.opacity=draft.opacity.clamp(0.05,1.0);
     meta.flow=draft.flow.clamp(0.02,1.0);
@@ -310,6 +315,7 @@ pub fn install_draft(
         source_path: source_dst.to_string_lossy().to_string(),
         icon_path: icon_path.to_string_lossy().to_string(),
         tip_paths,
+        default_size: draft.default_size.clamp(1.0,2000.0),
         spacing: draft.spacing.clamp(0.02, 2.0),
         opacity: draft.opacity.clamp(0.05, 1.0),
         flow: draft.flow.clamp(0.02, 1.0),
@@ -571,7 +577,7 @@ fn baseline_draft(path:&Path,format:&str,note:&str)->ImportedBrushDraft{
     ImportedBrushDraft{
         suggested_name:path.file_stem().and_then(|s|s.to_str()).unwrap_or("Imported Brush").to_owned(),
         source_format:format.to_owned(),source_path:path.to_path_buf(),
-        tips:vec![round_tip(96,0.9)],icon:None,spacing:0.10,opacity:1.0,flow:1.0,
+        tips:vec![round_tip(96,0.9)],icon:None,default_size:30.0,spacing:0.10,opacity:1.0,flow:1.0,
         size_pressure:1.0,opacity_pressure:0.0,angle_deg:0.0,follow_stroke:false,
         scatter:0.0,random_tip:false,tip_scale:1.0,
         render_mode:CustomBrushRenderMode::Continuous,compatibility_note:note.to_owned(),
@@ -584,6 +590,7 @@ fn import_image(path:&Path)->Result<Vec<ImportedBrushDraft>,String>{
     Ok(vec![ImportedBrushDraft{
         suggested_name:path.file_stem().and_then(|s|s.to_str()).unwrap_or("Image Brush").to_owned(),
         source_format:"Image brush tip".into(),source_path:path.to_path_buf(),
+        default_size:tip.width.max(tip.height).clamp(1,120) as f32,
         tips:vec![tip],icon:Some(icon_from_image(img)),spacing:0.10,opacity:1.0,flow:1.0,
         size_pressure:1.0,opacity_pressure:0.0,angle_deg:0.0,follow_stroke:true,
         scatter:0.0,random_tip:false,tip_scale:1.0,
@@ -603,6 +610,7 @@ fn import_abr_file(path:&Path)->Result<Vec<ImportedBrushDraft>,String>{
                 suggested_name:if entry.name.trim().is_empty(){format!("ABR Brush {}",entry.index+1)}else{entry.name},
                 source_format:"Photoshop / Krita / Clip Studio .abr".into(),
                 source_path:path.to_path_buf(),
+                default_size:bitmap.width.max(bitmap.height).clamp(1,120) as f32,
                 tips:vec![TipMask{width:bitmap.width,height:bitmap.height,data:bitmap.data}],
                 icon:None,spacing:0.10,opacity:1.0,flow:1.0,size_pressure:1.0,opacity_pressure:0.0,
                 angle_deg:0.0,follow_stroke:false,scatter:0.0,random_tip:false,tip_scale:1.0,
@@ -622,6 +630,7 @@ fn import_gbr_file(path:&Path)->Result<Vec<ImportedBrushDraft>,String>{
     Ok(vec![ImportedBrushDraft{
         suggested_name:if name.is_empty(){path.file_stem().and_then(|s|s.to_str()).unwrap_or("GBR Brush").to_owned()}else{name},
         source_format:"Krita / GIMP .gbr".into(),source_path:path.to_path_buf(),
+        default_size:tip.width.max(tip.height).clamp(1,120) as f32,
         tips:vec![tip],icon:None,spacing:(spacing as f32/100.0).clamp(0.02,2.0),
         opacity:1.0,flow:1.0,size_pressure:1.0,opacity_pressure:0.0,angle_deg:0.0,
         follow_stroke:false,scatter:0.0,random_tip:false,tip_scale:1.0,
@@ -654,7 +663,9 @@ fn parse_gih_bytes(data:&[u8],path:&Path)->Result<Vec<ImportedBrushDraft>,String
     if tips.is_empty(){return Err("GIH contains no readable tips".into())}
     Ok(vec![ImportedBrushDraft{
         suggested_name:if name.is_empty(){path.file_stem().and_then(|s|s.to_str()).unwrap_or("GIH Brush").to_owned()}else{name},
-        source_format:"Krita / GIMP .gih".into(),source_path:path.to_path_buf(),tips,icon:None,
+        source_format:"Krita / GIMP .gih".into(),source_path:path.to_path_buf(),
+        default_size:tips.first().map(|t|t.width.max(t.height).clamp(1,120) as f32).unwrap_or(30.0),
+        tips,icon:None,
         spacing:(spacing as f32/100.0).clamp(0.02,2.0),opacity:1.0,flow:1.0,size_pressure:1.0,
         opacity_pressure:0.0,angle_deg:0.0,follow_stroke:false,scatter:0.0,random_tip:random,tip_scale:1.0,
         render_mode:CustomBrushRenderMode::Stamp,
@@ -820,6 +831,7 @@ where F:FnMut(&str)->Option<Vec<u8>>
     let mut angle_deg=0.0_f32;
     let mut auto_hardness=0.90_f32;
     let mut auto_ratio=1.0_f32;
+    let mut default_size=30.0_f32;
     let mut tip_scale=1.0_f32;
     let mut brush_type="auto_brush".to_owned();
     let mut definition_resource=String::new();
@@ -845,6 +857,8 @@ where F:FnMut(&str)->Option<Vec<u8>>
                     auto_hardness=((h+v)*0.5).clamp(0.02,0.999);
                     auto_ratio=mask.attribute("ratio").and_then(|v|v.parse::<f32>().ok())
                         .unwrap_or(1.0).clamp(0.05,1.0);
+                    default_size=mask.attribute("diameter").and_then(|v|v.parse::<f32>().ok())
+                        .unwrap_or(30.0).clamp(1.0,2000.0);
                 }
             }
         }
@@ -928,7 +942,8 @@ Stick refused the old round-tip fallback because it changes the brush."
 
     Ok(ImportedBrushDraft{
         suggested_name:name,source_format:"Krita .kpp".into(),source_path:source_path.to_path_buf(),
-        tips,icon,spacing,opacity,flow,size_pressure:if size_pressure{1.0}else{0.0},
+        tips,icon,default_size:(default_size*tip_scale).clamp(1.0,2000.0),
+        spacing,opacity,flow,size_pressure:if size_pressure{1.0}else{0.0},
         opacity_pressure,angle_deg,follow_stroke,scatter,random_tip:false,tip_scale,
         render_mode:if brush_type=="auto_brush" {
             CustomBrushRenderMode::Continuous
@@ -994,10 +1009,12 @@ fn import_myb_file(path:&Path)->Result<Vec<ImportedBrushDraft>,String>{
     let opaque=base("opaque",1.0).clamp(0.05,1.0);
     let hardness=base("hardness",0.8).clamp(0.0,1.0);
     let dabs=base("dabs_per_basic_radius",4.0).max(0.5);
+    let default_size=(2.0*base("radius_logarithmic",2.0).exp()).clamp(1.0,2000.0);
     Ok(vec![ImportedBrushDraft{
         suggested_name:path.file_stem().and_then(|s|s.to_str()).unwrap_or("MyPaint Brush").to_owned(),
         source_format:"Krita / MyPaint .myb".into(),source_path:path.to_path_buf(),
-        tips:vec![round_tip(96,hardness)],icon:None,spacing:(0.5/dabs).clamp(0.02,0.5),
+        tips:vec![round_tip(96,hardness)],icon:None,default_size,
+        spacing:(0.5/dabs).clamp(0.02,0.5),
         opacity:opaque,flow:1.0,size_pressure:1.0,opacity_pressure:0.0,angle_deg:0.0,
         follow_stroke:false,scatter:0.0,random_tip:false,tip_scale:1.0,
         render_mode:CustomBrushRenderMode::Continuous,
@@ -1096,7 +1113,8 @@ fn import_sut_file(path:&Path)->Result<Vec<ImportedBrushDraft>,String>{
 
     Ok(vec![ImportedBrushDraft{
         suggested_name:name,source_format:"Clip Studio Paint .sut".into(),source_path:path.to_path_buf(),
-        tips,icon,spacing,opacity,flow,size_pressure,opacity_pressure,angle_deg:rotation,
+        tips,icon,default_size:num("BrushSize",30.0).clamp(1.0,2000.0),
+        spacing,opacity,flow,size_pressure,opacity_pressure,angle_deg:rotation,
         follow_stroke,scatter,random_tip:num("BrushPatternOrderType",0.0) as i32==3,tip_scale,
         render_mode:if has_embedded_tip || spray {
             CustomBrushRenderMode::Stamp
@@ -1256,7 +1274,7 @@ fn import_blend_file(path:&Path)->Result<Vec<ImportedBrushDraft>,String>{
             out.push(ImportedBrushDraft{
                 suggested_name:if name.is_empty(){format!("Blender GP Brush {}",index+1)}else{name},
                 source_format:"Blender Grease Pencil Draw Brush .blend/.asset.blend".into(),
-                source_path:path.to_path_buf(),tips:vec![tip],icon:None,
+                source_path:path.to_path_buf(),tips:vec![tip],icon:None,default_size:size as f32,
                 spacing,opacity:(alpha*gp_strength).clamp(0.05,1.0),flow,
                 size_pressure,opacity_pressure,angle_deg:angle,
                 follow_stroke:false,scatter:jitter,random_tip:false,tip_scale:1.0,
@@ -1545,6 +1563,7 @@ mod tests {
         let meta=CustomBrushMeta{
             id:"test".into(),name:"test".into(),source_format:"Krita .kpp".into(),
             source_path:String::new(),icon_path:String::new(),tip_paths:vec![],
+            default_size:30.0,
             spacing:0.1,opacity:1.0,flow:1.0,size_pressure:0.0,opacity_pressure:0.0,
             angle_deg:0.0,follow_stroke:false,scatter:0.0,random_tip:false,tip_scale:1.0,
             render_mode:CustomBrushRenderMode::Continuous,
@@ -1589,6 +1608,7 @@ mod tests {
         let meta=CustomBrushMeta{
             id:"continuous".into(),name:"continuous".into(),source_format:"Krita .kpp".into(),
             source_path:String::new(),icon_path:String::new(),tip_paths:vec![],
+            default_size:30.0,
             spacing:0.10,opacity:1.0,flow:1.0,size_pressure:0.0,opacity_pressure:0.0,
             angle_deg:0.0,follow_stroke:false,scatter:0.0,random_tip:false,tip_scale:1.0,
             render_mode:CustomBrushRenderMode::Continuous,
