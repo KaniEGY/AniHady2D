@@ -1025,6 +1025,25 @@ fn generate_stick_window_icon() -> egui::IconData {
     }
     egui::IconData { rgba, width: size, height: size }
 }
+fn launcher_app_icon_texture(ctx: &egui::Context) -> egui::TextureHandle {
+    let id = egui::Id::new("stick_launcher_app_icon");
+    if let Some(existing) = ctx.data(|d| d.get_temp::<egui::TextureHandle>(id)) {
+        return existing;
+    }
+    let icon = generate_stick_window_icon();
+    let image = egui::ColorImage::from_rgba_unmultiplied(
+        [icon.width as usize, icon.height as usize],
+        &icon.rgba,
+    );
+    let texture = ctx.load_texture(
+        "stick_launcher_app_icon_texture",
+        image,
+        egui::TextureOptions::LINEAR,
+    );
+    ctx.data_mut(|d| d.insert_temp(id, texture.clone()));
+    texture
+}
+
 
 fn setup_custom_fonts(ctx: &egui::Context) {
     let mut fonts = egui::FontDefinitions::default();
@@ -4926,7 +4945,15 @@ impl eframe::App for StickApp {
             egui::CentralPanel::default().show(ctx, |ui| {
                 ui.vertical_centered(|ui| {
                     ui.add_space(90.0);
-                    ui.heading(egui::RichText::new("Stick Studio").size(36.0).color(egui::Color32::from_rgb(255, 215, 25)));
+                    let launcher_icon = launcher_app_icon_texture(ctx);
+                    ui.horizontal(|ui| {
+                        let content_width = 122.0;
+                        ui.add_space(((ui.available_width() - content_width) * 0.5).max(0.0));
+                        ui.heading(egui::RichText::new("Stick").size(36.0)
+                            .color(egui::Color32::from_rgb(255, 215, 25)));
+                        ui.add_space(6.0);
+                        ui.image((launcher_icon.id(), egui::vec2(38.0, 38.0)));
+                    });
                     ui.add_space(12.0);
                     if ui.add(egui::Button::new(egui::RichText::new(
                         tr(lang,"!  Explore features & modes","!  اعرف مميزات البرنامج"))
@@ -4936,7 +4963,7 @@ impl eframe::App for StickApp {
                         self.show_features_guide=true;
                     }
                     ui.add_space(12.0);
-                    ui.label(egui::RichText::new(tr(lang, "Are you here to draw or animate?", "هل أنت داخل ترسم؟")).size(24.0).color(egui::Color32::WHITE));
+                    ui.label(egui::RichText::new(tr(lang, "What are you here to do?", "انت داخل تعمل ايه ؟")).size(24.0).color(egui::Color32::WHITE));
                     ui.add_space(30.0);
                     ui.horizontal(|ui| {
                         ui.add_space((ui.available_width() - 440.0).max(10.0) * 0.5);
@@ -10233,6 +10260,12 @@ mod tool_discovery_tests {
         assert_eq!(transform.center(),pointer);
     }
 
+    #[test]
+    fn launcher_copy_uses_requested_wording() {
+        assert_eq!(tr(AppLang::English, "What are you here to do?", "انت داخل تعمل ايه ؟"),
+            "What are you here to do?");
+        assert!(!"Stick".contains("Studio"));
+    }
     #[test]
     fn canvas_flip_shortcuts_default_to_requested_v_and_f() {
         let c=AppConfig::default();
