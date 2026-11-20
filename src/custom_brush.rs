@@ -25,6 +25,8 @@ const MAX_TIPS: usize = 32;
 const MAX_IMPORT_BRUSHES: usize = 128;
 const MAX_TIP_SIDE: u32 = 512;
 
+fn default_tip_scale() -> f32 { 1.0 }
+
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct CustomBrushMeta {
     pub id: String,
@@ -42,6 +44,8 @@ pub struct CustomBrushMeta {
     pub follow_stroke: bool,
     pub scatter: f32,
     pub random_tip: bool,
+    #[serde(default = "default_tip_scale")]
+    pub tip_scale: f32,
     #[serde(default)]
     pub compatibility_note: String,
 }
@@ -62,6 +66,7 @@ pub struct ImportedBrushDraft {
     pub follow_stroke: bool,
     pub scatter: f32,
     pub random_tip: bool,
+    pub tip_scale: f32,
     pub compatibility_note: String,
 }
 
@@ -211,6 +216,7 @@ pub fn install_draft(
         follow_stroke: draft.follow_stroke,
         scatter: draft.scatter.clamp(0.0, 3.0),
         random_tip: draft.random_tip,
+        tip_scale: draft.tip_scale.clamp(0.05, 8.0),
         compatibility_note: draft.compatibility_note.clone(),
     };
     register_meta(&meta);
@@ -375,12 +381,15 @@ impl Stamp {
 }
 
 fn emit_stamps(stroke:&Stroke,brush:&RuntimeBrush,mut emit:impl FnMut(Stamp)){
-    let ratio=(brush.meta.spacing*2.0).clamp(0.04,2.0);
+    // Vendor spacing is stored as a fraction of the brush DIAMETER while the
+    // shared sampler expects a fraction of RADIUS. Preserve that distinction:
+    // Krita spacing=0.1 must become 0.2 radius, not 2.0.
+    let ratio=(brush.meta.spacing*2.0*brush.meta.tip_scale).clamp(0.02,2.0);
     let mut ordinal=0u32;
     visit_pressure_dabs_spaced(&stroke.points,stroke.base_width,ratio,|dab,[dx,dy]|{
         let p=(2.0*dab.radius/stroke.base_width.max(0.001)).clamp(0.0,1.5);
         let size_factor=(1.0-brush.meta.size_pressure)+brush.meta.size_pressure*p;
-        let r=(stroke.base_width*0.5*size_factor).max(0.25);
+        let r=(stroke.base_width*0.5*size_factor*brush.meta.tip_scale).max(0.25);
         let flow=brush.meta.flow*((1.0-brush.meta.opacity_pressure)+brush.meta.opacity_pressure*p)
             .clamp(0.02,1.5);
         let jitter=unit_noise(ordinal.wrapping_add(hash_id(&brush.meta.id)));
@@ -452,7 +461,7 @@ fn baseline_draft(path:&Path,format:&str,note:&str)->ImportedBrushDraft{
         source_format:format.to_owned(),source_path:path.to_path_buf(),
         tips:vec![round_tip(96,0.9)],icon:None,spacing:0.10,opacity:1.0,flow:1.0,
         size_pressure:1.0,opacity_pressure:0.0,angle_deg:0.0,follow_stroke:false,
-        scatter:0.0,random_tip:false,compatibility_note:note.to_owned(),
+        scatter:0.0,random_tip:false,tip_scale:1.0,compatibility_note:note.to_owned(),
     }
 }
 
@@ -464,7 +473,7 @@ fn import_image(path:&Path)->Result<Vec<ImportedBrushDraft>,String>{
         source_format:"Image brush tip".into(),source_path:path.to_path_buf(),
         tips:vec![tip],icon:Some(icon_from_image(img)),spacing:0.10,opacity:1.0,flow:1.0,
         size_pressure:1.0,opacity_pressure:0.0,angle_deg:0.0,follow_stroke:true,
-        scatter:0.0,random_tip:false,compatibility_note:String::new(),
+        scatter:0.0,random_tip:false,tip_scale:1.0,compatibility_note:String::new(),
     }])
 }
 
@@ -482,7 +491,7 @@ fn import_abr_file(path:&Path)->Result<Vec<ImportedBrushDraft>,String>{
                 source_path:path.to_path_buf(),
                 tips:vec![TipMask{width:bitmap.width,height:bitmap.height,data:bitmap.data}],
                 icon:None,spacing:0.10,opacity:1.0,flow:1.0,size_pressure:1.0,opacity_pressure:0.0,
-                angle_deg:0.0,follow_stroke:false,scatter:0.0,random_tip:false,
+                angle_deg:0.0,follow_stroke:false,scatter:0.0,random_tip:false,tip_scale:1.0,
                 compatibility_note:"ABR tip shape is preserved; vendor-only brush dynamics are mapped to Stick defaults.".into(),
             });
         }
@@ -499,7 +508,7 @@ fn import_gbr_file(path:&Path)->Result<Vec<ImportedBrushDraft>,String>{
         source_format:"Krita / GIMP .gbr".into(),source_path:path.to_path_buf(),
         tips:vec![tip],icon:None,spacing:(spacing as f32/100.0).clamp(0.02,2.0),
         opacity:1.0,flow:1.0,size_pressure:1.0,opacity_pressure:0.0,angle_deg:0.0,
-        follow_stroke:false,scatter:0.0,random_tip:false,compatibility_note:String::new(),
+        follow_stroke:false,scatter:0.0,random_tip:false,tip_scale:1.0,compatibility_note:String::new(),
     }])
 }
 
@@ -530,7 +539,7 @@ fn parse_gih_bytes(data:&[u8],path:&Path)->Result<Vec<ImportedBrushDraft>,String
         suggested_name:if name.is_empty(){path.file_stem().and_then(|s|s.to_str()).unwrap_or("GIH Brush").to_owned()}else{name},
         source_format:"Krita / GIMP .gih".into(),source_path:path.to_path_buf(),tips,icon:None,
         spacing:(spacing as f32/100.0).clamp(0.02,2.0),opacity:1.0,flow:1.0,size_pressure:1.0,
-        opacity_pressure:0.0,angle_deg:0.0,follow_stroke:false,scatter:0.0,random_tip:random,
+        opacity_pressure:0.0,angle_deg:0.0,follow_stroke:false,scatter:0.0,random_tip:random,tip_scale:1.0,
         compatibility_note:"Multi-tip GIH order is preserved as sequential/random in Stick.".into(),
     }])
 }
@@ -564,12 +573,42 @@ fn import_kpp_file(path:&Path)->Result<Vec<ImportedBrushDraft>,String>{
     Ok(vec![parse_kpp_bytes(&data,path)?])
 }
 
+fn read_krita_resource_near(source_path:&Path,filename:&str)->Option<Vec<u8>>{
+    let file=Path::new(filename).file_name()?.to_owned();
+    let parent=source_path.parent().unwrap_or(Path::new("."));
+    let mut candidates=vec![
+        parent.join(&file),
+        parent.join("brushes").join(&file),
+    ];
+    if let Some(up)=parent.parent(){
+        candidates.push(up.join("brushes").join(&file));
+    }
+    if let Some(appdata)=std::env::var_os("APPDATA"){
+        candidates.push(PathBuf::from(appdata).join("krita").join("brushes").join(&file));
+    }
+    if let Some(local)=std::env::var_os("LOCALAPPDATA"){
+        candidates.push(PathBuf::from(local).join("krita").join("brushes").join(&file));
+    }
+    candidates.into_iter().find_map(|p|fs::read(p).ok())
+}
+
 fn parse_kpp_bytes(data:&[u8],source_path:&Path)->Result<ImportedBrushDraft,String>{
     let img=image::load_from_memory(data).map_err(|e|format!("KPP preview PNG: {e}"))?;
     let icon=Some(icon_from_image(img));
     let text=png_text_chunks(data);
     let xml=text.get("preset").cloned().ok_or("KPP has no preset metadata")?;
-    let doc=roxmltree::Document::parse(&xml).map_err(|e|format!("KPP preset XML: {e}"))?;
+    parse_krita_preset_xml(&xml,icon,source_path,|name|read_krita_resource_near(source_path,name))
+}
+
+fn parse_krita_preset_xml<F>(
+    xml:&str,
+    icon:Option<IconImage>,
+    source_path:&Path,
+    mut resolve_resource:F,
+)->Result<ImportedBrushDraft,String>
+where F:FnMut(&str)->Option<Vec<u8>>
+{
+    let doc=roxmltree::Document::parse(xml).map_err(|e|format!("KPP preset XML: {e}"))?;
     let root=doc.descendants().find(|n|n.has_tag_name("Preset")).ok_or("KPP Preset element missing")?;
     let name=root.attribute("name")
         .unwrap_or_else(||source_path.file_stem().and_then(|s|s.to_str()).unwrap_or("Krita Brush"))
@@ -592,6 +631,7 @@ fn parse_kpp_bytes(data:&[u8],source_path:&Path)->Result<ImportedBrushDraft,Stri
         params.insert(k.to_owned(),value);
     }
 
+    // Some modern KPPs embed resource data directly in the preset XML.
     let mut tips=Vec::new();
     for r in doc.descendants().filter(|n|n.has_tag_name("resource")).take(MAX_TIPS) {
         let rtype=r.attribute("type").unwrap_or("");
@@ -601,7 +641,7 @@ fn parse_kpp_bytes(data:&[u8],source_path:&Path)->Result<ImportedBrushDraft,Stri
             base64::engine::general_purpose::STANDARD
                 .decode(t.split_whitespace().collect::<String>()).ok());
         if let Some(raw)=raw {
-            if let Some(tip)=tip_from_resource(filename,&raw) {tips.push(tip);}
+            tips.extend(tips_from_resource(filename,&raw));
         }
     }
 
@@ -609,14 +649,25 @@ fn parse_kpp_bytes(data:&[u8],source_path:&Path)->Result<ImportedBrushDraft,Stri
     let mut angle_deg=0.0_f32;
     let mut auto_hardness=0.90_f32;
     let mut auto_ratio=1.0_f32;
+    let mut tip_scale=1.0_f32;
+    let mut brush_type="auto_brush".to_owned();
+    let mut definition_resource=String::new();
+
     if let Some(def)=params.get("brush_definition") {
         let cleaned=def.replace("<!DOCTYPE BrushTip>", "");
         if let Ok(bdoc)=roxmltree::Document::parse(cleaned.trim()) {
             if let Some(brush)=bdoc.descendants().find(|n|n.has_tag_name("Brush")) {
-                spacing=brush.attribute("spacing").and_then(|v|v.parse::<f32>().ok())
-                    .unwrap_or(spacing).clamp(0.02,2.0);
+                brush_type=brush.attribute("type").unwrap_or("auto_brush").to_ascii_lowercase();
+                // IMPORTANT: this is the real brush-tip spacing. SpacingValue is
+                // a dynamics multiplier and must never replace it.
+                if let Some(v)=brush.attribute("spacing").and_then(|v|v.parse::<f32>().ok()) {
+                    spacing=v.clamp(0.005,2.0);
+                }
+                tip_scale=brush.attribute("scale").and_then(|v|v.parse::<f32>().ok())
+                    .unwrap_or(1.0).clamp(0.05,8.0);
                 angle_deg=brush.attribute("angle").and_then(|v|v.parse::<f32>().ok())
                     .map(|r|r.to_degrees()).unwrap_or(0.0);
+                definition_resource=brush.attribute("filename").unwrap_or("").trim().to_owned();
                 if let Some(mask)=brush.descendants().find(|n|n.has_tag_name("MaskGenerator")) {
                     let h=mask.attribute("hfade").and_then(|v|v.parse::<f32>().ok()).unwrap_or(0.9);
                     let v=mask.attribute("vfade").and_then(|v|v.parse::<f32>().ok()).unwrap_or(h);
@@ -627,41 +678,87 @@ fn parse_kpp_bytes(data:&[u8],source_path:&Path)->Result<ImportedBrushDraft,Stri
             }
         }
     }
-    if let Some(v)=find_number_in_params(&params,&["SpacingValue","Spacing"]) {
-        spacing=if v>2.0{v/100.0}else{v};
-    }
-    spacing=spacing.clamp(0.02,2.0);
+
     let opacity=find_number_in_params(&params,&["OpacityValue","opacity"])
         .map(|v|if v>1.0{v/100.0}else{v}).unwrap_or(1.0).clamp(0.05,1.0);
     let flow=find_number_in_params(&params,&["FlowValue","flow"])
         .map(|v|if v>1.0{v/100.0}else{v}).unwrap_or(1.0).clamp(0.02,1.0);
+
+    let pressure_size=params.get("PressureSize").is_some_and(|v|is_truthy(v));
     let size_sensor=params.get("SizeSensor").map(String::as_str).unwrap_or("");
-    let size_pressure=params.get("PressureSize").is_some_and(|v|is_truthy(v))
-        && size_sensor.to_ascii_lowercase().contains("pressure");
+    let size_pressure=pressure_size && size_sensor.to_ascii_lowercase().contains("pressure");
+
+    let pressure_opacity=params.get("PressureOpacity").is_some_and(|v|is_truthy(v));
     let opacity_sensor=params.get("OpacitySensor").map(String::as_str).unwrap_or("");
-    let opacity_pressure=if opacity_sensor.to_ascii_lowercase().contains("pressure"){1.0}else{0.0};
+    let opacity_pressure=if pressure_opacity
+        && opacity_sensor.to_ascii_lowercase().contains("pressure"){1.0}else{0.0};
+
+    let pressure_rotation=params.get("PressureRotation").is_some_and(|v|is_truthy(v));
     let rotation_sensor=params.get("RotationSensor").map(String::as_str).unwrap_or("").to_ascii_lowercase();
-    let follow_stroke=rotation_sensor.contains("drawingangle");
-    let scatter=find_number_in_params(&params,&["ScatterValue","Scattering/Amount"])
-        .unwrap_or(0.0).clamp(0.0,3.0);
+    let follow_stroke=pressure_rotation && rotation_sensor.contains("drawingangle");
+
+    // Krita's own setPaintOpScatter() writes ScatterValue AND toggles
+    // PressureScatter based on whether the value is non-zero. Old presets can
+    // retain a stale ScatterValue while PressureScatter=false. Applying that
+    // stale value was the cause of imported ink strokes wandering into dots.
+    let pressure_scatter=params.get("PressureScatter").is_some_and(|v|is_truthy(v));
+    let scatter=if pressure_scatter {
+        find_number_in_params(&params,&["ScatterValue"]).unwrap_or(0.0).clamp(0.0,3.0)
+    } else {
+        0.0
+    };
+
+    if tips.is_empty() && brush_type!="auto_brush" {
+        let required=params.get("requiredBrushFile")
+            .map(|s|s.trim()).filter(|s|!s.is_empty())
+            .unwrap_or(definition_resource.trim());
+        if !required.is_empty() {
+            if let Some(raw)=resolve_resource(required) {
+                tips.extend(tips_from_resource(required,&raw));
+            }
+            if tips.is_empty() {
+                return Err(format!(
+                    "Krita brush '{name}' needs the external tip '{required}'. \
+Put that .gih/.gbr beside the .kpp, keep the original 'brushes' folder next to \
+'paintoppresets', or import the complete Krita .bundle. Stick will not replace \
+a missing real tip with a fake round brush."
+                ));
+            }
+        } else {
+            return Err(format!(
+                "Krita brush '{name}' uses '{brush_type}' but contains no readable brush tip. \
+Stick refused the old round-tip fallback because it changes the brush."
+            ));
+        }
+    }
 
     if tips.is_empty() {
+        // auto_brush is self-contained: rebuild the actual generated mask from
+        // the KPP brush_definition instead of substituting a generic hard dot.
         let tip=if auto_ratio<0.96 {
-            elliptical_tip(96,auto_hardness,auto_ratio,angle_deg)
+            elliptical_tip(128,auto_hardness,auto_ratio,angle_deg)
         } else {
-            round_tip(96,auto_hardness)
+            round_tip(128,auto_hardness)
         };
         tips.push(tip);
     }
-    let note=if matches!(paintop.as_str(),"paintbrush"|"roundmarker"|"sketchbrush"|"chalkbrush"|"mypaintbrush") {
-        format!("Krita {paintop} preset mapped to Stick raster dynamics; embedded brush tips and pressure sensors are preserved where representable.")
+
+    let note=if brush_type=="auto_brush" {
+        format!(
+            "Krita {paintop} auto-brush mapped from brush_definition: spacing {:.1}%, pressure size {}, pressure opacity {}, scatter {:.2}.",
+            spacing*100.0,size_pressure,opacity_pressure>0.0,scatter
+        )
     } else {
-        format!("Krita {paintop} brush engine has no exact Stick equivalent; tip, spacing, flow, opacity and available pressure dynamics were normalized.")
+        format!(
+            "Krita {paintop} {brush_type} imported with its real brush-tip resource; spacing {:.1}% and scale {:.2} preserved.",
+            spacing*100.0,tip_scale
+        )
     };
+
     Ok(ImportedBrushDraft{
         suggested_name:name,source_format:"Krita .kpp".into(),source_path:source_path.to_path_buf(),
         tips,icon,spacing,opacity,flow,size_pressure:if size_pressure{1.0}else{0.0},
-        opacity_pressure,angle_deg,follow_stroke,scatter,random_tip:false,
+        opacity_pressure,angle_deg,follow_stroke,scatter,random_tip:false,tip_scale,
         compatibility_note:note,
     })
 }
@@ -670,21 +767,45 @@ fn import_krita_bundle(path:&Path)->Result<Vec<ImportedBrushDraft>,String>{
     let bytes=fs::read(path).map_err(|e|e.to_string())?;
     let cursor=Cursor::new(bytes);
     let mut zip=zip::ZipArchive::new(cursor).map_err(|e|format!("Krita bundle: {e}"))?;
-    let mut out=Vec::new();
+
+    // Read the bundle once so every .kpp can resolve its sibling brush
+    // resources (GBR/GIH/images) from the same archive.
+    let mut entries=Vec::<(String,Vec<u8>)>::new();
     for i in 0..zip.len() {
-        if out.len()>=MAX_IMPORT_BRUSHES{break}
         let mut file=zip.by_index(i).map_err(|e|e.to_string())?;
-        let name=file.name().to_owned();
-        if !name.to_ascii_lowercase().ends_with(".kpp"){continue}
-        let mut data=Vec::new();file.read_to_end(&mut data).map_err(|e|e.to_string())?;
-        let pseudo=PathBuf::from(&name);
-        if let Ok(mut draft)=parse_kpp_bytes(&data,&pseudo) {
+        if file.is_dir(){continue}
+        let name=file.name().replace('\\',"/");
+        let mut data=Vec::new();
+        file.read_to_end(&mut data).map_err(|e|e.to_string())?;
+        entries.push((name,data));
+    }
+
+    let mut out=Vec::new();
+    for (entry_name,data) in entries.iter()
+        .filter(|(name,_)|name.to_ascii_lowercase().ends_with(".kpp"))
+        .take(MAX_IMPORT_BRUSHES)
+    {
+        let pseudo=PathBuf::from(entry_name);
+        let parsed=parse_krita_preset_xml(
+            &png_text_chunks(data).get("preset").cloned().unwrap_or_default(),
+            image::load_from_memory(data).ok().map(icon_from_image),
+            &pseudo,
+            |wanted|{
+                let wanted_name=Path::new(wanted).file_name()
+                    .and_then(|s|s.to_str()).unwrap_or(wanted);
+                entries.iter().find(|(name,_)|{
+                    Path::new(name).file_name().and_then(|s|s.to_str())
+                        .is_some_and(|n|n.eq_ignore_ascii_case(wanted_name))
+                }).map(|(_,bytes)|bytes.clone())
+            }
+        );
+        if let Ok(mut draft)=parsed {
             draft.source_path=path.to_path_buf();
             draft.source_format="Krita .bundle".into();
             out.push(draft);
         }
     }
-    if out.is_empty(){return Err("Krita bundle contains no readable .kpp presets".into())}
+    if out.is_empty(){return Err("Krita bundle contains no readable brush presets/resources".into())}
     Ok(out)
 }
 
@@ -701,7 +822,7 @@ fn import_myb_file(path:&Path)->Result<Vec<ImportedBrushDraft>,String>{
         source_format:"Krita / MyPaint .myb".into(),source_path:path.to_path_buf(),
         tips:vec![round_tip(96,hardness)],icon:None,spacing:(0.5/dabs).clamp(0.02,0.5),
         opacity:opaque,flow:1.0,size_pressure:1.0,opacity_pressure:0.0,angle_deg:0.0,
-        follow_stroke:false,scatter:0.0,random_tip:false,
+        follow_stroke:false,scatter:0.0,random_tip:false,tip_scale:1.0,
         compatibility_note:"MyPaint core size/opacity/hardness/spacing are mapped; advanced input mappings are approximated.".into(),
     }])
 }
@@ -754,7 +875,7 @@ fn import_sut_file(path:&Path)->Result<Vec<ImportedBrushDraft>,String>{
     Ok(vec![ImportedBrushDraft{
         suggested_name:name,source_format:"Clip Studio Paint .sut".into(),source_path:path.to_path_buf(),
         tips,icon,spacing,opacity,flow,size_pressure:1.0,opacity_pressure:0.0,angle_deg:rotation,
-        follow_stroke:false,scatter,random_tip:num("BrushPatternOrderType",0.0) as i32==3,
+        follow_stroke:false,scatter,random_tip:num("BrushPatternOrderType",0.0) as i32==3,tip_scale:1.0,
         compatibility_note:"CSP size/opacity/flow/spacing/rotation and readable embedded tip thumbnails are mapped. CSP-only mixing, encrypted material internals and some dynamics are approximated.".into(),
     }])
 }
@@ -842,7 +963,7 @@ fn import_blend_file(path:&Path)->Result<Vec<ImportedBrushDraft>,String>{
                 source_format:"Blender Grease Pencil .blend/.asset.blend".into(),
                 source_path:path.to_path_buf(),tips:vec![round_tip(96,hardness)],icon:None,
                 spacing,opacity:alpha,flow,size_pressure,opacity_pressure,angle_deg:0.0,
-                follow_stroke:false,scatter:jitter,random_tip:false,
+                follow_stroke:false,scatter:jitter,random_tip:false,tip_scale:1.0,
                 compatibility_note:format!(
                     "Blender Brush settings mapped: size {size}px, spacing {:.0}%, opacity {:.0}%, jitter {:.2}, smooth {:.2}, Grease Pencil type {}. Asset materials/textures without a Stick equivalent are approximated.",
                     spacing*100.0,alpha*100.0,jitter,smooth,gp_type),
@@ -858,13 +979,15 @@ fn import_blend_file(path:&Path)->Result<Vec<ImportedBrushDraft>,String>{
     }
 }
 
-fn tip_from_resource(filename:&str,data:&[u8])->Option<TipMask>{
+fn tips_from_resource(filename:&str,data:&[u8])->Vec<TipMask>{
     let ext=Path::new(filename).extension().and_then(|s|s.to_str()).unwrap_or("").to_ascii_lowercase();
     match ext.as_str(){
-        "gbr"=>parse_gbr(data,0).ok().map(|x|x.1),
-        "gih"=>parse_gih_bytes(data,Path::new(filename)).ok().and_then(|v|v.into_iter().next()).and_then(|d|d.tips.into_iter().next()),
-        "png"|"jpg"|"jpeg"|"webp"|"bmp"=>image::load_from_memory(data).ok().map(|i|tip_from_image(&i)),
-        _=>None,
+        "gbr"=>parse_gbr(data,0).ok().map(|x|vec![x.1]).unwrap_or_default(),
+        "gih"=>parse_gih_bytes(data,Path::new(filename)).ok()
+            .and_then(|v|v.into_iter().next()).map(|d|d.tips).unwrap_or_default(),
+        "png"|"jpg"|"jpeg"|"webp"|"bmp"=>image::load_from_memory(data)
+            .ok().map(|i|vec![tip_from_image(&i)]).unwrap_or_default(),
+        _=>Vec::new(),
     }
 }
 
@@ -1051,6 +1174,110 @@ mod tests {
         let (n,tip,spacing,_)=parse_gbr(&data,0).unwrap();
         assert_eq!(n,"test");assert_eq!((tip.width,tip.height),(2,1));
         assert_eq!(tip.data,vec![10,240]);assert_eq!(spacing,25);
+    }
+
+    #[test]
+    fn krita_kpp_uses_brush_definition_spacing_not_spacingvalue_multiplier() {
+        let xml=r#"<Preset paintopid="paintbrush" name="GDquest_Ink_Sketch">
+            <param name="PressureSize" type="internal">true</param>
+            <param name="SizeSensor" type="string"><![CDATA[<!DOCTYPE params><params id="pressure"/>]]></param>
+            <param name="PressureOpacity" type="internal">true</param>
+            <param name="OpacitySensor" type="string"><![CDATA[<!DOCTYPE params><params id="pressure"/>]]></param>
+            <param name="PressureScatter" type="internal">false</param>
+            <param name="ScatterValue" type="internal">1</param>
+            <param name="Scattering/Amount" type="internal">1</param>
+            <param name="SpacingValue" type="internal">1</param>
+            <param name="brush_definition" type="string"><![CDATA[
+                <Brush type="auto_brush" spacing="0.1" angle="0" scale="1">
+                    <MaskGenerator ratio="1" hfade="0.9" vfade="0.9" type="circle" diameter="11"/>
+                </Brush>
+            ]]></param>
+        </Preset>"#;
+        let draft=parse_krita_preset_xml(xml,None,Path::new("GDquest_Ink_Sketch.kpp"),|_|None).unwrap();
+        assert!((draft.spacing-0.1).abs()<0.0001,"spacing={}",draft.spacing);
+        assert_eq!(draft.scatter,0.0,"disabled Krita scatter must stay disabled");
+        assert_eq!(draft.size_pressure,1.0);
+        assert_eq!(draft.opacity_pressure,1.0);
+        assert_eq!(draft.tips.len(),1);
+    }
+
+    #[test]
+    fn krita_predefined_tip_is_not_silently_replaced_with_round_fallback() {
+        let xml=r#"<Preset paintopid="paintbrush" name="Water_Waves">
+            <param name="PressureSize" type="internal">true</param>
+            <param name="SizeSensor" type="string"><![CDATA[<!DOCTYPE params><params id="pressure"/>]]></param>
+            <param name="requiredBrushFile" type="string"><![CDATA[LJF_Water_Brush_03.gih]]></param>
+            <param name="brush_definition" type="string"><![CDATA[
+                <Brush type="gbr_brush" filename="LJF_Water_Brush_03.gih" spacing="0.1" scale="2.80406"/>
+            ]]></param>
+        </Preset>"#;
+        let err=parse_krita_preset_xml(xml,None,Path::new("water.kpp"),|_|None).unwrap_err();
+        assert!(err.contains("LJF_Water_Brush_03.gih"));
+        assert!(err.contains("fake round brush"));
+    }
+
+    #[test]
+    fn krita_predefined_gbr_resource_preserves_tip_and_scale() {
+        let name=b"water\0";
+        let header=(28+name.len()) as u32;
+        let mut gbr=Vec::new();
+        for v in [header,2,2,1,1,u32::from_be_bytes(*b"GIMP"),10] {
+            gbr.extend(v.to_be_bytes());
+        }
+        gbr.extend(name);
+        gbr.extend([12,240]);
+
+        let xml=r#"<Preset paintopid="paintbrush" name="Resource_Brush">
+            <param name="requiredBrushFile" type="string">water.gbr</param>
+            <param name="brush_definition" type="string"><![CDATA[
+                <Brush type="gbr_brush" filename="water.gbr" spacing="0.1" scale="2.5"/>
+            ]]></param>
+        </Preset>"#;
+        let draft=parse_krita_preset_xml(xml,None,Path::new("resource.kpp"),|wanted|{
+            (wanted=="water.gbr").then(||gbr.clone())
+        }).unwrap();
+        assert_eq!(draft.tips.len(),1);
+        assert_eq!(draft.tips[0].data,vec![12,240]);
+        assert!((draft.tip_scale-2.5).abs()<0.001);
+        assert!((draft.spacing-0.1).abs()<0.001);
+    }
+
+    #[test]
+    fn imported_krita_ten_percent_spacing_is_dense_not_beads() {
+        let meta=CustomBrushMeta{
+            id:"test".into(),name:"test".into(),source_format:"Krita .kpp".into(),
+            source_path:String::new(),icon_path:String::new(),tip_paths:vec![],
+            spacing:0.1,opacity:1.0,flow:1.0,size_pressure:0.0,opacity_pressure:0.0,
+            angle_deg:0.0,follow_stroke:false,scatter:0.0,random_tip:false,tip_scale:1.0,
+            compatibility_note:String::new(),
+        };
+        let brush=RuntimeBrush{meta,tips:vec![round_tip(64,0.9)],icon:None};
+        let stroke=Stroke{
+            points:vec![
+                crate::project::StrokePoint{x:0.0,y:0.0,pressure:1.0},
+                crate::project::StrokePoint{x:100.0,y:0.0,pressure:1.0},
+            ],
+            color:[0,0,0,255],fill_color:None,base_width:20.0,is_vector:false,
+            brush_preset:crate::project::KritaBrushPreset::GPenInk,opacity:1.0,
+            brush_texture_id:Some("custom:test".into()),tip_shape:crate::project::BrushTipShape::Round,
+        };
+        let mut centers=Vec::new();
+        emit_stamps(&stroke,&brush,|stamp|centers.push(stamp.center[0]));
+        assert!(centers.len()>40,"only {} stamps",centers.len());
+        let max_gap=centers.windows(2).map(|w|w[1]-w[0]).fold(0.0_f32,f32::max);
+        assert!(max_gap<=2.1,"visible bead gap: {max_gap}");
+    }
+
+    #[test]
+    fn old_custom_brush_metadata_defaults_tip_scale_to_one() {
+        let json=r#"{
+          "id":"old","name":"old","source_format":"Krita .kpp","source_path":"",
+          "icon_path":"","tip_paths":[],"spacing":0.1,"opacity":1.0,"flow":1.0,
+          "size_pressure":1.0,"opacity_pressure":0.0,"angle_deg":0.0,
+          "follow_stroke":false,"scatter":0.0,"random_tip":false
+        }"#;
+        let meta:CustomBrushMeta=serde_json::from_str(json).unwrap();
+        assert_eq!(meta.tip_scale,1.0);
     }
 
     #[test]
