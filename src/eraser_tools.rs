@@ -4,6 +4,16 @@
 use crate::project::{Stroke, StrokePoint};
 use crate::fill_tools::contour_contains;
 
+#[derive(Clone,Copy,Debug,PartialEq,Eq)]
+pub enum EraserMode {
+    Partial,
+    WholeStroke,
+}
+impl Default for EraserMode {
+    fn default()->Self{Self::Partial}
+}
+
+
 fn distance_sq_segment(a:&StrokePoint,b:&StrokePoint,c:(f32,f32)) -> f32 {
     let dx=b.x-a.x;
     let dy=b.y-a.y;
@@ -123,6 +133,15 @@ pub fn erase_partial(strokes:&mut Vec<Stroke>,center:(f32,f32),radius:f32)->bool
     }
     *strokes=output;
     changed
+}
+
+pub fn erase_with_mode(
+    strokes:&mut Vec<Stroke>,center:(f32,f32),radius:f32,mode:EraserMode
+)->bool{
+    match mode {
+        EraserMode::Partial=>erase_partial(strokes,center,radius),
+        EraserMode::WholeStroke=>erase_whole(strokes,center,radius),
+    }
 }
 
 #[cfg(test)]
