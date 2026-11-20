@@ -4571,9 +4571,12 @@ impl StickApp {
                     }
 
                     for meta in &self.custom_brushes {
-                        let is_sel=self.active_custom_brush.as_deref()==Some(meta.id.as_str());
+                        let disabled=!meta.disabled_reason.is_empty();
+                        let is_sel=!disabled
+                            && self.active_custom_brush.as_deref()==Some(meta.id.as_str());
                         let (btn_rect,resp)=ui.allocate_exact_size(egui::vec2(44.0,44.0),egui::Sense::click());
-                        let bg=if is_sel { egui::Color32::from_rgb(0,122,204) }
+                        let bg=if disabled { egui::Color32::from_rgb(62,48,48) }
+                            else if is_sel { egui::Color32::from_rgb(0,122,204) }
                             else if resp.hovered(){egui::Color32::from_rgb(62,64,72)}
                             else{egui::Color32::from_rgb(44,46,52)};
                         ui.painter().rect_filled(btn_rect,6.0,bg);
@@ -4581,18 +4584,37 @@ impl StickApp {
                         if !custom_brush::draw_icon(ui.painter(),icon_area,&meta.id) {
                             ui.painter().circle_filled(icon_area.center(),8.0,egui::Color32::LIGHT_GRAY);
                         }
+                        if disabled {
+                            ui.painter().text(icon_area.right_top()+egui::vec2(-4.0,4.0),
+                                egui::Align2::RIGHT_TOP,"!",egui::FontId::proportional(16.0),
+                                egui::Color32::from_rgb(255,120,110));
+                        }
                         let short:String=meta.name.chars().take(8).collect();
                         ui.painter().text(egui::pos2(btn_rect.center().x,btn_rect.bottom()-7.0),
-                            egui::Align2::CENTER_CENTER,short,egui::FontId::proportional(9.0),egui::Color32::WHITE);
-                        if resp.clone().on_hover_text(format!("{}\n{}",meta.name,meta.source_format)).clicked() {
-                            self.active_custom_brush=Some(meta.id.clone());
-                            self.active_krita_brush=KritaBrushPreset::GPenInk;
-                            self.brush_opacity=meta.opacity;
-                            self.play_sfx(SfxType::UiClick);
+                            egui::Align2::CENTER_CENTER,short,egui::FontId::proportional(9.0),
+                            if disabled {egui::Color32::LIGHT_GRAY}else{egui::Color32::WHITE});
+                        let hover=if disabled {
+                            format!("{}\n{}\n{}",meta.name,meta.source_format,meta.disabled_reason)
+                        } else {
+                            format!("{}\n{}",meta.name,meta.source_format)
+                        };
+                        if resp.clone().on_hover_text(hover).clicked() {
+                            if disabled {
+                                self.brush_import_message=meta.disabled_reason.clone();
+                            } else {
+                                self.active_custom_brush=Some(meta.id.clone());
+                                self.active_krita_brush=KritaBrushPreset::GPenInk;
+                                self.brush_opacity=meta.opacity;
+                                self.play_sfx(SfxType::UiClick);
+                            }
                         }
                         resp.context_menu(|ui| {
                             ui.strong(&meta.name);
                             ui.small(&meta.source_format);
+                            if disabled {
+                                ui.colored_label(egui::Color32::from_rgb(255,120,110),
+                                    &meta.disabled_reason);
+                            }
                             if ui.button(tr(lang,"Delete brush","حذف الفرشة")).clicked() {
                                 delete_custom_brush=Some(meta.id.clone());
                                 ui.close_menu();
@@ -4658,7 +4680,10 @@ impl StickApp {
                 if let Some(id)=self.active_custom_brush.as_deref() {
                     if let Some(meta)=self.custom_brushes.iter().find(|b|b.id==id) {
                         ui.small(format!("{} • {}",meta.name,meta.source_format));
-                        if !meta.compatibility_note.is_empty() {
+                        if !meta.disabled_reason.is_empty() {
+                            ui.colored_label(egui::Color32::from_rgb(255,120,110),
+                                &meta.disabled_reason);
+                        } else if !meta.compatibility_note.is_empty() {
                             ui.small(egui::RichText::new(&meta.compatibility_note).weak());
                         }
                     }

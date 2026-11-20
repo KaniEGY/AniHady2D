@@ -89,6 +89,11 @@
 - Artist System and level-up overlays now block canvas/tool input behind the popup, preventing custom cursor and drawing interactions from leaking into background windows.
 
 ### What's new
+- **External brush engine v2:** imported brushes are no longer forced through one generic stamp renderer. Krita auto brushes, Clip Studio round/auto tools, MyPaint brushes and Blender Grease Pencil drawing brushes use a dense continuous renderer; GBR/GIH/ABR and material-tip brushes keep bitmap stamp behavior.
+- Existing imported brushes are now versioned and rebuilt automatically from the original source file Stick saved at import time, so parser fixes also repair brushes that were added in older Stick versions.
+- Old KPP conversions that depended on a missing real GIH/GBR resource are disabled with a clear re-import message instead of continuing to draw a fake round brush.
+- Continuous external brushes are oversampled at large sizes to prevent the visible circle/bead pattern shown by 100px imported brushes.
+- Clip Studio `.sut/.sutg`, Krita `.kpp/.bundle/.myb/.gbr/.gih/.abr`, and Blender Grease Pencil `.blend/.asset.blend` continue through app-specific parsers and preserve the settings Stick can represent.
 - **Updater TLS/CDN reliability fix:** update downloads now retry through fresh HTTPS connections when GitHub/CDN TLS streams fail, including errors such as `cannot decrypt peer's message`.
 - If the Rust HTTPS transport still fails, Stick automatically falls back to Windows `curl.exe`/Schannel, then performs the same published-size, SHA-256, ZIP and PE validation before installing anything.
 - **Krita KPP spacing/import fix:** Stick now keeps the real `brush_definition` spacing (for example 0.1 = 10%) instead of incorrectly replacing it with Krita's `SpacingValue` dynamics multiplier. This fixes imported brushes appearing as rows of separated dots.
@@ -381,6 +386,11 @@
 - اتضاف ملف `ONLINE_ARCHITECTURE_REVIEW_2026-11-19.md` لمراجعة بنية الشبكات والخطوات المستقبلية. صيغة المشاريع وبروتوكول التعاون الحالي ما اتغيروش.
 
 ### إيه الجديد؟
+- **محرك الفرش الخارجية v2:** الفرش المستوردة مبقتش كلها بتترسم بنفس نظام الختمات. فرش Krita Auto وClip Studio العادية وMyPaint وفرش رسم Blender Grease Pencil بقت تستخدم مسار Continuous كثيف، بينما GBR/GIH/ABR والفرش اللي سنّها صورة تفضل Stamp زي طبيعتها.
+- الفرش اللي اتضافت في نسخ Stick القديمة بقى ليها version وبتتعاد ترجمتها تلقائيًا من الملف الأصلي اللي Stick كان حافظ نسخة منه، يعني إصلاحات الـparser الجديدة هتصلح الفرش القديمة من غير ما تفضل محبوسة في التحويل القديم.
+- لو KPP قديم محتاج GIH/GBR حقيقي والملف ناقص، الفرشة هتتعطل برسالة واضحة تطلب إعادة الاستيراد بدل ما تكمل ترسم دايرة مزيفة.
+- الفرش الخارجية الـContinuous بقت تتعمل لها sampling أكثف مع الأحجام الكبيرة عشان تمنع شكل الدواير/الخرز اللي ظهر عند حجم 100.
+- دعم عائلات Clip Studio `.sut/.sutg` وKrita `.kpp/.bundle/.myb/.gbr/.gih/.abr` وBlender Grease Pencil `.blend/.asset.blend` بقى مربوط بمسار تحويل خاص بكل عائلة بدل fallback واحد.
 - **إصلاح موثوقية تحميل التحديثات:** لو اتصال GitHub/CDN رجع خطأ TLS زي `cannot decrypt peer's message`، Stick هيعيد المحاولة باتصالات HTTPS جديدة بدل ما يوقف التحديث فورًا.
 - لو مكتبة Rust نفسها فضلت تفشل، البرنامج هيستخدم تلقائيًا `curl.exe` الخاص بويندوز/Schannel كمسار بديل، وبعدها يفضل فحص الحجم وSHA-256 والـZIP وملف EXE شغالين قبل التثبيت.
 - **إصلاح استيراد فرش Krita KPP:** البرنامج بقى يحافظ على الـspacing الحقيقي الموجود في `brush_definition` (مثلاً 0.1 = 10%) بدل ما كان يستبدله غلط بـ`SpacingValue`، وده كان سبب إن الفرشة تطلع نقط/خرز منفصل.

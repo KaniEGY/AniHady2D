@@ -4,7 +4,7 @@
 //! The original file is kept beside the normalized tip(s) so future versions
 //! can improve the mapping without making users re-import their libraries.
 
-use crate::brush_engine::visit_pressure_dabs_spaced;
+use crate::brush_engine::visit_pressure_dabs_spaced_dense;
 use crate::project::Stroke;
 use base64::Engine;
 use eframe::egui;
@@ -24,8 +24,18 @@ use tiny_skia::{FilterQuality, Pixmap, PixmapPaint, Transform};
 const MAX_TIPS: usize = 32;
 const MAX_IMPORT_BRUSHES: usize = 128;
 const MAX_TIP_SIDE: u32 = 512;
+const CUSTOM_BRUSH_ENGINE_VERSION: u32 = 2;
 
 fn default_tip_scale() -> f32 { 1.0 }
+fn default_engine_version() -> u32 { 0 }
+
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum CustomBrushRenderMode {
+    #[default]
+    Stamp,
+    Continuous,
+}
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct CustomBrushMeta {
@@ -47,6 +57,12 @@ pub struct CustomBrushMeta {
     #[serde(default = "default_tip_scale")]
     pub tip_scale: f32,
     #[serde(default)]
+    pub render_mode: CustomBrushRenderMode,
+    #[serde(default = "default_engine_version")]
+    pub engine_version: u32,
+    #[serde(default)]
+    pub disabled_reason: String,
+    #[serde(default)]
     pub compatibility_note: String,
 }
 
@@ -67,6 +83,7 @@ pub struct ImportedBrushDraft {
     pub scatter: f32,
     pub random_tip: bool,
     pub tip_scale: f32,
+    pub render_mode: CustomBrushRenderMode,
     pub compatibility_note: String,
 }
 
@@ -123,25 +140,101 @@ fn library_path() -> PathBuf {
 
 pub fn load_saved_library() -> Vec<CustomBrushMeta> {
     let path = library_path();
-    let list = fs::read_to_string(path)
+    let mut list = fs::read_to_string(&path)
         .ok()
         .and_then(|s| serde_json::from_str::<Vec<CustomBrushMeta>>(&s).ok())
         .unwrap_or_default();
+
+    let mut changed=false;
+    for meta in &mut list {
+        if meta.engine_version >= CUSTOM_BRUSH_ENGINE_VERSION { continue; }
+        match rebuild_saved_brush(meta) {
+            Ok(true) => changed=true,
+            Ok(false) => {
+                // Multi-brush containers that cannot be matched safely are left
+                // untouched instead of guessing the wrong entry.
+            }
+            Err(error) => {
+                let ext=Path::new(&meta.source_path).extension()
+                    .and_then(|s|s.to_str()).unwrap_or("").to_ascii_lowercase();
+                if ext=="kpp" {
+                    // Old KPP imports could silently become a fake round brush.
+                    // Disable that stale conversion until the user reimports the
+                    // complete preset/resources instead of drawing incorrectly.
+                    meta.disabled_reason=format!("Needs re-import: {error}");
+                    meta.engine_version=CUSTOM_BRUSH_ENGINE_VERSION;
+                    changed=true;
+                }
+            }
+        }
+    }
+    if changed {
+        let _=write_library_file(&list);
+    }
     refresh_runtime(&list);
     list
 }
 
-pub fn save_library(list: &[CustomBrushMeta]) -> Result<(), String> {
-    let root = brush_root();
-    fs::create_dir_all(&root).map_err(|e| e.to_string())?;
-    let data = serde_json::to_string_pretty(list).map_err(|e| e.to_string())?;
-    let dst = library_path();
-    let tmp = dst.with_extension("json.tmp");
-    fs::write(&tmp, data).map_err(|e| e.to_string())?;
-    if dst.exists() {
-        let _ = fs::remove_file(&dst);
+fn write_library_file(list:&[CustomBrushMeta])->Result<(),String>{
+    let root=brush_root();
+    fs::create_dir_all(&root).map_err(|e|e.to_string())?;
+    let data=serde_json::to_string_pretty(list).map_err(|e|e.to_string())?;
+    let dst=library_path();
+    let tmp=dst.with_extension("json.tmp");
+    fs::write(&tmp,data).map_err(|e|e.to_string())?;
+    if dst.exists(){let _=fs::remove_file(&dst);}
+    fs::rename(tmp,dst).map_err(|e|e.to_string())
+}
+
+fn rebuild_saved_brush(meta:&mut CustomBrushMeta)->Result<bool,String>{
+    let source=PathBuf::from(&meta.source_path);
+    if !source.is_file(){return Err("stored source file is missing".into())}
+    let drafts=import_file(&source)?;
+    let selected=if drafts.len()==1 {
+        drafts.into_iter().next()
+    } else {
+        drafts.into_iter().find(|d|d.suggested_name.eq_ignore_ascii_case(&meta.name))
+    };
+    let Some(draft)=selected else {return Ok(false)};
+
+    let dir=brush_root().join(&meta.id);
+    fs::create_dir_all(&dir).map_err(|e|e.to_string())?;
+    for entry in fs::read_dir(&dir).map_err(|e|e.to_string())? {
+        let Ok(entry)=entry else {continue};
+        let name=entry.file_name().to_string_lossy().to_string();
+        if name.starts_with("tip_") && name.ends_with(".png") {
+            let _=fs::remove_file(entry.path());
+        }
     }
-    fs::rename(tmp, dst).map_err(|e| e.to_string())?;
+    let mut tip_paths=Vec::new();
+    for (i,tip) in draft.tips.iter().take(MAX_TIPS).enumerate() {
+        let path=dir.join(format!("tip_{i}.png"));
+        save_tip_png(tip,&path)?;
+        tip_paths.push(path.to_string_lossy().to_string());
+    }
+    if tip_paths.is_empty(){return Err("import produced no usable brush tips".into())}
+
+    meta.tip_paths=tip_paths;
+    meta.source_format=draft.source_format;
+    meta.spacing=draft.spacing.clamp(0.005,2.0);
+    meta.opacity=draft.opacity.clamp(0.05,1.0);
+    meta.flow=draft.flow.clamp(0.02,1.0);
+    meta.size_pressure=draft.size_pressure.clamp(0.0,1.0);
+    meta.opacity_pressure=draft.opacity_pressure.clamp(0.0,1.0);
+    meta.angle_deg=draft.angle_deg;
+    meta.follow_stroke=draft.follow_stroke;
+    meta.scatter=draft.scatter.clamp(0.0,3.0);
+    meta.random_tip=draft.random_tip;
+    meta.tip_scale=draft.tip_scale.clamp(0.05,8.0);
+    meta.render_mode=draft.render_mode;
+    meta.compatibility_note=draft.compatibility_note;
+    meta.disabled_reason.clear();
+    meta.engine_version=CUSTOM_BRUSH_ENGINE_VERSION;
+    Ok(true)
+}
+
+pub fn save_library(list: &[CustomBrushMeta]) -> Result<(), String> {
+    write_library_file(list)?;
     refresh_runtime(list);
     Ok(())
 }
@@ -217,6 +310,9 @@ pub fn install_draft(
         scatter: draft.scatter.clamp(0.0, 3.0),
         random_tip: draft.random_tip,
         tip_scale: draft.tip_scale.clamp(0.05, 8.0),
+        render_mode: draft.render_mode,
+        engine_version: CUSTOM_BRUSH_ENGINE_VERSION,
+        disabled_reason: String::new(),
         compatibility_note: draft.compatibility_note.clone(),
     };
     register_meta(&meta);
@@ -276,7 +372,8 @@ pub fn preview(
     let Some(id)=stroke_custom_id(stroke) else { return false };
     let Ok(map)=runtime().read() else { return false };
     let Some(brush)=map.get(id) else { return false };
-    if brush.tips.is_empty() { return false; }
+    if !brush.meta.disabled_reason.is_empty() { return true; }
+    if brush.tips.is_empty() { return true; }
 
     let ctx=painter.ctx();
     let mut meshes=Vec::with_capacity(brush.tips.len());
@@ -329,7 +426,8 @@ pub fn export(
     let Some(id)=stroke_custom_id(stroke) else {return false};
     let Ok(map)=runtime().read() else {return false};
     let Some(brush)=map.get(id) else {return false};
-    if brush.tips.is_empty(){return false;}
+    if !brush.meta.disabled_reason.is_empty(){return true;}
+    if brush.tips.is_empty(){return true;}
 
     let mut pixmaps=Vec::with_capacity(brush.tips.len());
     for tip in &brush.tips {
@@ -384,9 +482,13 @@ fn emit_stamps(stroke:&Stroke,brush:&RuntimeBrush,mut emit:impl FnMut(Stamp)){
     // Vendor spacing is stored as a fraction of the brush DIAMETER while the
     // shared sampler expects a fraction of RADIUS. Preserve that distinction:
     // Krita spacing=0.1 must become 0.2 radius, not 2.0.
-    let ratio=(brush.meta.spacing*2.0*brush.meta.tip_scale).clamp(0.02,2.0);
+    let spacing=match brush.meta.render_mode {
+        CustomBrushRenderMode::Continuous => brush.meta.spacing.min(0.035),
+        CustomBrushRenderMode::Stamp => brush.meta.spacing,
+    };
+    let ratio=(spacing*2.0*brush.meta.tip_scale).clamp(0.01,2.0);
     let mut ordinal=0u32;
-    visit_pressure_dabs_spaced(&stroke.points,stroke.base_width,ratio,|dab,[dx,dy]|{
+    visit_pressure_dabs_spaced_dense(&stroke.points,stroke.base_width,ratio,|dab,[dx,dy]|{
         let p=(2.0*dab.radius/stroke.base_width.max(0.001)).clamp(0.0,1.5);
         let size_factor=(1.0-brush.meta.size_pressure)+brush.meta.size_pressure*p;
         let r=(stroke.base_width*0.5*size_factor*brush.meta.tip_scale).max(0.25);
@@ -461,7 +563,8 @@ fn baseline_draft(path:&Path,format:&str,note:&str)->ImportedBrushDraft{
         source_format:format.to_owned(),source_path:path.to_path_buf(),
         tips:vec![round_tip(96,0.9)],icon:None,spacing:0.10,opacity:1.0,flow:1.0,
         size_pressure:1.0,opacity_pressure:0.0,angle_deg:0.0,follow_stroke:false,
-        scatter:0.0,random_tip:false,tip_scale:1.0,compatibility_note:note.to_owned(),
+        scatter:0.0,random_tip:false,tip_scale:1.0,
+        render_mode:CustomBrushRenderMode::Continuous,compatibility_note:note.to_owned(),
     }
 }
 
@@ -473,7 +576,8 @@ fn import_image(path:&Path)->Result<Vec<ImportedBrushDraft>,String>{
         source_format:"Image brush tip".into(),source_path:path.to_path_buf(),
         tips:vec![tip],icon:Some(icon_from_image(img)),spacing:0.10,opacity:1.0,flow:1.0,
         size_pressure:1.0,opacity_pressure:0.0,angle_deg:0.0,follow_stroke:true,
-        scatter:0.0,random_tip:false,tip_scale:1.0,compatibility_note:String::new(),
+        scatter:0.0,random_tip:false,tip_scale:1.0,
+        render_mode:CustomBrushRenderMode::Stamp,compatibility_note:String::new(),
     }])
 }
 
@@ -492,6 +596,7 @@ fn import_abr_file(path:&Path)->Result<Vec<ImportedBrushDraft>,String>{
                 tips:vec![TipMask{width:bitmap.width,height:bitmap.height,data:bitmap.data}],
                 icon:None,spacing:0.10,opacity:1.0,flow:1.0,size_pressure:1.0,opacity_pressure:0.0,
                 angle_deg:0.0,follow_stroke:false,scatter:0.0,random_tip:false,tip_scale:1.0,
+                render_mode:CustomBrushRenderMode::Stamp,
                 compatibility_note:"ABR tip shape is preserved; vendor-only brush dynamics are mapped to Stick defaults.".into(),
             });
         }
@@ -508,7 +613,8 @@ fn import_gbr_file(path:&Path)->Result<Vec<ImportedBrushDraft>,String>{
         source_format:"Krita / GIMP .gbr".into(),source_path:path.to_path_buf(),
         tips:vec![tip],icon:None,spacing:(spacing as f32/100.0).clamp(0.02,2.0),
         opacity:1.0,flow:1.0,size_pressure:1.0,opacity_pressure:0.0,angle_deg:0.0,
-        follow_stroke:false,scatter:0.0,random_tip:false,tip_scale:1.0,compatibility_note:String::new(),
+        follow_stroke:false,scatter:0.0,random_tip:false,tip_scale:1.0,
+        render_mode:CustomBrushRenderMode::Stamp,compatibility_note:String::new(),
     }])
 }
 
@@ -540,6 +646,7 @@ fn parse_gih_bytes(data:&[u8],path:&Path)->Result<Vec<ImportedBrushDraft>,String
         source_format:"Krita / GIMP .gih".into(),source_path:path.to_path_buf(),tips,icon:None,
         spacing:(spacing as f32/100.0).clamp(0.02,2.0),opacity:1.0,flow:1.0,size_pressure:1.0,
         opacity_pressure:0.0,angle_deg:0.0,follow_stroke:false,scatter:0.0,random_tip:random,tip_scale:1.0,
+        render_mode:CustomBrushRenderMode::Stamp,
         compatibility_note:"Multi-tip GIH order is preserved as sequential/random in Stick.".into(),
     }])
 }
@@ -759,6 +866,11 @@ Stick refused the old round-tip fallback because it changes the brush."
         suggested_name:name,source_format:"Krita .kpp".into(),source_path:source_path.to_path_buf(),
         tips,icon,spacing,opacity,flow,size_pressure:if size_pressure{1.0}else{0.0},
         opacity_pressure,angle_deg,follow_stroke,scatter,random_tip:false,tip_scale,
+        render_mode:if brush_type=="auto_brush" {
+            CustomBrushRenderMode::Continuous
+        } else {
+            CustomBrushRenderMode::Stamp
+        },
         compatibility_note:note,
     })
 }
@@ -823,6 +935,7 @@ fn import_myb_file(path:&Path)->Result<Vec<ImportedBrushDraft>,String>{
         tips:vec![round_tip(96,hardness)],icon:None,spacing:(0.5/dabs).clamp(0.02,0.5),
         opacity:opaque,flow:1.0,size_pressure:1.0,opacity_pressure:0.0,angle_deg:0.0,
         follow_stroke:false,scatter:0.0,random_tip:false,tip_scale:1.0,
+        render_mode:CustomBrushRenderMode::Continuous,
         compatibility_note:"MyPaint core size/opacity/hardness/spacing are mapped; advanced input mappings are approximated.".into(),
     }])
 }
@@ -861,6 +974,7 @@ fn import_sut_file(path:&Path)->Result<Vec<ImportedBrushDraft>,String>{
             }
         }
     }
+    let has_embedded_tip=!tips.is_empty();
     let num=|k:&str,d:f32|value_f32(variant.get(k)).unwrap_or(d);
     let size=num("BrushSize",30.0);
     let _=size;
@@ -876,7 +990,12 @@ fn import_sut_file(path:&Path)->Result<Vec<ImportedBrushDraft>,String>{
         suggested_name:name,source_format:"Clip Studio Paint .sut".into(),source_path:path.to_path_buf(),
         tips,icon,spacing,opacity,flow,size_pressure:1.0,opacity_pressure:0.0,angle_deg:rotation,
         follow_stroke:false,scatter,random_tip:num("BrushPatternOrderType",0.0) as i32==3,tip_scale:1.0,
-        compatibility_note:"CSP size/opacity/flow/spacing/rotation and readable embedded tip thumbnails are mapped. CSP-only mixing, encrypted material internals and some dynamics are approximated.".into(),
+        render_mode:if has_embedded_tip {
+            CustomBrushRenderMode::Stamp
+        } else {
+            CustomBrushRenderMode::Continuous
+        },
+        compatibility_note:"CSP size/opacity/flow/spacing/rotation and readable embedded tip material are mapped. Auto/round tools render continuously; bitmap material brushes keep stamp mode. CSP-only color mixing remains approximated.".into(),
     }])
 }
 
@@ -964,6 +1083,7 @@ fn import_blend_file(path:&Path)->Result<Vec<ImportedBrushDraft>,String>{
                 source_path:path.to_path_buf(),tips:vec![round_tip(96,hardness)],icon:None,
                 spacing,opacity:alpha,flow,size_pressure,opacity_pressure,angle_deg:0.0,
                 follow_stroke:false,scatter:jitter,random_tip:false,tip_scale:1.0,
+                render_mode:CustomBrushRenderMode::Continuous,
                 compatibility_note:format!(
                     "Blender Brush settings mapped: size {size}px, spacing {:.0}%, opacity {:.0}%, jitter {:.2}, smooth {:.2}, Grease Pencil type {}. Asset materials/textures without a Stick equivalent are approximated.",
                     spacing*100.0,alpha*100.0,jitter,smooth,gp_type),
@@ -1249,6 +1369,9 @@ mod tests {
             source_path:String::new(),icon_path:String::new(),tip_paths:vec![],
             spacing:0.1,opacity:1.0,flow:1.0,size_pressure:0.0,opacity_pressure:0.0,
             angle_deg:0.0,follow_stroke:false,scatter:0.0,random_tip:false,tip_scale:1.0,
+            render_mode:CustomBrushRenderMode::Continuous,
+            engine_version:CUSTOM_BRUSH_ENGINE_VERSION,
+            disabled_reason:String::new(),
             compatibility_note:String::new(),
         };
         let brush=RuntimeBrush{meta,tips:vec![round_tip(64,0.9)],icon:None};
@@ -1278,6 +1401,37 @@ mod tests {
         }"#;
         let meta:CustomBrushMeta=serde_json::from_str(json).unwrap();
         assert_eq!(meta.tip_scale,1.0);
+        assert_eq!(meta.render_mode,CustomBrushRenderMode::Stamp);
+        assert_eq!(meta.engine_version,0);
+        assert!(meta.disabled_reason.is_empty());
+    }
+
+    #[test]
+    fn continuous_external_brush_oversamples_large_sizes() {
+        let meta=CustomBrushMeta{
+            id:"continuous".into(),name:"continuous".into(),source_format:"Krita .kpp".into(),
+            source_path:String::new(),icon_path:String::new(),tip_paths:vec![],
+            spacing:0.10,opacity:1.0,flow:1.0,size_pressure:0.0,opacity_pressure:0.0,
+            angle_deg:0.0,follow_stroke:false,scatter:0.0,random_tip:false,tip_scale:1.0,
+            render_mode:CustomBrushRenderMode::Continuous,
+            engine_version:CUSTOM_BRUSH_ENGINE_VERSION,disabled_reason:String::new(),
+            compatibility_note:String::new(),
+        };
+        let brush=RuntimeBrush{meta,tips:vec![round_tip(64,0.9)],icon:None};
+        let stroke=Stroke{
+            points:vec![
+                crate::project::StrokePoint{x:0.0,y:0.0,pressure:1.0},
+                crate::project::StrokePoint{x:200.0,y:0.0,pressure:1.0},
+            ],
+            color:[0,0,0,255],fill_color:None,base_width:100.0,is_vector:false,
+            brush_preset:crate::project::KritaBrushPreset::GPenInk,opacity:1.0,
+            brush_texture_id:Some("custom:continuous".into()),
+            tip_shape:crate::project::BrushTipShape::Round,
+        };
+        let mut centers=Vec::new();
+        emit_stamps(&stroke,&brush,|stamp|centers.push(stamp.center[0]));
+        let max_gap=centers.windows(2).map(|w|w[1]-w[0]).fold(0.0_f32,f32::max);
+        assert!(max_gap<=3.6,"continuous brush left a visible bead gap: {max_gap}");
     }
 
     #[test]

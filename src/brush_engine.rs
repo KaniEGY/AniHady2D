@@ -392,6 +392,28 @@ pub fn visit_pressure_dabs_spaced(
     points: &[StrokePoint],
     width: f32,
     spacing_radius_ratio: f32,
+    paint: impl FnMut(BrushDab, [f32; 2]),
+) {
+    visit_pressure_dabs_spaced_impl(points,width,spacing_radius_ratio,0.12,paint);
+}
+
+/// Extra-dense sampler for imported continuous brush engines. It keeps the
+/// normal sampler's safety budget, but allows spacing below 12% of the radius
+/// so large imported auto-brushes cannot visibly break into circular beads.
+pub fn visit_pressure_dabs_spaced_dense(
+    points: &[StrokePoint],
+    width: f32,
+    spacing_radius_ratio: f32,
+    paint: impl FnMut(BrushDab, [f32; 2]),
+) {
+    visit_pressure_dabs_spaced_impl(points,width,spacing_radius_ratio,0.02,paint);
+}
+
+fn visit_pressure_dabs_spaced_impl(
+    points: &[StrokePoint],
+    width: f32,
+    spacing_radius_ratio: f32,
+    minimum_ratio: f32,
     mut paint: impl FnMut(BrushDab, [f32; 2]),
 ) {
     if !width.is_finite() || width <= 0.0 {
@@ -411,7 +433,7 @@ pub fn visit_pressure_dabs_spaced(
     };
     let total: f64 = valid.zip(path.clone()).map(|(a, b)| length(a, b)).sum();
     let minimum_spacing = total / (MAX_DABS_PER_STROKE - 2) as f64;
-    let spacing_ratio = spacing_radius_ratio.clamp(0.12, 1.5) as f64;
+    let spacing_ratio = spacing_radius_ratio.clamp(minimum_ratio, 1.5) as f64;
     let spacing = |d: BrushDab| (f64::from(d.radius) * spacing_ratio).max(0.2).max(minimum_spacing);
     let mut previous = first;
     let mut last_dab = dab_for(first, width);
