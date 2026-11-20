@@ -149,6 +149,7 @@ mod tests{
         let mut a=DrawingAssets::default();
         let before=a.quick_access.len();
         a.pin("undo");a.pin("undo");
-        assert_eq!(a.quick_access.len(),before);
+        assert_eq!(a.quick_access.len(),before+1);
+        assert_eq!(a.quick_access.iter().filter(|id|id.as_str()=="undo").count(),1);
     }
 }
