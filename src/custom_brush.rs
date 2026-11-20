@@ -25,6 +25,8 @@ const MAX_TIPS: usize = 32;
 const MAX_IMPORT_BRUSHES: usize = 128;
 const MAX_TIP_SIDE: u32 = 512;
 
+fn default_tip_scale() -> f32 { 1.0 }
+
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct CustomBrushMeta {
     pub id: String,
@@ -42,6 +44,8 @@ pub struct CustomBrushMeta {
     pub follow_stroke: bool,
     pub scatter: f32,
     pub random_tip: bool,
+    #[serde(default = "default_tip_scale")]
+    pub tip_scale: f32,
     #[serde(default)]
     pub compatibility_note: String,
 }
@@ -62,6 +66,7 @@ pub struct ImportedBrushDraft {
     pub follow_stroke: bool,
     pub scatter: f32,
     pub random_tip: bool,
+    pub tip_scale: f32,
     pub compatibility_note: String,
 }
 
@@ -211,6 +216,7 @@ pub fn install_draft(
         follow_stroke: draft.follow_stroke,
         scatter: draft.scatter.clamp(0.0, 3.0),
         random_tip: draft.random_tip,
+        tip_scale: draft.tip_scale.clamp(0.05, 8.0),
         compatibility_note: draft.compatibility_note.clone(),
     };
     register_meta(&meta);
@@ -375,12 +381,15 @@ impl Stamp {
 }
 
 fn emit_stamps(stroke:&Stroke,brush:&RuntimeBrush,mut emit:impl FnMut(Stamp)){
-    let ratio=(brush.meta.spacing*2.0).clamp(0.04,2.0);
+    // Vendor spacing is stored as a fraction of the brush DIAMETER while the
+    // shared sampler expects a fraction of RADIUS. Preserve that distinction:
+    // Krita spacing=0.1 must become 0.2 radius, not 2.0.
+    let ratio=(brush.meta.spacing*2.0*brush.meta.tip_scale).clamp(0.02,2.0);
     let mut ordinal=0u32;
     visit_pressure_dabs_spaced(&stroke.points,stroke.base_width,ratio,|dab,[dx,dy]|{
         let p=(2.0*dab.radius/stroke.base_width.max(0.001)).clamp(0.0,1.5);
         let size_factor=(1.0-brush.meta.size_pressure)+brush.meta.size_pressure*p;
-        let r=(stroke.base_width*0.5*size_factor).max(0.25);
+        let r=(stroke.base_width*0.5*size_factor*brush.meta.tip_scale).max(0.25);
         let flow=brush.meta.flow*((1.0-brush.meta.opacity_pressure)+brush.meta.opacity_pressure*p)
             .clamp(0.02,1.5);
         let jitter=unit_noise(ordinal.wrapping_add(hash_id(&brush.meta.id)));
@@ -452,7 +461,7 @@ fn baseline_draft(path:&Path,format:&str,note:&str)->ImportedBrushDraft{
         source_format:format.to_owned(),source_path:path.to_path_buf(),
         tips:vec![round_tip(96,0.9)],icon:None,spacing:0.10,opacity:1.0,flow:1.0,
         size_pressure:1.0,opacity_pressure:0.0,angle_deg:0.0,follow_stroke:false,
-        scatter:0.0,random_tip:false,compatibility_note:note.to_owned(),
+        scatter:0.0,random_tip:false,tip_scale:1.0,compatibility_note:note.to_owned(),
     }
 }
 
@@ -464,7 +473,7 @@ fn import_image(path:&Path)->Result<Vec<ImportedBrushDraft>,String>{
         source_format:"Image brush tip".into(),source_path:path.to_path_buf(),
         tips:vec![tip],icon:Some(icon_from_image(img)),spacing:0.10,opacity:1.0,flow:1.0,
         size_pressure:1.0,opacity_pressure:0.0,angle_deg:0.0,follow_stroke:true,
-        scatter:0.0,random_tip:false,compatibility_note:String::new(),
+        scatter:0.0,random_tip:false,tip_scale:1.0,compatibility_note:String::new(),
     }])
 }
 
@@ -482,7 +491,7 @@ fn import_abr_file(path:&Path)->Result<Vec<ImportedBrushDraft>,String>{
                 source_path:path.to_path_buf(),
                 tips:vec![TipMask{width:bitmap.width,height:bitmap.height,data:bitmap.data}],
                 icon:None,spacing:0.10,opacity:1.0,flow:1.0,size_pressure:1.0,opacity_pressure:0.0,
-                angle_deg:0.0,follow_stroke:false,scatter:0.0,random_tip:false,
+                angle_deg:0.0,follow_stroke:false,scatter:0.0,random_tip:false,tip_scale:1.0,
                 compatibility_note:"ABR tip shape is preserved; vendor-only brush dynamics are mapped to Stick defaults.".into(),
             });
         }
@@ -499,7 +508,7 @@ fn import_gbr_file(path:&Path)->Result<Vec<ImportedBrushDraft>,String>{
         source_format:"Krita / GIMP .gbr".into(),source_path:path.to_path_buf(),
         tips:vec![tip],icon:None,spacing:(spacing as f32/100.0).clamp(0.02,2.0),
         opacity:1.0,flow:1.0,size_pressure:1.0,opacity_pressure:0.0,angle_deg:0.0,
-        follow_stroke:false,scatter:0.0,random_tip:false,compatibility_note:String::new(),
+        follow_stroke:false,scatter:0.0,random_tip:false,tip_scale:1.0,compatibility_note:String::new(),
     }])
 }
 
@@ -530,7 +539,7 @@ fn parse_gih_bytes(data:&[u8],path:&Path)->Result<Vec<ImportedBrushDraft>,String
         suggested_name:if name.is_empty(){path.file_stem().and_then(|s|s.to_str()).unwrap_or("GIH Brush").to_owned()}else{name},
         source_format:"Krita / GIMP .gih".into(),source_path:path.to_path_buf(),tips,icon:None,
         spacing:(spacing as f32/100.0).clamp(0.02,2.0),opacity:1.0,flow:1.0,size_pressure:1.0,
-        opacity_pressure:0.0,angle_deg:0.0,follow_stroke:false,scatter:0.0,random_tip:random,
+        opacity_pressure:0.0,angle_deg:0.0,follow_stroke:false,scatter:0.0,random_tip:random,tip_scale:1.0,
         compatibility_note:"Multi-tip GIH order is preserved as sequential/random in Stick.".into(),
     }])
 }
@@ -754,7 +763,7 @@ fn import_sut_file(path:&Path)->Result<Vec<ImportedBrushDraft>,String>{
     Ok(vec![ImportedBrushDraft{
         suggested_name:name,source_format:"Clip Studio Paint .sut".into(),source_path:path.to_path_buf(),
         tips,icon,spacing,opacity,flow,size_pressure:1.0,opacity_pressure:0.0,angle_deg:rotation,
-        follow_stroke:false,scatter,random_tip:num("BrushPatternOrderType",0.0) as i32==3,
+        follow_stroke:false,scatter,random_tip:num("BrushPatternOrderType",0.0) as i32==3,tip_scale:1.0,
         compatibility_note:"CSP size/opacity/flow/spacing/rotation and readable embedded tip thumbnails are mapped. CSP-only mixing, encrypted material internals and some dynamics are approximated.".into(),
     }])
 }
@@ -842,7 +851,7 @@ fn import_blend_file(path:&Path)->Result<Vec<ImportedBrushDraft>,String>{
                 source_format:"Blender Grease Pencil .blend/.asset.blend".into(),
                 source_path:path.to_path_buf(),tips:vec![round_tip(96,hardness)],icon:None,
                 spacing,opacity:alpha,flow,size_pressure,opacity_pressure,angle_deg:0.0,
-                follow_stroke:false,scatter:jitter,random_tip:false,
+                follow_stroke:false,scatter:jitter,random_tip:false,tip_scale:1.0,
                 compatibility_note:format!(
                     "Blender Brush settings mapped: size {size}px, spacing {:.0}%, opacity {:.0}%, jitter {:.2}, smooth {:.2}, Grease Pencil type {}. Asset materials/textures without a Stick equivalent are approximated.",
                     spacing*100.0,alpha*100.0,jitter,smooth,gp_type),
