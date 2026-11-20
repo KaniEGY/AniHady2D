@@ -1472,8 +1472,71 @@ fn import_blend_file(path:&Path)->Result<Vec<ImportedBrushDraft>,String>{
         let blend=blend::Blend::from_path(path).map_err(|e|format!("Blender .blend: {e:?}"))?;
         let mut out=Vec::new();
 
+        let safe_i8=|inst:&blend::Instance<'_>,field:&str,default:i8| -> i8 {
+            if !inst.is_valid(field){return default}
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(||inst.get_i8(field)))
+                .unwrap_or(default)
+        };
+        let is_gp_draw_brush=|brush:&blend::Instance<'_>|->bool{
+            if !brush.is_valid("gpencil_settings"){return false}
+            let gp=match std::panic::catch_unwind(
+                std::panic::AssertUnwindSafe(||brush.get("gpencil_settings"))) {
+                Ok(settings)=>settings,
+                Err(_)=>return false,
+            };
+            if !gp.is_valid("draw_strength") && !gp.is_valid("flag"){return false}
+            let gp_type=if brush.is_valid("gpencil_brush_type"){
+                safe_i8(brush,"gpencil_brush_type",0)
+            }else{
+                safe_i8(brush,"gpencil_tool",0)
+            };
+            gp_type==0
+        };
+
+        // Asset-browser .blend packs commonly contain normal Blender helper
+        // brushes in addition to the brush the artist actually distributed.
+        // Musubibi's Crayon is one such pack: importing every BR datablock
+        // makes Airbrush/internal tools appear beside Crayon and they collapse
+        // to near-identical results. If at least one Brush is explicitly marked
+        // as a Blender Asset, import only asset-marked Brush datablocks.
+        let is_asset_brush=|brush:&blend::Instance<'_>|->bool{
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(||{
+                if !brush.is_valid("id"){return false}
+                let id=brush.get("id");
+                if !id.is_valid("asset_data"){return false}
+                let asset=id.get("asset_data");
+                // catalog_simple_name is a fixed char[64] in Blender's
+                // AssetMetaData DNA, so reading it is a reliable pointer probe
+                // even when optional author/description pointers are null.
+                if asset.is_valid("catalog_simple_name"){
+                    let _=asset.get_string("catalog_simple_name");
+                    true
+                }else{false}
+            })).unwrap_or(false)
+        };
+        let has_explicit_assets=blend.instances_with_code(*b"BR")
+            .any(|b|is_gp_draw_brush(&b)&&is_asset_brush(&b));
+        let has_custom_icon=|brush:&blend::Instance<'_>|->bool{
+            if !brush.is_valid("icon_filepath"){return false}
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(||{
+                !brush.get_string("icon_filepath")
+                    .trim_matches(char::from(0)).trim().is_empty()
+            })).unwrap_or(false)
+        };
+        // Blender 3.6 brush-pack files often save the whole startup Brush list
+        // and do not set ID.asset_data at all. Musubibi's file has 74 BR
+        // datablocks, but the distributed Crayon is the one carrying a custom
+        // icon/thumbnail path. If explicit Asset metadata is unavailable and
+        // the file provides custom-icon brushes, treat those as pack entries
+        // instead of importing Blender's factory Airbrush/Ink/Marker/etc.
+        let has_custom_icon_brush=blend.instances_with_code(*b"BR")
+            .any(|b|is_gp_draw_brush(&b)&&has_custom_icon(&b));
+
         for (index,brush) in blend.instances_with_code(*b"BR").enumerate() {
             if out.len()>=MAX_IMPORT_BRUSHES{break}
+            if !is_gp_draw_brush(&brush){continue}
+            if has_explicit_assets && !is_asset_brush(&brush){continue}
+            if !has_explicit_assets && has_custom_icon_brush && !has_custom_icon(&brush){continue}
 
             let safe_f32=|inst:&blend::Instance<'_>,field:&str,default:f32| -> f32 {
                 if !inst.is_valid(field){return default}
@@ -1483,11 +1546,6 @@ fn import_blend_file(path:&Path)->Result<Vec<ImportedBrushDraft>,String>{
             let safe_i32=|inst:&blend::Instance<'_>,field:&str,default:i32| -> i32 {
                 if !inst.is_valid(field){return default}
                 std::panic::catch_unwind(std::panic::AssertUnwindSafe(||inst.get_i32(field)))
-                    .unwrap_or(default)
-            };
-            let safe_i8=|inst:&blend::Instance<'_>,field:&str,default:i8| -> i8 {
-                if !inst.is_valid(field){return default}
-                std::panic::catch_unwind(std::panic::AssertUnwindSafe(||inst.get_i8(field)))
                     .unwrap_or(default)
             };
             let safe_i16=|inst:&blend::Instance<'_>,field:&str,default:i16| -> i16 {
@@ -1501,17 +1559,13 @@ fn import_blend_file(path:&Path)->Result<Vec<ImportedBrushDraft>,String>{
                     .unwrap_or_default()
             };
 
-            // Only Grease Pencil brushes have a valid gpencil_settings pointer.
-            // The previous importer accepted every Blender Brush datablock,
-            // which is why Mask/Multiply/Multires/Sculpt tools appeared as
-            // dozens of identical "2D brushes" in Stick.
-            if !brush.is_valid("gpencil_settings"){continue}
-            let gp=match std::panic::catch_unwind(std::panic::AssertUnwindSafe(||brush.get("gpencil_settings"))){
+            // Candidate pre-pass already proved this is a real Grease Pencil
+            // DRAW brush. Fetch the settings once more for the detailed mapping.
+            let gp=match std::panic::catch_unwind(
+                std::panic::AssertUnwindSafe(||brush.get("gpencil_settings"))) {
                 Ok(settings)=>settings,
                 Err(_)=>continue,
             };
-            let gp_type=safe_i8(&brush,"gpencil_brush_type",0);
-            if gp_type!=0 {continue} // DRAW only; exclude Fill/Eraser/Tint.
 
             let raw_name=std::panic::catch_unwind(std::panic::AssertUnwindSafe(||{
                 brush.get("id").get_string("name")
@@ -1617,8 +1671,13 @@ fn import_blend_file(path:&Path)->Result<Vec<ImportedBrushDraft>,String>{
                 round_tip(128,hardness)
             };
             let textured=material_texture_tip.is_some();
-            let final_jitter=(jitter+random_size*0.35+random_pressure*0.20+uv_random*0.15)
-                .clamp(0.0,3.0);
+            // Preserve more of Blender's per-brush dynamics in Stick's current
+            // stamp model. Rotation/random-strength do not have dedicated
+            // channels yet, but folding a small amount into spatial variation
+            // prevents distinct crayon presets from rendering as one generic tip.
+            let final_jitter=(jitter+random_size*0.35+random_pressure*0.20
+                +uv_random*0.15+random_rotation*0.12+random_strength*0.08
+                +random_gp_strength*0.08).clamp(0.0,3.0);
             let material_note=if !material_texture_path.is_empty() && !textured {
                 format!(" texture '{}' was referenced but not found beside the .blend;",material_texture_path)
             } else if textured && material_texture_source.is_none() {
@@ -1885,6 +1944,27 @@ fn save_icon_png(icon:&IconImage,path:&Path)->Result<(),String>{
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn blender_asset_filter_policy_prefers_explicit_assets(){
+        let keep=|has_assets:bool,is_asset:bool|!has_assets||is_asset;
+        assert!(keep(false,false));
+        assert!(keep(false,true));
+        assert!(!keep(true,false));
+        assert!(keep(true,true));
+    }
+
+    #[test]
+    fn blender_pack_filter_prefers_custom_icons_when_asset_metadata_is_missing(){
+        let keep=|has_assets:bool,is_asset:bool,has_custom_icons:bool,has_custom_icon:bool|{
+            (!has_assets||is_asset) && (has_assets||!has_custom_icons||has_custom_icon)
+        };
+        assert!(keep(false,false,false,false));
+        assert!(keep(false,false,true,true));
+        assert!(!keep(false,false,true,false));
+        assert!(keep(true,true,true,false));
+        assert!(!keep(true,false,true,true));
+    }
 
     #[test]
     fn supported_extensions_cover_requested_apps() {

@@ -32,11 +32,10 @@ pub struct DrawingAssets {
     pub stroke_assets:Vec<StrokeAsset>,
 }
 fn default_quick_access()->Vec<String>{
-    vec![
-        "undo","redo","vector_smooth","vector_simplify",
-        "vector_width_up","vector_width_down","toggle_perspective_snap",
-        "fill_selection","toggle_smart_shape"
-    ].into_iter().map(str::to_owned).collect()
+    // The old left-dock text strip duplicated actions and consumed a large
+    // amount of drawing space. Commands remain available from Ctrl+K, while
+    // the dock now exposes the interactive Pose Rig as one visual control.
+    Vec::new()
 }
 fn default_palettes()->Vec<PaletteAsset>{
     vec![
@@ -141,15 +140,16 @@ pub const COMMANDS:[&str;16]=[
 #[cfg(test)]
 mod tests{
     use super::*;
-    #[test] fn defaults_have_useful_quick_access(){
+    #[test] fn defaults_keep_quick_access_clean(){
         let a=DrawingAssets::default();
-        assert!(a.quick_access.contains(&"vector_smooth".to_string()));
+        assert!(a.quick_access.is_empty());
         assert!(!a.auto_actions.is_empty());
     }
     #[test] fn pin_is_unique(){
         let mut a=DrawingAssets::default();
         let before=a.quick_access.len();
         a.pin("undo");a.pin("undo");
-        assert_eq!(a.quick_access.len(),before);
+        assert_eq!(a.quick_access.len(),before+1);
+        assert_eq!(a.quick_access.iter().filter(|id|id.as_str()=="undo").count(),1);
     }
 }

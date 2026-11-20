@@ -453,7 +453,7 @@ fn tr_notice(lang: AppLang, en: &str, ar: &str) -> String {
 }
 
 
-const TOOLBAR_ITEMS: [ActiveToolUI; 15] = [
+const TOOLBAR_ITEMS: [ActiveToolUI; 14] = [
     ActiveToolUI::SelectLasso,
     ActiveToolUI::FreeTransform,
     ActiveToolUI::VectorDirectSelect,
@@ -463,7 +463,6 @@ const TOOLBAR_ITEMS: [ActiveToolUI; 15] = [
     ActiveToolUI::VectorPen,
     ActiveToolUI::Brush,
     ActiveToolUI::EraserRed,
-    ActiveToolUI::EraserGreen,
     ActiveToolUI::Bucket,
     ActiveToolUI::Eyedropper,
     ActiveToolUI::Text,
@@ -483,7 +482,7 @@ fn tool_display_name(tool: ActiveToolUI, lang: AppLang) -> String {
         ActiveToolUI::VectorPen => ("Ink Pen", "قلم حبر"),
         ActiveToolUI::Brush => ("Brush", "فرشاة"),
         ActiveToolUI::EraserRed => ("Eraser", "ممحاة"),
-        ActiveToolUI::EraserGreen => ("Partial Eraser", "ممحاة جزئية"),
+        ActiveToolUI::EraserGreen => ("Eraser (legacy)", "ممحاة قديمة"),
         ActiveToolUI::Bucket => ("Fill", "تعبئة"),
         ActiveToolUI::Eyedropper => ("Eyedropper", "قطارة الألوان"),
         ActiveToolUI::Text => ("Text", "نص"),
@@ -1348,8 +1347,7 @@ fn get_tool_ui_color(tool: ActiveToolUI) -> egui::Color32 {
         ActiveToolUI::PuppetWarp => egui::Color32::from_rgb(34, 211, 238),
         ActiveToolUI::VectorPen => egui::Color32::from_rgb(139, 92, 246),
         ActiveToolUI::Brush => egui::Color32::from_rgb(249, 115, 22),
-        ActiveToolUI::EraserRed => egui::Color32::from_rgb(239, 68, 68),
-        ActiveToolUI::EraserGreen => egui::Color32::from_rgb(34, 197, 94),
+        ActiveToolUI::EraserRed | ActiveToolUI::EraserGreen => egui::Color32::from_rgb(234, 179, 8),
         ActiveToolUI::Bucket => egui::Color32::from_rgb(16, 185, 129),
         ActiveToolUI::Eyedropper => egui::Color32::from_rgb(234, 179, 8),
         ActiveToolUI::Text => egui::Color32::from_rgb(236, 72, 153),
@@ -1494,9 +1492,7 @@ fn draw_tool_ui_icon(painter: &egui::Painter, rect: egui::Rect, tool: ActiveTool
             painter.circle_filled(p(-8.,8.),1.4,primary);
         }
         ActiveToolUI::EraserRed | ActiveToolUI::EraserGreen => {
-            let top = if tool==ActiveToolUI::EraserRed {
-                egui::Color32::from_rgb(244,88,112)
-            } else { egui::Color32::from_rgb(44,207,117) };
+            let top=egui::Color32::from_rgb(250,204,52);
             painter.add(egui::Shape::convex_polygon(
                 vec![p(-9.,3.),p(1.,-10.),p(9.,-3.),p(-1.,10.)],
                 top,egui::Stroke::new(0.7,pale)));
@@ -1549,6 +1545,28 @@ fn draw_tool_ui_icon(painter: &egui::Painter, rect: egui::Rect, tool: ActiveTool
     }
     if active {
         painter.circle_filled(rect.right_top()+egui::vec2(-2.5,2.5),1.5,pale);
+    }
+}
+
+fn draw_pose_rig_icon(painter:&egui::Painter,rect:egui::Rect,active:bool){
+    let c=rect.center();
+    let col=if active {egui::Color32::from_rgb(255,205,63)}
+        else {egui::Color32::from_rgb(94,211,255)};
+    let stroke=egui::Stroke::new(2.0,col);
+    let head=c+egui::vec2(0.0,-7.5);
+    painter.circle_stroke(head,4.0,stroke);
+    let neck=c+egui::vec2(0.0,-2.5);
+    let hip=c+egui::vec2(0.0,5.0);
+    painter.line_segment([neck,hip],stroke);
+    painter.line_segment([neck+egui::vec2(-6.0,1.0),neck+egui::vec2(6.0,1.0)],stroke);
+    painter.line_segment([neck+egui::vec2(-6.0,1.0),c+egui::vec2(-9.0,7.0)],stroke);
+    painter.line_segment([neck+egui::vec2(6.0,1.0),c+egui::vec2(9.0,7.0)],stroke);
+    painter.line_segment([hip,c+egui::vec2(-6.0,11.0)],stroke);
+    painter.line_segment([hip,c+egui::vec2(6.0,11.0)],stroke);
+    for p in [neck,hip,c+egui::vec2(-6.0,-1.5),c+egui::vec2(6.0,-1.5),
+        c+egui::vec2(-9.0,7.0),c+egui::vec2(9.0,7.0),
+        c+egui::vec2(-6.0,11.0),c+egui::vec2(6.0,11.0)] {
+        painter.circle_filled(p,1.7,col);
     }
 }
 
@@ -1870,7 +1888,7 @@ struct StickApp {
     brush_size: f32,
     vector_pen_size: f32,
     eraser_full_size: f32,
-    eraser_partial_size: f32,
+    eraser_mode: eraser_tools::EraserMode,
     shape_outline_size: f32,
     bucket_gap_close: f32,
     bucket_precision: f32,
@@ -1906,6 +1924,8 @@ struct StickApp {
     show_pose_guide: bool,
     drawing_assets: drawing_assets::DrawingAssets,
     pose_guide: pose_guide::PoseGuide,
+    pose_edit_mode: bool,
+    pose_drag_joint: Option<pose_guide::PoseJoint>,
     auto_action_recording: bool,
     auto_action_buffer: Vec<String>,
     auto_action_name: String,
@@ -2089,7 +2109,7 @@ impl StickApp {
             brush_size: 7.0,
             vector_pen_size: 7.0,
             eraser_full_size: 35.0,
-            eraser_partial_size: 35.0,
+            eraser_mode: eraser_tools::EraserMode::Partial,
             shape_outline_size: 7.0,
             bucket_gap_close: 3.0,
             bucket_precision: 1.0,
@@ -2125,6 +2145,8 @@ impl StickApp {
             show_pose_guide: false,
             drawing_assets: drawing_assets::DrawingAssets::load(),
             pose_guide: pose_guide::PoseGuide::default(),
+            pose_edit_mode: false,
+            pose_drag_joint: None,
             auto_action_recording: false,
             auto_action_buffer: Vec::new(),
             auto_action_name: "My Auto Action".to_owned(),
@@ -3229,10 +3251,9 @@ impl StickApp {
             let mut open=true;
             let mut command_to_run:Option<String>=None;
             let mut action_to_run:Option<usize>=None;
-            let mut toggle_pin:Option<String>=None;
             let mut start_recording=false;
             let mut stop_recording=false;
-            egui::Window::new(tr(lang,"Quick Access & Auto Actions","الوصول السريع والأوامر التلقائية"))
+            egui::Window::new(tr(lang,"Drawing Commands & Auto Actions","أوامر الرسم والأوامر التلقائية"))
                 .open(&mut open)
                 .collapsible(false)
                 .default_width(460.0)
@@ -3254,16 +3275,7 @@ impl StickApp {
                                 && !en.to_ascii_lowercase().contains(&query)
                                 && !ar.contains(&self.command_search)
                             {continue}
-                            ui.horizontal(|ui|{
-                                if ui.button(&label).clicked(){command_to_run=Some(id.to_owned());}
-                                let pinned=self.drawing_assets.quick_access.iter().any(|x|x==id);
-                                if ui.small_button(if pinned{"★"}else{"☆"})
-                                    .on_hover_text(tr(lang,
-                                        if pinned{"Remove from Quick Access"}else{"Pin to Quick Access"},
-                                        if pinned{"شيل من الوصول السريع"}else{"ثبّت في الوصول السريع"}))
-                                    .clicked()
-                                {toggle_pin=Some(id.to_owned());}
-                            });
+                            if ui.button(&label).clicked(){command_to_run=Some(id.to_owned());}
                         }
                     });
                     ui.separator();
@@ -3292,12 +3304,6 @@ impl StickApp {
                     }
                 });
             self.show_command_palette=open;
-            if let Some(id)=toggle_pin {
-                if self.drawing_assets.quick_access.iter().any(|x|x==&id) {
-                    self.drawing_assets.unpin(&id);
-                } else {self.drawing_assets.pin(&id);}
-                let _=self.drawing_assets.save();
-            }
             if start_recording {
                 self.auto_action_recording=true;
                 self.auto_action_buffer.clear();
@@ -3406,8 +3412,12 @@ impl StickApp {
                 .open(&mut open).default_width(330.0).show(ctx,|ui|{
                     ui.checkbox(&mut self.pose_guide.visible,
                         tr(lang,"Show guide on canvas","اظهر المرجع على الكانفا"));
+                    ui.checkbox(&mut self.pose_edit_mode,
+                        tr(lang,"Direct joint editing","تحريك المفاصل مباشرة"));
                     ui.add(egui::Slider::new(&mut self.pose_guide.scale,0.25..=3.0)
                         .text(tr(lang,"Scale","الحجم")));
+                    ui.add(egui::Slider::new(&mut self.pose_guide.head_scale,0.45..=2.0)
+                        .text(tr(lang,"Head size","حجم الرأس")));
                     ui.add(egui::Slider::new(&mut self.pose_guide.opacity,0.05..=1.0)
                         .text(tr(lang,"Opacity","الشفافية")));
                     ui.horizontal(|ui|{
@@ -3510,8 +3520,7 @@ impl StickApp {
         match self.active_tool_ui {
             ActiveToolUI::Brush => Some(self.brush_size),
             ActiveToolUI::VectorPen => Some(self.vector_pen_size),
-            ActiveToolUI::EraserRed => Some(self.eraser_full_size),
-            ActiveToolUI::EraserGreen => Some(self.eraser_partial_size),
+            ActiveToolUI::EraserRed | ActiveToolUI::EraserGreen => Some(self.eraser_full_size),
             ActiveToolUI::VectorEraser => Some(self.vector_eraser_size),
             ActiveToolUI::ShapeLine => Some(self.shape_outline_size),
             ActiveToolUI::Sculpt => Some(self.sculpt_radius),
@@ -3524,8 +3533,8 @@ impl StickApp {
         match self.active_tool_ui {
             ActiveToolUI::Brush => self.brush_size = value.clamp(1.0, 120.0),
             ActiveToolUI::VectorPen => self.vector_pen_size = value.clamp(1.0, 100.0),
-            ActiveToolUI::EraserRed => self.eraser_full_size = value.clamp(2.0, 120.0),
-            ActiveToolUI::EraserGreen => self.eraser_partial_size = value.clamp(2.0, 120.0),
+            ActiveToolUI::EraserRed | ActiveToolUI::EraserGreen =>
+                self.eraser_full_size = value.clamp(2.0, 120.0),
             ActiveToolUI::VectorEraser => self.vector_eraser_size = value.clamp(2.0,120.0),
             ActiveToolUI::ShapeLine => self.shape_outline_size = value.clamp(1.0, 120.0),
             ActiveToolUI::Sculpt => self.sculpt_radius = value.clamp(8.0, 360.0),
@@ -5398,18 +5407,18 @@ impl StickApp {
                 ui.checkbox(&mut self.shape_fill_enabled, tr(lang, "Fill shape", "لوّن جوّه الشكل"));
             }
             ActiveToolUI::EraserRed | ActiveToolUI::EraserGreen => {
-                ui.strong(tr(lang, "Eraser Properties", "خصائص الممحاة"));
-                ui.horizontal(|ui| {
-                    if ui.selectable_label(self.active_tool_ui == ActiveToolUI::EraserRed, tr(lang, "Red (Full E)", "حمراء (كامل E)")).clicked() { self.active_tool_ui = ActiveToolUI::EraserRed; }
-                    if ui.selectable_label(self.active_tool_ui == ActiveToolUI::EraserGreen, tr(lang, "Green (Part T)", "خضراء (جزئي T)")).clicked() { self.active_tool_ui = ActiveToolUI::EraserGreen; }
+                ui.strong(tr(lang, "Eraser", "الممحاة"));
+                ui.horizontal_wrapped(|ui|{
+                    ui.selectable_value(&mut self.eraser_mode,eraser_tools::EraserMode::Partial,
+                        tr(lang,"Partial","جزئي"));
+                    ui.selectable_value(&mut self.eraser_mode,eraser_tools::EraserMode::WholeStroke,
+                        tr(lang,"Whole stroke","كامل"));
                 });
-                if self.active_tool_ui == ActiveToolUI::EraserRed {
-                    ui.add(egui::Slider::new(&mut self.eraser_full_size, 2.0..=120.0)
-                        .text(tr(lang, "Full eraser size", "حجم الممحاة الكاملة")));
-                } else {
-                    ui.add(egui::Slider::new(&mut self.eraser_partial_size, 2.0..=120.0)
-                        .text(tr(lang, "Partial eraser size", "حجم الممحاة الجزئية")));
-                }
+                ui.add(egui::Slider::new(&mut self.eraser_full_size,2.0..=120.0)
+                    .text(tr(lang,"Size","الحجم")));
+                ui.small(tr(lang,
+                    "Right-click on the canvas to switch erase mode.",
+                    "كلك يمين على الكانفا لتغيير وضع المسح."));
             }
             ActiveToolUI::Text => {
                 ui.strong(tr(lang, "Text Properties", "خصائص النص"));
@@ -5888,12 +5897,11 @@ impl eframe::App for StickApp {
                 6 => self.config.tool_pen = k_name,
                 7 => self.config.tool_brush = k_name,
                 8 => self.config.tool_eraser = k_name,
-                9 => self.config.tool_eraser_partial = k_name,
-                10 => self.config.tool_bucket = k_name,
-                11 => self.config.tool_eyedropper = k_name,
-                12 => self.config.tool_text = k_name,
-                13 => self.config.tool_shape = k_name,
-                14 => self.config.tool_hand = k_name,
+                9 => self.config.tool_bucket = k_name,
+                10 => self.config.tool_eyedropper = k_name,
+                11 => self.config.tool_text = k_name,
+                12 => self.config.tool_shape = k_name,
+                13 => self.config.tool_hand = k_name,
                 100 => self.config.quick_color_key = k_name,
                 101 => self.config.size_gesture_key = k_name,
                 102 => self.config.opacity_gesture_key = k_name,
@@ -5984,7 +5992,11 @@ impl eframe::App for StickApp {
             if sc_pen { self.active_tool_ui = ActiveToolUI::VectorPen; }
             if sc_brush { self.active_tool_ui = ActiveToolUI::Brush; }
             if sc_eraser { self.active_tool_ui = ActiveToolUI::EraserRed; }
-            if sc_eraser_partial { self.active_tool_ui = ActiveToolUI::EraserGreen; }
+            // Keep the retired partial-eraser shortcut as a compatibility alias.
+            if sc_eraser_partial {
+                self.active_tool_ui = ActiveToolUI::EraserRed;
+                self.eraser_mode = eraser_tools::EraserMode::Partial;
+            }
             if sc_bucket { self.active_tool_ui = ActiveToolUI::Bucket; }
             if sc_eyedropper { self.active_tool_ui = ActiveToolUI::Eyedropper; }
             if sc_text { self.active_tool_ui = ActiveToolUI::Text; }
@@ -7494,19 +7506,42 @@ impl eframe::App for StickApp {
                         .clicked(){self.show_command_palette=true;}
                     if ui.small_button(tr(lang,"Assets","المكتبة"))
                         .clicked(){self.show_assets_library=true;}
-                    if ui.small_button(tr(lang,"Pose","وضعية"))
-                        .clicked(){self.show_pose_guide=true;self.pose_guide.visible=true;}
-                });
-                let quick_ids=self.drawing_assets.quick_access.clone();
-                let mut quick_command:Option<String>=None;
-                ui.horizontal_wrapped(|ui|{
-                    for id in quick_ids {
-                        let (en,ar)=drawing_assets::command_label(&id);
-                        let label=tr(lang,en,ar);
-                        if ui.small_button(label).clicked(){quick_command=Some(id);}
+                    let (pose_rect,pose_response)=ui.allocate_exact_size(
+                        egui::vec2(36.0,28.0),egui::Sense::click());
+                    ui.painter().rect_filled(pose_rect,6.0,
+                        if self.pose_edit_mode {egui::Color32::from_rgb(65,58,28)}
+                        else if pose_response.hovered(){egui::Color32::from_rgb(55,73,84)}
+                        else{egui::Color32::from_rgb(40,46,52)});
+                    draw_pose_rig_icon(ui.painter(),pose_rect.shrink(3.0),self.pose_edit_mode);
+                    let pose_response=pose_response.on_hover_text(tr(lang,
+                        "Pose Rig — drag joints directly on the canvas",
+                        "هيكل الوضعية — اسحب المفاصل مباشرة على الكانفا"));
+                    if pose_response.clicked() {
+                        self.pose_edit_mode=!self.pose_edit_mode;
+                        self.pose_guide.visible=self.pose_edit_mode || self.pose_guide.visible;
+                        if !self.pose_edit_mode {self.pose_drag_joint=None;}
                     }
+                    pose_response.context_menu(|ui|{
+                        ui.strong(tr(lang,"Pose Rig","هيكل الوضعية"));
+                        ui.checkbox(&mut self.pose_guide.visible,tr(lang,"Visible","ظاهر"));
+                        ui.add(egui::Slider::new(&mut self.pose_guide.scale,0.25..=3.0)
+                            .text(tr(lang,"Body scale","حجم الجسم")));
+                        ui.add(egui::Slider::new(&mut self.pose_guide.head_scale,0.45..=2.0)
+                            .text(tr(lang,"Head scale","حجم الرأس")));
+                        ui.add(egui::Slider::new(&mut self.pose_guide.opacity,0.05..=1.0)
+                            .text(tr(lang,"Opacity","الشفافية")));
+                        if ui.button(tr(lang,"Reset pose","إعادة الوضعية")).clicked(){
+                            self.pose_guide=pose_guide::PoseGuide::default();
+                            self.pose_guide.visible=true;
+                            self.pose_edit_mode=true;
+                            self.pose_drag_joint=None;
+                            ui.close_menu();
+                        }
+                        if ui.button(tr(lang,"Advanced rig settings","إعدادات الهيكل")).clicked(){
+                            self.show_pose_guide=true;ui.close_menu();
+                        }
+                    });
                 });
-                if let Some(id)=quick_command {self.execute_drawing_command(&id);}
                 ui.separator();
                 egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
                     for tool in TOOLBAR_ITEMS {
@@ -7609,16 +7644,22 @@ impl eframe::App for StickApp {
                                         }
                                     }
                                 }
-                                ActiveToolUI::EraserRed => {
-                                    ui.add(egui::Slider::new(&mut self.eraser_full_size, 2.0..=120.0)
-                                        .text(tr(lang, "Size", "الحجم")));
-                                }
-                                ActiveToolUI::EraserGreen => {
-                                    ui.add(egui::Slider::new(&mut self.eraser_partial_size, 2.0..=120.0)
-                                        .text(tr(lang, "Size", "الحجم")));
+                                ActiveToolUI::EraserRed | ActiveToolUI::EraserGreen => {
+                                    ui.add(egui::Slider::new(&mut self.eraser_full_size,2.0..=120.0)
+                                        .text(tr(lang,"Size","الحجم")));
+                                    ui.selectable_value(&mut self.eraser_mode,eraser_tools::EraserMode::Partial,
+                                        tr(lang,"Partial erase","مسح جزئي"));
+                                    ui.selectable_value(&mut self.eraser_mode,eraser_tools::EraserMode::WholeStroke,
+                                        tr(lang,"Whole-stroke erase","مسح كامل"));
                                 }
                                 ActiveToolUI::HandCanvas => {
-                                    if ui.button(tr(lang, "Reset canvas rotation", "تصفير زاوية اللوحة")).clicked() {
+                                    if ui.button(tr(lang,"Mirror view left/right","عكس الكانفا يمين/شمال")).clicked(){
+                                        self.canvas_flip_h=!self.canvas_flip_h;ui.close_menu();
+                                    }
+                                    if ui.button(tr(lang,"Flip view top/bottom","عكس الكانفا فوق/تحت")).clicked(){
+                                        self.canvas_flip_v=!self.canvas_flip_v;ui.close_menu();
+                                    }
+                                    if ui.button(tr(lang, "Reset canvas view", "إرجاع عرض الكانفا")).clicked() {
                                         self.canvas_rotation_deg = 0.0;
                                         self.canvas_flip_h = false;
                                         self.canvas_flip_v = false;
@@ -7636,7 +7677,9 @@ impl eframe::App for StickApp {
                             }
                         });
                         if response.clicked() {
-                            self.active_tool_ui = tool;
+                            self.active_tool_ui = if tool==ActiveToolUI::EraserGreen {
+                                ActiveToolUI::EraserRed
+                            } else {tool};
                             self.right_panel_tab = 0;
                             self.play_sfx(SfxType::ToolSelect(tool as u8));
                         }
@@ -9450,6 +9493,10 @@ impl eframe::App for StickApp {
                     } else {
                         match self.active_tool_ui {
                             ActiveToolUI::ShapeLine=>Some(canvas_quick_menu::QuickMenuKind::Shapes),
+                            ActiveToolUI::VectorEraser=>Some(canvas_quick_menu::QuickMenuKind::VectorEraser),
+                            ActiveToolUI::EraserRed | ActiveToolUI::EraserGreen=>
+                                Some(canvas_quick_menu::QuickMenuKind::RasterEraser),
+                            ActiveToolUI::HandCanvas=>Some(canvas_quick_menu::QuickMenuKind::CanvasView),
                             ActiveToolUI::Brush | ActiveToolUI::VectorPen | ActiveToolUI::Bucket=>
                                 Some(canvas_quick_menu::QuickMenuKind::Colors),
                             _=>None,
@@ -9462,51 +9509,116 @@ impl eframe::App for StickApp {
             }
 
             if let Some(menu)=self.canvas_quick_menu {
-                let mut colors:Vec<[u8;4]>=BASIC_COLORS.iter()
-                    .map(|(rgb,_)|[rgb[0],rgb[1],rgb[2],255]).collect();
-                if !colors.contains(&self.brush_color){colors.push(self.brush_color);}
-                let selected_shape=match self.selected_shape_kind {
-                    GeometricShapeKind::StraightLine=>0,
-                    GeometricShapeKind::Circle=>1,
-                    GeometricShapeKind::Square=>2,
-                    GeometricShapeKind::Rectangle=>3,
-                    GeometricShapeKind::Triangle=>4,
-                    GeometricShapeKind::Pentagon=>5,
-                };
-                if let Some(action)=canvas_quick_menu::show(
-                    ctx,menu,&["／","○","□","▭","△","⬠"],&colors,
-                    selected_shape,self.shape_vector_outline,self.brush_color,
-                    &tr(lang,"CUSTOM","مخصص")
-                ) {
-                    match action {
-                        canvas_quick_menu::QuickMenuAction::Shape(index)=>{
-                            self.selected_shape_kind=match index {
-                                0=>GeometricShapeKind::StraightLine,
-                                1=>GeometricShapeKind::Circle,
-                                2=>GeometricShapeKind::Square,
-                                3=>GeometricShapeKind::Rectangle,
-                                4=>GeometricShapeKind::Triangle,
-                                _=>GeometricShapeKind::Pentagon,
-                            };
-                            self.play_sfx(SfxType::UiClick);
+                match menu.kind {
+                    canvas_quick_menu::QuickMenuKind::VectorEraser=>{
+                        let selected=Some(match self.vector_eraser_mode {
+                            drawing_power::VectorEraseMode::Segment=>0,
+                            drawing_power::VectorEraseMode::ToIntersection=>1,
+                            drawing_power::VectorEraseMode::WholeStroke=>2,
+                        });
+                        let part_label=tr(lang,"PART","جزئي");
+                        let cross_label=tr(lang,"CROSS","تقاطع");
+                        let all_label=tr(lang,"ALL","كامل");
+                        let items=[
+                            ("◐",part_label.as_str()),
+                            ("✂",cross_label.as_str()),
+                            ("×",all_label.as_str()),
+                        ];
+                        if let Some(choice)=canvas_quick_menu::show_mode_menu(ctx,menu,&items,selected) {
+                            if choice==usize::MAX {self.canvas_quick_menu=None;}
+                            else {
+                                self.vector_eraser_mode=match choice {
+                                    0=>drawing_power::VectorEraseMode::Segment,
+                                    1=>drawing_power::VectorEraseMode::ToIntersection,
+                                    _=>drawing_power::VectorEraseMode::WholeStroke,
+                                };
+                                self.play_sfx(SfxType::UiClick);
+                                self.canvas_quick_menu=None;
+                            }
+                        }
+                    }
+                    canvas_quick_menu::QuickMenuKind::RasterEraser=>{
+                        let selected=Some(if self.eraser_mode==eraser_tools::EraserMode::Partial{0}else{1});
+                        let part_label=tr(lang,"PART","جزئي");
+                        let all_label=tr(lang,"ALL","كامل");
+                        let items=[("◐",part_label.as_str()),("×",all_label.as_str())];
+                        if let Some(choice)=canvas_quick_menu::show_mode_menu(ctx,menu,&items,selected) {
+                            if choice==usize::MAX {self.canvas_quick_menu=None;}
+                            else {
+                                self.eraser_mode=if choice==0 {eraser_tools::EraserMode::Partial}
+                                    else {eraser_tools::EraserMode::WholeStroke};
+                                self.play_sfx(SfxType::UiClick);
+                                self.canvas_quick_menu=None;
+                            }
+                        }
+                    }
+                    canvas_quick_menu::QuickMenuKind::CanvasView=>{
+                        let mirror_label=tr(lang,"MIRROR","يمين/شمال");
+                        let flip_label=tr(lang,"FLIP","فوق/تحت");
+                        let reset_label=tr(lang,"RESET","إرجاع");
+                        let items=[
+                            ("↔",mirror_label.as_str()),
+                            ("↕",flip_label.as_str()),
+                            ("↺",reset_label.as_str()),
+                        ];
+                        if let Some(choice)=canvas_quick_menu::show_mode_menu(ctx,menu,&items,None) {
+                            if choice!=usize::MAX {
+                                match choice {
+                                    0=>self.canvas_flip_h=!self.canvas_flip_h,
+                                    1=>self.canvas_flip_v=!self.canvas_flip_v,
+                                    _=>{self.canvas_flip_h=false;self.canvas_flip_v=false;self.canvas_rotation_deg=0.0;}
+                                }
+                                self.play_sfx(SfxType::UiClick);
+                            }
                             self.canvas_quick_menu=None;
                         }
-                        canvas_quick_menu::QuickMenuAction::ToggleShapeVector=>{
-                            self.shape_vector_outline=!self.shape_vector_outline;
-                            self.play_sfx(SfxType::UiClick);
-                        }
-                        canvas_quick_menu::QuickMenuAction::Color(color)=>{
-                            self.brush_color=color;
-                            self.play_sfx(SfxType::UiClick);
-                            self.canvas_quick_menu=None;
-                        }
-                        canvas_quick_menu::QuickMenuAction::CustomColor=>{
-                            self.show_quick_custom_color=true;
-                            self.play_sfx(SfxType::UiClick);
-                            self.canvas_quick_menu=None;
-                        }
-                        canvas_quick_menu::QuickMenuAction::Close=>{
-                            self.canvas_quick_menu=None;
+                    }
+                    canvas_quick_menu::QuickMenuKind::Shapes | canvas_quick_menu::QuickMenuKind::Colors=>{
+                        let mut colors:Vec<[u8;4]>=BASIC_COLORS.iter()
+                            .map(|(rgb,_)|[rgb[0],rgb[1],rgb[2],255]).collect();
+                        if !colors.contains(&self.brush_color){colors.push(self.brush_color);}
+                        let selected_shape=match self.selected_shape_kind {
+                            GeometricShapeKind::StraightLine=>0,
+                            GeometricShapeKind::Circle=>1,
+                            GeometricShapeKind::Square=>2,
+                            GeometricShapeKind::Rectangle=>3,
+                            GeometricShapeKind::Triangle=>4,
+                            GeometricShapeKind::Pentagon=>5,
+                        };
+                        if let Some(action)=canvas_quick_menu::show(
+                            ctx,menu,&["／","○","□","▭","△","⬠"],&colors,
+                            selected_shape,self.shape_vector_outline,self.brush_color,
+                            &tr(lang,"CUSTOM","مخصص")
+                        ) {
+                            match action {
+                                canvas_quick_menu::QuickMenuAction::Shape(index)=>{
+                                    self.selected_shape_kind=match index {
+                                        0=>GeometricShapeKind::StraightLine,
+                                        1=>GeometricShapeKind::Circle,
+                                        2=>GeometricShapeKind::Square,
+                                        3=>GeometricShapeKind::Rectangle,
+                                        4=>GeometricShapeKind::Triangle,
+                                        _=>GeometricShapeKind::Pentagon,
+                                    };
+                                    self.play_sfx(SfxType::UiClick);
+                                    self.canvas_quick_menu=None;
+                                }
+                                canvas_quick_menu::QuickMenuAction::ToggleShapeVector=>{
+                                    self.shape_vector_outline=!self.shape_vector_outline;
+                                    self.play_sfx(SfxType::UiClick);
+                                }
+                                canvas_quick_menu::QuickMenuAction::Color(color)=>{
+                                    self.brush_color=color;
+                                    self.play_sfx(SfxType::UiClick);
+                                    self.canvas_quick_menu=None;
+                                }
+                                canvas_quick_menu::QuickMenuAction::CustomColor=>{
+                                    self.show_quick_custom_color=true;
+                                    self.play_sfx(SfxType::UiClick);
+                                    self.canvas_quick_menu=None;
+                                }
+                                canvas_quick_menu::QuickMenuAction::Close=>self.canvas_quick_menu=None,
+                            }
                         }
                     }
                 }
@@ -9580,7 +9692,7 @@ impl eframe::App for StickApp {
                 self.zoom_level = new_zoom;
             }
             if (space_down || self.active_tool_ui == ActiveToolUI::HandCanvas)
-                && pointer_down && is_over_canvas && !any_modal_open {
+                && pointer_down && is_over_canvas && !any_modal_open && !self.pose_edit_mode {
                 if let (Some(c), Some(l)) = (pointer_pos, self.last_pointer_pos) { self.pan_offset += c - l; }
             }
             // With the hand tool, left drag pans; right drag rotates the entire stage view.
@@ -9759,7 +9871,26 @@ impl eframe::App for StickApp {
             }
 
             if self.pose_guide.visible {
-                pose_guide::draw(&painter,&self.pose_guide,(stage_w,stage_h),&to_screen);
+                pose_guide::draw_active(&painter,&self.pose_guide,(stage_w,stage_h),&to_screen,
+                    if self.pose_edit_mode {self.pose_drag_joint}else{None});
+            }
+
+            if self.pose_edit_mode && self.pose_guide.visible && !any_modal_open
+                && self.canvas_quick_menu.is_none() {
+                if pointer_pressed && is_over_canvas {
+                    if let Some(pos)=pointer_pos {
+                        self.pose_drag_joint=pose_guide::hit_test_joint(
+                            &self.pose_guide,(stage_w,stage_h),to_stage(pos),
+                            (15.0/scale.max(0.05)).max(2.0));
+                    }
+                }
+                if pointer_down {
+                    if let (Some(joint),Some(pos))=(self.pose_drag_joint,pointer_pos) {
+                        pose_guide::drag_joint(&mut self.pose_guide,joint,(stage_w,stage_h),to_stage(pos));
+                        ctx.request_repaint();
+                    }
+                }
+                if pointer_released {self.pose_drag_joint=None;}
             }
 
             let can_use_tool = self.active_tool_ui == ActiveToolUI::Eyedropper || !self.is_active_layer_locked();
@@ -9802,6 +9933,7 @@ impl eframe::App for StickApp {
             let opacity_gesture=opacity_gesture_down && self.active_tool_opacity().is_some();
             if !space_down && !size_gesture_down && !opacity_gesture
                 && self.canvas_quick_menu.is_none()
+                && !self.pose_edit_mode
                 && self.active_tool_ui != ActiveToolUI::HandCanvas
                 && self.canvas_primary_capture
                 && is_over_canvas && !any_modal_open && can_use_tool {
@@ -9942,35 +10074,22 @@ impl eframe::App for StickApp {
                         ActiveToolUI::EraserRed | ActiveToolUI::EraserGreen if pointer_down => {
                             if pointer_pressed { self.save_undo_state(); }
                             self.ensure_editable_keyframe();
-                            if let Some(l) = self.project.layers.get_mut(self.active_layer_idx) {
-                                if let Some(f) = l.keyframes.get_mut(&self.current_frame) {
-                                    let r = if self.active_tool_ui == ActiveToolUI::EraserRed {
-                                        self.eraser_full_size
-                                    } else {
-                                        self.eraser_partial_size
-                                    }.max(2.0);
-                                    let previous = if pointer_pressed {
-                                        stage_pos
-                                    } else {
-                                        self.last_pointer_pos.map(&to_stage).unwrap_or(stage_pos)
-                                    };
-                                    // Interpolate along quick mouse/tablet drags. The old
-                                    // point-only eraser left gaps between input frames.
-                                    let distance = previous.distance(stage_pos);
-                                    let steps = (distance / (r * 0.5).max(2.0))
-                                        .ceil().clamp(1.0, 80.0) as usize;
-                                    let mut changed = false;
+                            if let Some(l)=self.project.layers.get_mut(self.active_layer_idx) {
+                                if let Some(f)=l.keyframes.get_mut(&self.current_frame) {
+                                    let r=self.eraser_full_size.max(2.0);
+                                    let previous=if pointer_pressed {stage_pos}
+                                        else {self.last_pointer_pos.map(&to_stage).unwrap_or(stage_pos)};
+                                    let distance=previous.distance(stage_pos);
+                                    let steps=(distance/(r*0.5).max(2.0))
+                                        .ceil().clamp(1.0,80.0) as usize;
+                                    let mut changed=false;
                                     for step in 0..=steps {
-                                        let sample = previous.lerp(stage_pos, step as f32 / steps as f32);
-                                        changed |= if self.active_tool_ui == ActiveToolUI::EraserRed {
-                                            eraser_tools::erase_whole(
-                                                &mut f.strokes, (sample.x, sample.y), r)
-                                        } else {
-                                            eraser_tools::erase_partial(
-                                                &mut f.strokes, (sample.x, sample.y), r)
-                                        };
+                                        let sample=previous.lerp(stage_pos,step as f32/steps as f32);
+                                        changed|=eraser_tools::erase_with_mode(
+                                            &mut f.strokes,(sample.x,sample.y),r,self.eraser_mode);
                                     }
-                                    if changed { self.has_unsaved_changes = true; }
+                                    if changed {self.has_unsaved_changes=true;}
+                                    else if pointer_pressed {self.undo_stack.pop();}
                                 }
                             }
                         }
@@ -10898,13 +11017,9 @@ impl eframe::App for StickApp {
                         painter.circle_filled(p,2.5,egui::Color32::from_rgb(247,141,197));
                     } else if self.active_tool_ui == ActiveToolUI::EraserRed
                         || self.active_tool_ui == ActiveToolUI::EraserGreen {
-                        let color = if self.active_tool_ui == ActiveToolUI::EraserRed {
-                            egui::Color32::from_rgb(255, 96, 113)
-                        } else {
-                            egui::Color32::from_rgb(45, 221, 145)
-                        };
-                        painter.circle_stroke(p, radius, egui::Stroke::new(2.0, color));
-                        painter.circle_filled(p, 2.5, color);
+                        let color=egui::Color32::from_rgb(250,204,52);
+                        painter.circle_stroke(p,radius,egui::Stroke::new(2.0,color));
+                        painter.circle_filled(p,2.5,color);
                     } else {
                         match self.active_krita_brush {
                             KritaBrushPreset::ChiselMarker if self.active_tool_ui == ActiveToolUI::Brush => {
