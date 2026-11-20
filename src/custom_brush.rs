@@ -1369,6 +1369,9 @@ mod tests {
             source_path:String::new(),icon_path:String::new(),tip_paths:vec![],
             spacing:0.1,opacity:1.0,flow:1.0,size_pressure:0.0,opacity_pressure:0.0,
             angle_deg:0.0,follow_stroke:false,scatter:0.0,random_tip:false,tip_scale:1.0,
+            render_mode:CustomBrushRenderMode::Continuous,
+            engine_version:CUSTOM_BRUSH_ENGINE_VERSION,
+            disabled_reason:String::new(),
             compatibility_note:String::new(),
         };
         let brush=RuntimeBrush{meta,tips:vec![round_tip(64,0.9)],icon:None};
@@ -1398,6 +1401,37 @@ mod tests {
         }"#;
         let meta:CustomBrushMeta=serde_json::from_str(json).unwrap();
         assert_eq!(meta.tip_scale,1.0);
+        assert_eq!(meta.render_mode,CustomBrushRenderMode::Stamp);
+        assert_eq!(meta.engine_version,0);
+        assert!(meta.disabled_reason.is_empty());
+    }
+
+    #[test]
+    fn continuous_external_brush_oversamples_large_sizes() {
+        let meta=CustomBrushMeta{
+            id:"continuous".into(),name:"continuous".into(),source_format:"Krita .kpp".into(),
+            source_path:String::new(),icon_path:String::new(),tip_paths:vec![],
+            spacing:0.10,opacity:1.0,flow:1.0,size_pressure:0.0,opacity_pressure:0.0,
+            angle_deg:0.0,follow_stroke:false,scatter:0.0,random_tip:false,tip_scale:1.0,
+            render_mode:CustomBrushRenderMode::Continuous,
+            engine_version:CUSTOM_BRUSH_ENGINE_VERSION,disabled_reason:String::new(),
+            compatibility_note:String::new(),
+        };
+        let brush=RuntimeBrush{meta,tips:vec![round_tip(64,0.9)],icon:None};
+        let stroke=Stroke{
+            points:vec![
+                crate::project::StrokePoint{x:0.0,y:0.0,pressure:1.0},
+                crate::project::StrokePoint{x:200.0,y:0.0,pressure:1.0},
+            ],
+            color:[0,0,0,255],fill_color:None,base_width:100.0,is_vector:false,
+            brush_preset:crate::project::KritaBrushPreset::GPenInk,opacity:1.0,
+            brush_texture_id:Some("custom:continuous".into()),
+            tip_shape:crate::project::BrushTipShape::Round,
+        };
+        let mut centers=Vec::new();
+        emit_stamps(&stroke,&brush,|stamp|centers.push(stamp.center[0]));
+        let max_gap=centers.windows(2).map(|w|w[1]-w[0]).fold(0.0_f32,f32::max);
+        assert!(max_gap<=3.6,"continuous brush left a visible bead gap: {max_gap}");
     }
 
     #[test]
