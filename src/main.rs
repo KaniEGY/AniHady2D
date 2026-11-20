@@ -4632,6 +4632,7 @@ impl StickApp {
                             } else {
                                 self.active_custom_brush=Some(meta.id.clone());
                                 self.active_krita_brush=KritaBrushPreset::GPenInk;
+                                self.brush_size=meta.default_size.clamp(1.0,120.0);
                                 self.brush_opacity=meta.opacity;
                                 self.play_sfx(SfxType::UiClick);
                             }
@@ -4785,7 +4786,7 @@ impl StickApp {
 
                 if let Some(id)=self.active_custom_brush.as_deref() {
                     if let Some(meta)=self.custom_brushes.iter().find(|b|b.id==id) {
-                        ui.small(format!("{} • {}",meta.name,meta.source_format));
+                        ui.small(format!("{} • {} • {:.0}px",meta.name,meta.source_format,meta.default_size));
                         if !meta.disabled_reason.is_empty() {
                             ui.colored_label(egui::Color32::from_rgb(255,120,110),
                                 &meta.disabled_reason);
@@ -10300,6 +10301,7 @@ impl eframe::App for StickApp {
                     Ok(meta) => {
                         self.active_custom_brush=Some(meta.id.clone());
                         self.active_krita_brush=KritaBrushPreset::GPenInk;
+                        self.brush_size=meta.default_size.clamp(1.0,120.0);
                         self.brush_opacity=meta.opacity;
                         self.custom_brushes.push(meta);
                         match custom_brush::save_library(&self.custom_brushes) {
