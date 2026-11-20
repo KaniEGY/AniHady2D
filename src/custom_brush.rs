@@ -4,7 +4,7 @@
 //! The original file is kept beside the normalized tip(s) so future versions
 //! can improve the mapping without making users re-import their libraries.
 
-use crate::brush_engine::visit_pressure_dabs_spaced_dense;
+use crate::brush_engine::{visit_pressure_dabs_spaced_dense, visit_pressure_dabs_spaced_dense_bounded};
 use crate::project::Stroke;
 use base64::Engine;
 use eframe::egui;
@@ -412,7 +412,7 @@ pub fn preview(
         meshes.push(egui::Mesh::with_texture(tex.id()));
     }
 
-    emit_stamps(stroke,brush,|stamp|{
+    emit_stamps(stroke,brush,Some(8_000),|stamp|{
         let mesh=&mut meshes[stamp.tip_index];
         let start=mesh.vertices.len() as u32;
         let alpha=(rgba[3] as f32*stamp.flow).round().clamp(0.0,255.0) as u8;
@@ -457,7 +457,7 @@ pub fn export(
         }
         pixmaps.push(pm);
     }
-    emit_stamps(stroke,brush,|stamp|{
+    emit_stamps(stroke,brush,None,|stamp|{
         let tip=&pixmaps[stamp.tip_index];
         let origin=stamp.corner(0.,0.);
         let kx=2.0/tip.width() as f32;
@@ -495,7 +495,7 @@ impl Stamp {
     }
 }
 
-fn emit_stamps(stroke:&Stroke,brush:&RuntimeBrush,mut emit:impl FnMut(Stamp)){
+fn emit_stamps(stroke:&Stroke,brush:&RuntimeBrush,live_budget:Option<usize>,mut emit:impl FnMut(Stamp)){
     // Vendor spacing is stored as a fraction of the brush DIAMETER while the
     // shared sampler expects a fraction of RADIUS. Preserve that distinction:
     // Krita spacing=0.1 must become 0.2 radius, not 2.0.
@@ -509,7 +509,7 @@ fn emit_stamps(stroke:&Stroke,brush:&RuntimeBrush,mut emit:impl FnMut(Stamp)){
     };
     let ratio=(spacing*2.0*brush.meta.tip_scale).clamp(0.01,2.0);
     let mut ordinal=0u32;
-    visit_pressure_dabs_spaced_dense(&stroke.points,stroke.base_width,ratio,|dab,[dx,dy]|{
+    let mut paint_one=|dab:crate::brush_engine::BrushDab,[dx,dy]:[f32;2]|{
         let p=(2.0*dab.radius/stroke.base_width.max(0.001)).clamp(0.0,1.5);
         let size_factor=(1.0-brush.meta.size_pressure)+brush.meta.size_pressure*p;
         let r=(stroke.base_width*0.5*size_factor*brush.meta.tip_scale).max(0.25);
@@ -544,7 +544,14 @@ fn emit_stamps(stroke:&Stroke,brush:&RuntimeBrush,mut emit:impl FnMut(Stamp)){
             tip_index:idx,
         });
         ordinal=ordinal.wrapping_add(1);
-    });
+    };
+    if let Some(max_dabs)=live_budget {
+        visit_pressure_dabs_spaced_dense_bounded(
+            &stroke.points,stroke.base_width,ratio,max_dabs,&mut paint_one);
+    } else {
+        visit_pressure_dabs_spaced_dense(
+            &stroke.points,stroke.base_width,ratio,&mut paint_one);
+    }
 }
 
 fn hash_id(id:&str)->u32 {
