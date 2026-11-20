@@ -7,6 +7,9 @@ use eframe::egui;
 pub enum QuickMenuKind {
     Shapes,
     Colors,
+    VectorEraser,
+    RasterEraser,
+    CanvasView,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -193,6 +196,56 @@ pub fn show(
         if outside {
             action = Some(QuickMenuAction::Close);
         }
+    }
+    action
+}
+
+pub fn show_mode_menu(
+    ctx:&egui::Context,
+    state:QuickMenuState,
+    items:&[(&str,&str)],
+    selected:Option<usize>,
+)->Option<usize>{
+    if items.is_empty(){return None}
+    let origin=state.center-egui::vec2(MENU_SIZE*0.5,MENU_SIZE*0.5);
+    let mut action=None;
+    egui::Area::new(egui::Id::new(("stick_canvas_tool_mode_menu",state.kind as u8)))
+        .order(egui::Order::Foreground)
+        .fixed_pos(origin)
+        .show(ctx,|ui|{
+            let (rect,_)=ui.allocate_exact_size(egui::vec2(MENU_SIZE,MENU_SIZE),egui::Sense::hover());
+            let center=rect.center();
+            ui.painter().circle_filled(center,27.0,egui::Color32::from_rgba_unmultiplied(18,24,33,246));
+            ui.painter().circle_stroke(center,27.0,egui::Stroke::new(1.4,egui::Color32::from_rgb(66,205,242)));
+            ui.painter().text(center,egui::Align2::CENTER_CENTER,"×",
+                egui::FontId::proportional(18.0),egui::Color32::from_rgb(220,228,236));
+            let count=items.len();
+            for (index,(icon,label)) in items.iter().enumerate() {
+                let angle=-std::f32::consts::FRAC_PI_2
+                    +index as f32*std::f32::consts::TAU/count as f32;
+                let p=center+egui::vec2(angle.cos(),angle.sin())*RING_RADIUS;
+                let hit=egui::Rect::from_center_size(p,egui::vec2(62.0,62.0));
+                let response=ui.allocate_rect(hit,egui::Sense::click());
+                let active=selected==Some(index);
+                let fill=if active {egui::Color32::from_rgb(113,88,25)}
+                    else if response.hovered(){egui::Color32::from_rgb(35,58,72)}
+                    else{egui::Color32::from_rgb(28,34,43)};
+                ui.painter().circle_filled(p,28.0,fill);
+                ui.painter().circle_stroke(p,28.0,egui::Stroke::new(
+                    if active{2.2}else{1.2},
+                    if active{egui::Color32::from_rgb(255,205,63)}
+                    else{egui::Color32::from_rgb(66,205,242)}));
+                ui.painter().text(p+egui::vec2(0.0,-5.0),egui::Align2::CENTER_CENTER,*icon,
+                    egui::FontId::proportional(17.0),egui::Color32::WHITE);
+                ui.painter().text(p+egui::vec2(0.0,13.0),egui::Align2::CENTER_CENTER,*label,
+                    egui::FontId::proportional(9.0),egui::Color32::from_rgb(225,230,235));
+                if response.clicked(){action=Some(index);}
+            }
+        });
+    if action.is_none() && ctx.input(|i|i.pointer.primary_pressed()) {
+        let outside=ctx.input(|i|i.pointer.interact_pos())
+            .is_none_or(|p|p.distance(state.center)>118.0);
+        if outside {return Some(usize::MAX)}
     }
     action
 }
