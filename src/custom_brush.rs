@@ -499,7 +499,11 @@ fn emit_stamps(stroke:&Stroke,brush:&RuntimeBrush,mut emit:impl FnMut(Stamp)){
     // shared sampler expects a fraction of RADIUS. Preserve that distinction:
     // Krita spacing=0.1 must become 0.2 radius, not 2.0.
     let spacing=match brush.meta.render_mode {
-        CustomBrushRenderMode::Continuous => brush.meta.spacing.min(0.035),
+        // Imported continuous engines need overlap, but allowing vendor
+        // spacing to approach zero creates thousands of redundant dabs and
+        // makes the pointer feel heavy. 2.5–4% of diameter stays visually
+        // continuous while keeping interactive sampling bounded.
+        CustomBrushRenderMode::Continuous => brush.meta.spacing.clamp(0.025,0.04),
         CustomBrushRenderMode::Stamp => brush.meta.spacing,
     };
     let ratio=(spacing*2.0*brush.meta.tip_scale).clamp(0.01,2.0);
