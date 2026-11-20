@@ -1997,8 +1997,8 @@ impl StickApp {
             layer_effect_window: None,
             layer_clipboard: None,
             symmetry_mode: SymmetryMode::Off,
-            stabilizer_strength: 0.38,
-            vector_stabilizer_strength: 0.36,
+            stabilizer_strength: 0.18,
+            vector_stabilizer_strength: 0.20,
             stabilized_cursor: None,
             shape_drag_start: None,
             shape_drag_current: None,
@@ -8777,7 +8777,13 @@ impl eframe::App for StickApp {
                 && self.active_tool_ui != ActiveToolUI::HandCanvas;
             let tool_cursor = if !is_inside_workspace || any_modal_open {
                 egui::CursorIcon::Default
-            } else if show_dot || show_tool_icon {
+            } else if show_dot {
+                // Drawing tools keep a native OS crosshair visible. The
+                // painted brush-radius ring remains as extra feedback, but
+                // never replaces the hardware cursor, eliminating the
+                // one-frame "heavy mouse" feeling.
+                egui::CursorIcon::Crosshair
+            } else if show_tool_icon {
                 egui::CursorIcon::None
             } else if space_down || self.active_tool_ui == ActiveToolUI::HandCanvas {
                 if pointer_down || ctx.input(|i| i.pointer.secondary_down()) {
@@ -9349,7 +9355,14 @@ impl eframe::App for StickApp {
                             }
                         }
                         ActiveToolUI::VectorPen if pointer_down => {
-                            let stab = self.vector_stabilizer_strength.clamp(0.0, 0.70);
+                            // Mouse input has no pressure jitter to smooth and
+                            // should track the hand almost immediately. Keep
+                            // the full user stabilizer for pressure-capable pens.
+                            let stab = (if pressure_available {
+                                self.vector_stabilizer_strength
+                            } else {
+                                self.vector_stabilizer_strength * 0.45
+                            }).clamp(0.0, 0.70);
                             let mut raw_previous=self.last_pointer_pos.map(|p|to_stage(p));
                             for sample_screen in pointer_samples.iter().copied()
                                 .filter(|sample|canvas_rect.contains(*sample)) {
@@ -9386,7 +9399,11 @@ impl eframe::App for StickApp {
                             }
                         }
                         ActiveToolUI::Brush if pointer_down => {
-                            let stab=self.stabilizer_strength.clamp(0.0,0.75);
+                            let stab=(if pressure_available {
+                                self.stabilizer_strength
+                            } else {
+                                self.stabilizer_strength * 0.45
+                            }).clamp(0.0,0.75);
                             let mut raw_previous=self.last_pointer_pos.map(|p|to_stage(p));
                             // Zero pressure after a real pressure-capable sample
                             // means lift-off. Do not turn it into a full-width dab.
