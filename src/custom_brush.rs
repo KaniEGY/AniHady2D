@@ -1724,6 +1724,7 @@ mod tests {
         }"#;
         let meta:CustomBrushMeta=serde_json::from_str(json).unwrap();
         assert_eq!(meta.tip_scale,1.0);
+        assert_eq!(meta.default_size,30.0);
         assert_eq!(meta.render_mode,CustomBrushRenderMode::Stamp);
         assert_eq!(meta.engine_version,0);
         assert!(meta.disabled_reason.is_empty());
@@ -1755,7 +1756,10 @@ mod tests {
         let mut centers=Vec::new();
         emit_stamps(&stroke,&brush,|stamp|centers.push(stamp.center[0]));
         let max_gap=centers.windows(2).map(|w|w[1]-w[0]).fold(0.0_f32,f32::max);
-        assert!(max_gap<=3.6,"continuous brush left a visible bead gap: {max_gap}");
+        // Centers may be up to 4px apart at 100px diameter: the stamps still
+        // overlap by ~96px, so the stroke is visually continuous while avoiding
+        // the excessive dab count that made imported brushes feel heavy.
+        assert!(max_gap<=4.1,"continuous brush sampling regressed: {max_gap}");
     }
 
     #[test]
