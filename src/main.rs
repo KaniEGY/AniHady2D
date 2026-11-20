@@ -9065,6 +9065,7 @@ impl eframe::App for StickApp {
             let is_inside_workspace = pointer_on_canvas_layer;
             let custom_brush_cursor = matches!(self.active_tool_ui,
                 ActiveToolUI::Brush | ActiveToolUI::VectorPen | ActiveToolUI::Sculpt
+                    | ActiveToolUI::PuppetWarp | ActiveToolUI::VectorEraser
                     | ActiveToolUI::EraserRed | ActiveToolUI::EraserGreen);
             let show_dot = is_inside_workspace && !any_modal_open && !space_down
                 && !size_gesture_down && !opacity_gesture_down && custom_brush_cursor;
@@ -9434,6 +9435,10 @@ impl eframe::App for StickApp {
                 }
             }
 
+            if self.show_pose_guide || self.pose_guide.visible {
+                pose_guide::draw(&painter,&self.pose_guide,(stage_w,stage_h),&to_screen);
+            }
+
             let can_use_tool = self.active_tool_ui == ActiveToolUI::Eyedropper || !self.is_active_layer_locked();
 
             // Secondary-button vector editing is independent from the primary
@@ -9483,11 +9488,24 @@ impl eframe::App for StickApp {
                     match self.active_tool_ui {
                         ActiveToolUI::Text if pointer_pressed => { self.pending_text_pos = stage_pos; self.show_text_dialog = true; }
                         ActiveToolUI::ShapeLine => {
-                            if pointer_pressed { self.shape_drag_start = Some(stage_pos); self.shape_drag_current = Some(stage_pos); }
-                            else if pointer_down { self.shape_drag_current = Some(stage_pos); }
+                            if pointer_pressed {
+                                self.shape_drag_start=Some(stage_pos);
+                                self.shape_drag_current=Some(stage_pos);
+                            } else if pointer_down {
+                                let current=self.shape_drag_start
+                                    .map(|start|self.snap_drawing_point(start,stage_pos))
+                                    .unwrap_or(stage_pos);
+                                self.shape_drag_current=Some(current);
+                            }
                         }
                         ActiveToolUI::Bucket if pointer_pressed => {
-                            let reference_strokes: Vec<Stroke> = if self.bucket_reference_all_layers {
+                            let reference_strokes: Vec<Stroke> = if self.bucket_reference_only {
+                                self.project.layers.iter()
+                                    .filter(|layer|layer.visible && !layer.is_guide && layer.is_reference)
+                                    .flat_map(|layer|
+                                        self.project.evaluate_layer_at_frame(layer,self.current_frame).strokes)
+                                    .collect()
+                            } else if self.bucket_reference_all_layers {
                                 self.project.layers.iter()
                                     .filter(|layer| layer.visible && !layer.is_guide)
                                     .flat_map(|layer|
@@ -9538,6 +9556,7 @@ impl eframe::App for StickApp {
                                         boundary_thickness:self.bucket_thickness,
                                     });
                                 let can_fill=!self.bucket_reference_all_layers
+                                    && !self.bucket_reference_only
                                     && fallback.is_none()
                                     && fill_tools::can_fill_contour(
                                         &reference_strokes,seed.x,seed.y);
@@ -9574,6 +9593,28 @@ impl eframe::App for StickApp {
                                 }
                                 if changed {self.has_unsaved_changes=true;} else {self.undo_stack.pop();}
                             }
+                        }
+                        ActiveToolUI::VectorEraser if pointer_down => {
+                            if pointer_pressed {self.save_undo_state();}
+                            self.ensure_editable_keyframe();
+                            let previous=if pointer_pressed {stage_pos}
+                                else {self.last_pointer_pos.map(&to_stage).unwrap_or(stage_pos)};
+                            let distance=previous.distance(stage_pos);
+                            let radius=self.vector_eraser_size.max(2.0);
+                            let steps=(distance/(radius*0.5).max(2.0)).ceil().clamp(1.0,80.0) as usize;
+                            let mode=self.vector_eraser_mode;
+                            let mut changed=false;
+                            if let Some(layer)=self.project.layers.get_mut(self.active_layer_idx) {
+                                if let Some(frame)=layer.keyframes.get_mut(&self.current_frame) {
+                                    for step in 0..=steps {
+                                        let sample=previous.lerp(stage_pos,step as f32/steps as f32);
+                                        changed|=drawing_power::vector_erase_at(
+                                            &mut frame.strokes,(sample.x,sample.y),radius,mode);
+                                    }
+                                }
+                            }
+                            if changed {self.has_unsaved_changes=true;}
+                            else if pointer_pressed {self.undo_stack.pop();}
                         }
                         ActiveToolUI::EraserRed | ActiveToolUI::EraserGreen if pointer_down => {
                             if pointer_pressed { self.save_undo_state(); }
@@ -9616,6 +9657,35 @@ impl eframe::App for StickApp {
                                 &self.project, self.current_frame, stage_pos, (5.0 / scale).max(1.0));
                             if let Some(color) = picked {
                                 self.brush_color = color;
+                            }
+                        }
+                        ActiveToolUI::PuppetWarp if pointer_down => {
+                            if !self.selected_stroke_indices.is_empty() {
+                                if pointer_pressed {
+                                    self.save_undo_state();
+                                    self.ensure_editable_keyframe();
+                                } else if let Some(previous_screen)=self.last_pointer_pos {
+                                    let previous=to_stage(previous_screen);
+                                    let movement=stage_pos-previous;
+                                    if movement.length_sq()>0.00001 {
+                                        let selected=self.selected_stroke_indices.clone();
+                                        if let Some(layer)=self.project.layers.get_mut(self.active_layer_idx) {
+                                            if let Some(frame)=layer.keyframes.get_mut(&self.current_frame) {
+                                                if drawing_power::puppet_warp(
+                                                    &mut frame.strokes,&selected,
+                                                    (previous.x,previous.y),(movement.x,movement.y),
+                                                    self.puppet_radius,self.puppet_strength)>0
+                                                {
+                                                    self.has_unsaved_changes=true;
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            } else if pointer_pressed {
+                                self.status_message=tr(lang,
+                                    "Select strokes before using Puppet Warp.",
+                                    "حدد خطوط الأول قبل التحريك الشبكي.");
                             }
                         }
                         ActiveToolUI::Sculpt if pointer_down => {
@@ -9663,13 +9733,17 @@ impl eframe::App for StickApp {
                             for sample_screen in pointer_samples.iter().copied()
                                 .filter(|sample|canvas_rect.contains(*sample)) {
                                 let sample=to_stage(sample_screen);
-                                let smooth=self.stabilized_cursor.map_or(sample,|previous|{
+                                let smooth_raw=self.stabilized_cursor.map_or(sample,|previous|{
                                     let (x,y)=stroke_geometry::adaptive_stabilized_xy(
                                         (previous.x,previous.y),
                                         raw_previous.map(|p|(p.x,p.y)),
                                         (sample.x,sample.y),stab);
                                     egui::pos2(x,y)
                                 });
+                                let smooth=self.current_stroke.as_ref()
+                                    .and_then(|stroke|stroke.points.last())
+                                    .map(|p|self.snap_drawing_point(egui::pos2(p.x,p.y),smooth_raw))
+                                    .unwrap_or(smooth_raw);
                                 self.stabilized_cursor=Some(smooth);
                                 if let Some(stroke)=&mut self.current_stroke {
                                     if let Some(last)=stroke.points.last() {
@@ -9707,13 +9781,17 @@ impl eframe::App for StickApp {
                                 for sample_screen in pointer_samples.iter().copied()
                                     .filter(|sample|canvas_rect.contains(*sample)) {
                                     let sample=to_stage(sample_screen);
-                                    let virt=self.stabilized_cursor.map_or(sample,|previous|{
+                                    let virt_raw=self.stabilized_cursor.map_or(sample,|previous|{
                                         let (x,y)=stroke_geometry::adaptive_stabilized_xy(
                                             (previous.x,previous.y),
                                             raw_previous.map(|p|(p.x,p.y)),
                                             (sample.x,sample.y),stab);
                                         egui::pos2(x,y)
                                     });
+                                    let virt=self.current_stroke.as_ref()
+                                        .and_then(|stroke|stroke.points.last())
+                                        .map(|p|self.snap_drawing_point(egui::pos2(p.x,p.y),virt_raw))
+                                        .unwrap_or(virt_raw);
                                     self.stabilized_cursor=Some(virt);
                                     if let Some(stroke)=&mut self.current_stroke {
                                         if let Some(last)=stroke.points.last() {
