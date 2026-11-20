@@ -394,7 +394,8 @@ pub fn visit_pressure_dabs_spaced(
     spacing_radius_ratio: f32,
     paint: impl FnMut(BrushDab, [f32; 2]),
 ) {
-    visit_pressure_dabs_spaced_impl(points,width,spacing_radius_ratio,0.12,paint);
+    visit_pressure_dabs_spaced_impl(
+        points,width,spacing_radius_ratio,0.12,MAX_DABS_PER_STROKE,paint);
 }
 
 /// Extra-dense sampler for imported continuous brush engines. It keeps the
@@ -406,7 +407,23 @@ pub fn visit_pressure_dabs_spaced_dense(
     spacing_radius_ratio: f32,
     paint: impl FnMut(BrushDab, [f32; 2]),
 ) {
-    visit_pressure_dabs_spaced_impl(points,width,spacing_radius_ratio,0.02,paint);
+    visit_pressure_dabs_spaced_impl(
+        points,width,spacing_radius_ratio,0.02,MAX_DABS_PER_STROKE,paint);
+}
+
+/// Live imported-brush preview can use a smaller geometry budget than export.
+/// The sampler increases spacing evenly across very long strokes, so the
+/// pointer remains responsive without chopping off the stroke tail.
+pub fn visit_pressure_dabs_spaced_dense_bounded(
+    points: &[StrokePoint],
+    width: f32,
+    spacing_radius_ratio: f32,
+    max_dabs: usize,
+    paint: impl FnMut(BrushDab, [f32; 2]),
+) {
+    visit_pressure_dabs_spaced_impl(
+        points,width,spacing_radius_ratio,0.02,
+        max_dabs.clamp(2,MAX_DABS_PER_STROKE),paint);
 }
 
 fn visit_pressure_dabs_spaced_impl(
@@ -414,6 +431,7 @@ fn visit_pressure_dabs_spaced_impl(
     width: f32,
     spacing_radius_ratio: f32,
     minimum_ratio: f32,
+    max_dabs: usize,
     mut paint: impl FnMut(BrushDab, [f32; 2]),
 ) {
     if !width.is_finite() || width <= 0.0 {
@@ -432,7 +450,8 @@ fn visit_pressure_dabs_spaced_impl(
         (f64::from(b.x) - f64::from(a.x)).hypot(f64::from(b.y) - f64::from(a.y))
     };
     let total: f64 = valid.zip(path.clone()).map(|(a, b)| length(a, b)).sum();
-    let minimum_spacing = total / (MAX_DABS_PER_STROKE - 2) as f64;
+    let max_dabs=max_dabs.clamp(2,MAX_DABS_PER_STROKE);
+    let minimum_spacing = total / (max_dabs - 1) as f64;
     let spacing_ratio = spacing_radius_ratio.clamp(minimum_ratio, 1.5) as f64;
     let spacing = |d: BrushDab| (f64::from(d.radius) * spacing_ratio).max(0.2).max(minimum_spacing);
     let mut previous = first;
@@ -452,7 +471,7 @@ fn visit_pressure_dabs_spaced_impl(
                 started = true;
                 count += 1;
             }
-            while remaining <= len && count < MAX_DABS_PER_STROKE - 1 {
+            while remaining <= len && count < max_dabs - 1 {
                 let t = remaining / len;
                 let sample = StrokePoint {
                     x: (f64::from(previous.x) + dx * t) as f32,
@@ -746,6 +765,16 @@ mod tests {
         assert!(dabs.len() <= MAX_DABS_PER_STROKE);
         assert!((dabs.last().unwrap().x - 200_000.0).abs() < 0.01);
         assert!(dabs.windows(2).all(|p| p[1].x - p[0].x <= 11.0));
+    }
+
+    #[test]
+    fn bounded_dense_sampler_preserves_endpoint() {
+        let points=[point(0.,0.,1.),point(50_000.,0.,1.)];
+        let mut dabs=Vec::new();
+        visit_pressure_dabs_spaced_dense_bounded(&points,4.,0.02,256,
+            |dab,_|dabs.push(dab));
+        assert!(dabs.len()<=256);
+        assert!((dabs.last().unwrap().x-50_000.).abs()<0.01);
     }
 
     #[test]
