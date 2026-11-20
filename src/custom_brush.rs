@@ -2114,7 +2114,7 @@ mod tests {
             tip_shape:crate::project::BrushTipShape::Round,
         };
         let mut centers=Vec::new();
-        emit_stamps(&stroke,&brush,|stamp|centers.push(stamp.center[0]));
+        emit_stamps(&stroke,&brush,None,|stamp|centers.push(stamp.center[0]));
         let max_gap=centers.windows(2).map(|w|w[1]-w[0]).fold(0.0_f32,f32::max);
         // A 10% vendor spacing at 100px diameter should remain about 10px.
         // That still gives ~90% overlap, but no longer explodes into redundant
