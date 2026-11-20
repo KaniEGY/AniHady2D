@@ -655,7 +655,12 @@ fn import_sut_file(path:&Path)->Result<Vec<ImportedBrushDraft>,String>{
     let con=Connection::open_with_flags(path,flags).map_err(|e|format!("Clip Studio .sut: {e}"))?;
     let tables:Vec<String>={
         let mut st=con.prepare("SELECT name FROM sqlite_master WHERE type='table'").map_err(|e|e.to_string())?;
-        st.query_map([],|r|r.get(0)).map_err(|e|e.to_string())?.filter_map(Result::ok).collect()
+        let rows=st.query_map([],|r|r.get::<_,String>(0)).map_err(|e|e.to_string())?;
+        let mut names=Vec::new();
+        for row in rows {
+            if let Ok(name)=row { names.push(name); }
+        }
+        names
     };
     if !tables.iter().any(|x|x=="Variant"){return Err("Clip Studio file has no Variant table".into())}
     let variant=first_row_map(&con,"Variant")?;
