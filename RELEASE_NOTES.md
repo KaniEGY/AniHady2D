@@ -89,6 +89,10 @@
 - Artist System and level-up overlays now block canvas/tool input behind the popup, preventing custom cursor and drawing interactions from leaking into background windows.
 
 ### What's new
+- Added **Add brush / أضف فرشة** beside the built-in raster brush presets. Users can import multiple brushes, rename each one, optionally choose a custom icon, keep them permanently across restarts, and right-click an imported brush to delete it.
+- Imported brush strokes use the existing project brush-texture ID and share the same canvas/export renderer. The Vector Ink/Vector Pen renderer is unchanged.
+- Added brush import families for **Krita** (`.kpp`, `.bundle`, `.myb`, `.gbr`, `.gih`, `.abr`), **Clip Studio Paint** (`.sut`, `.sutg`, `.abr`, with legacy `.tos` compatibility fallback), and **Blender Grease Pencil Brush Assets** (`.blend` / `.asset.blend`), plus common image brush tips.
+- Krita embedded tips/brush definitions and pressure sensors, Clip Studio size/flow/spacing/rotation fields and readable material images, and Blender opacity/flow/spacing/jitter/pressure flags are normalized into Stick's raster brush engine. Vendor-only dynamics without a Stick equivalent are explicitly marked as approximations.
 - Brush presets now have deliberately different rendering personalities instead of sharing nearly identical round strokes: watercolor has mottled wet grain, marker uses a broad chisel footprint, airbrush has a soft spray falloff, sketch tools have paper tooth, and the existing dry/chalk/charcoal/pastel/calligraphy families keep their own procedural masks.
 - Added a separate **Graphite Pencil / قلم رصاص** brush with broken graphite grain, lighter low-pressure opacity, darker high-pressure buildup, a narrower pencil footprint, and matching canvas/export rendering. The older Pencil preset is now labeled Sketch Pencil / سكتش so the two tools are clearly different.
 - Timeline action markers are consistent in OLD, NEW and New mine: a newly inserted empty cel is a green circle, a copied/current-pose keyframe is a red circle, and an explicit blank keyframe is a white circle with a black border. The marker type is saved with the project and old files default safely to legacy visuals.
@@ -368,6 +372,10 @@
 - اتضاف ملف `ONLINE_ARCHITECTURE_REVIEW_2026-11-19.md` لمراجعة بنية الشبكات والخطوات المستقبلية. صيغة المشاريع وبروتوكول التعاون الحالي ما اتغيروش.
 
 ### إيه الجديد؟
+- اتضاف خيار **أضف فرشة / Add brush** جنب الفرش العادية. تقدر تستورد أكتر من فرشة، تسمي كل واحدة، تختار لها صورة لو حابب، وتفضل محفوظة في البرنامج بعد القفل والفتح. وكلك يمين على أي فرشة مستوردة يظهر **حذف الفرشة**.
+- الخطوط المرسومة بالفرش المستوردة بتستخدم نفس محرك المعاينة والتصدير، وبتتحفظ بمعرّف الفرشة داخل صيغة المشروع الحالية من غير تغيير الـschema. **قلم الحبر/الفيكتور متساب زي ما هو**.
+- دعم استيراد عائلات فرش **Krita** (`.kpp` و`.bundle` و`.myb` و`.gbr` و`.gih` و`.abr`)، و**Clip Studio Paint** (`.sut` و`.sutg` و`.abr` مع fallback للصيغة القديمة `.tos`)، وBrush Assets الخاصة بـ**Blender Grease Pencil** (`.blend` و`.asset.blend`)، بالإضافة لصور سن الفرشة العادية.
+- البرنامج بيحوّل الإعدادات اللي ليها مقابل فعلي في Stick زي السن والـspacing والـflow والشفافية والضغط والدوران والـjitter. أي Dynamic خاص بالبرنامج الأصلي ومفيش له مقابل في Stick بيتوضح إنه تقريب بدل ما البرنامج يدّعي تحويل 1:1.
 - الفرش بقت مختلفة فعلًا في الشكل والملمس بدل ما تبقى خطوط شبه بعض: المائية فيها حبيبات وبلل غير منتظم، الماركر بسن عريض مشطوف، البخاخ بتدرج رذاذ ناعم، وفرش السكتش فيها ملمس ورق، مع الحفاظ على خامة الفرشة الجافة والطباشير والفحم والباستيل والخطاط.
 - اتضافت فرشة جديدة مستقلة باسم **قلم رصاص** بتحاكي الجرافيت: حبيبات متقطعة، الضغط الخفيف أفتح والضغط القوي أغمق، سن أضيق، ونفس النتيجة في المعاينة والتصدير. وفرشة الرصاص القديمة بقى اسمها **سكتش** عشان يبقى الفرق واضح.
 - علامات إنشاء الفريم بقت موحّدة في OLD وNEW وNew mine: الفريم الفاضي الجديد دائرة خضرا، والكي فريم اللي بينسخ الوضع الحالي دائرة حمرا، والكي فريم الفاضي دائرة بيضا بحد أسود. النوع بيتحفظ جوه المشروع، والمشاريع القديمة بتفضل متوافقة.

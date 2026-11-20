@@ -3,6 +3,7 @@
 mod brushes;
 mod brush_engine;
 mod texture_brush;
+mod custom_brush;
 mod stroke_geometry;
 mod sculpt_tools;
 mod stylus;
@@ -1741,6 +1742,12 @@ struct StickApp {
     timeline_scrub_active: bool,
     active_tool_ui: ActiveToolUI,
     active_krita_brush: KritaBrushPreset,
+    custom_brushes: Vec<custom_brush::CustomBrushMeta>,
+    active_custom_brush: Option<String>,
+    pending_brush_imports: Vec<custom_brush::ImportedBrushDraft>,
+    pending_brush_name: String,
+    pending_brush_icon_path: Option<PathBuf>,
+    brush_import_message: String,
     brush_opacity: f32,
     vector_pen_opacity: f32,
     shape_opacity: f32,
@@ -1939,6 +1946,12 @@ impl StickApp {
             timeline_scrub_active: false,
             active_tool_ui: ActiveToolUI::Brush,
             active_krita_brush: KritaBrushPreset::GPenInk,
+            custom_brushes: custom_brush::load_saved_library(),
+            active_custom_brush: None,
+            pending_brush_imports: Vec::new(),
+            pending_brush_name: String::new(),
+            pending_brush_icon_path: None,
+            brush_import_message: String::new(),
             brush_opacity: 1.0,
             vector_pen_opacity: 1.0,
             shape_opacity: 1.0,
@@ -4518,10 +4531,12 @@ impl StickApp {
             ActiveToolUI::Brush => {
                 ui.strong(tr(lang, "Brushes (Icon Presets)", "اختر الفرشة بالأيقونة"));
                 ui.add_space(4.0);
+                let mut add_brush_requested=false;
+                let mut delete_custom_brush:Option<String>=None;
                 ui.horizontal_wrapped(|ui| {
                     for (preset, en, ar) in KritaBrushPreset::MENU {
                         let short_name = tr(lang, en, ar);
-                        let is_sel = self.active_krita_brush == preset;
+                        let is_sel = self.active_custom_brush.is_none() && self.active_krita_brush == preset;
                         let (btn_rect, resp) = ui.allocate_exact_size(egui::vec2(44.0, 44.0), egui::Sense::click());
                         let bg = if is_sel { egui::Color32::from_rgb(0, 122, 204) } else if resp.hovered() { egui::Color32::from_rgb(62, 64, 72) } else { egui::Color32::from_rgb(44, 46, 52) };
                         ui.painter().rect_filled(btn_rect, 6.0, bg);
@@ -4529,12 +4544,110 @@ impl StickApp {
                         draw_brush_preset_icon(ui.painter(), icon_area, preset, is_sel);
                         ui.painter().text(egui::pos2(btn_rect.center().x, btn_rect.bottom() - 7.0), egui::Align2::CENTER_CENTER, short_name, egui::FontId::proportional(9.5), egui::Color32::WHITE);
                         if resp.on_hover_text(fix_ar(preset.label())).clicked() {
+                            self.active_custom_brush = None;
                             self.active_krita_brush = preset;
                             self.brush_opacity = preset.default_opacity();
                             self.play_sfx(SfxType::UiClick);
                         }
                     }
+
+                    for meta in &self.custom_brushes {
+                        let is_sel=self.active_custom_brush.as_deref()==Some(meta.id.as_str());
+                        let (btn_rect,resp)=ui.allocate_exact_size(egui::vec2(44.0,44.0),egui::Sense::click());
+                        let bg=if is_sel { egui::Color32::from_rgb(0,122,204) }
+                            else if resp.hovered(){egui::Color32::from_rgb(62,64,72)}
+                            else{egui::Color32::from_rgb(44,46,52)};
+                        ui.painter().rect_filled(btn_rect,6.0,bg);
+                        let icon_area=egui::Rect::from_min_size(btn_rect.min,egui::vec2(44.0,28.0));
+                        if !custom_brush::draw_icon(ui.painter(),icon_area,&meta.id) {
+                            ui.painter().circle_filled(icon_area.center(),8.0,egui::Color32::LIGHT_GRAY);
+                        }
+                        let short:String=meta.name.chars().take(8).collect();
+                        ui.painter().text(egui::pos2(btn_rect.center().x,btn_rect.bottom()-7.0),
+                            egui::Align2::CENTER_CENTER,short,egui::FontId::proportional(9.0),egui::Color32::WHITE);
+                        if resp.clone().on_hover_text(format!("{}\n{}",meta.name,meta.source_format)).clicked() {
+                            self.active_custom_brush=Some(meta.id.clone());
+                            self.active_krita_brush=KritaBrushPreset::GPenInk;
+                            self.brush_opacity=meta.opacity;
+                            self.play_sfx(SfxType::UiClick);
+                        }
+                        resp.context_menu(|ui| {
+                            ui.strong(&meta.name);
+                            ui.small(&meta.source_format);
+                            if ui.button(tr(lang,"Delete brush","حذف الفرشة")).clicked() {
+                                delete_custom_brush=Some(meta.id.clone());
+                                ui.close_menu();
+                            }
+                        });
+                    }
+
+                    let (add_rect,add_resp)=ui.allocate_exact_size(egui::vec2(52.0,44.0),egui::Sense::click());
+                    ui.painter().rect_filled(add_rect,6.0,if add_resp.hovered(){
+                        egui::Color32::from_rgb(55,73,84)}else{egui::Color32::from_rgb(40,46,52)});
+                    let center=add_rect.center()+egui::vec2(0.0,-5.0);
+                    ui.painter().circle_stroke(center,8.0,egui::Stroke::new(1.6,egui::Color32::from_rgb(94,211,255)));
+                    ui.painter().line_segment([center+egui::vec2(-4.0,0.0),center+egui::vec2(4.0,0.0)],
+                        egui::Stroke::new(1.7,egui::Color32::from_rgb(94,211,255)));
+                    ui.painter().line_segment([center+egui::vec2(0.0,-4.0),center+egui::vec2(0.0,4.0)],
+                        egui::Stroke::new(1.7,egui::Color32::from_rgb(94,211,255)));
+                    ui.painter().text(egui::pos2(add_rect.center().x,add_rect.bottom()-7.0),
+                        egui::Align2::CENTER_CENTER,tr(lang,"Add brush","أضف فرشة"),
+                        egui::FontId::proportional(8.5),egui::Color32::WHITE);
+                    if add_resp.on_hover_text(tr(lang,
+                        "Import a brush from Krita, Clip Studio Paint, Blender or an image tip.",
+                        "استورد فرشة من كريتا أو كليب استديو أو بلندر أو صورة سن فرشة.")).clicked() {
+                        add_brush_requested=true;
+                    }
                 });
+
+                if let Some(id)=delete_custom_brush {
+                    custom_brush::delete_brush(&id);
+                    self.custom_brushes.retain(|b|b.id!=id);
+                    if self.active_custom_brush.as_deref()==Some(id.as_str()) {
+                        self.active_custom_brush=None;
+                        self.active_krita_brush=KritaBrushPreset::GPenInk;
+                        self.brush_opacity=KritaBrushPreset::GPenInk.default_opacity();
+                    }
+                    if let Err(err)=custom_brush::save_library(&self.custom_brushes) {
+                        self.brush_import_message=err;
+                    }
+                }
+
+                if add_brush_requested {
+                    if let Some(path)=rfd::FileDialog::new()
+                        .add_filter("Brush files",custom_brush::accepted_extensions())
+                        .pick_file()
+                    {
+                        match custom_brush::import_file(&path) {
+                            Ok(drafts) if !drafts.is_empty() => {
+                                self.pending_brush_imports=drafts;
+                                self.pending_brush_name=self.pending_brush_imports[0].suggested_name.clone();
+                                self.pending_brush_icon_path=None;
+                                self.brush_import_message=format!("{} {}",
+                                    tr(lang,"Imported brush candidates:","تم العثور على فرش:"),
+                                    self.pending_brush_imports.len());
+                            }
+                            Ok(_) => self.brush_import_message=tr(lang,
+                                "No usable brushes were found in that file.",
+                                "ملقيناش فرش قابلة للاستخدام جوه الملف.").to_owned(),
+                            Err(err) => self.brush_import_message=format!("{}: {err}",
+                                tr(lang,"Brush import failed","فشل استيراد الفرشة")),
+                        }
+                    }
+                }
+
+                if let Some(id)=self.active_custom_brush.as_deref() {
+                    if let Some(meta)=self.custom_brushes.iter().find(|b|b.id==id) {
+                        ui.small(format!("{} • {}",meta.name,meta.source_format));
+                        if !meta.compatibility_note.is_empty() {
+                            ui.small(egui::RichText::new(&meta.compatibility_note).weak());
+                        }
+                    }
+                }
+                if !self.brush_import_message.is_empty() {
+                    ui.small(egui::RichText::new(&self.brush_import_message).weak());
+                }
+
                 ui.add_space(4.0);
                 ui.horizontal(|ui| {
                     ui.label(tr(lang, "Size:", "الحجم:"));
@@ -6716,6 +6829,7 @@ impl eframe::App for StickApp {
                                     for (preset, en, ar) in KritaBrushPreset::MENU {
                                         let label = tr(lang, en, ar);
                                         if ui.selectable_label(self.active_krita_brush == preset, label).clicked() {
+                                            self.active_custom_brush = None;
                                             self.active_krita_brush = preset;
                                             self.brush_opacity = preset.default_opacity();
                                             self.active_tool_ui = ActiveToolUI::Brush;
@@ -9138,7 +9252,9 @@ impl eframe::App for StickApp {
                                             color:self.brush_color,fill_color:None,
                                             base_width:self.brush_size,is_vector:false,
                                             brush_preset:self.active_krita_brush,
-                                            opacity:self.brush_opacity,brush_texture_id:None,
+                                            opacity:self.brush_opacity,
+                                            brush_texture_id:self.active_custom_brush.as_ref()
+                                                .map(|id|format!("custom:{id}")),
                                             tip_shape:self.brush_tip_shape
                                         });
                                     }
@@ -9963,6 +10079,98 @@ impl eframe::App for StickApp {
                 }
             }
         });
+
+        if let Some(draft)=self.pending_brush_imports.first().cloned() {
+            let mut save_import=false;
+            let mut skip_import=false;
+            let mut choose_icon=false;
+            egui::Window::new(tr(lang,"Add brush","أضف فرشة"))
+                .id(egui::Id::new("custom_brush_import_dialog"))
+                .collapsible(false)
+                .resizable(false)
+                .anchor(egui::Align2::CENTER_CENTER,egui::Vec2::ZERO)
+                .show(ctx,|ui| {
+                    ui.set_min_width(430.0);
+                    ui.strong(tr(lang,"Brush name","اسم الفرشة"));
+                    ui.text_edit_singleline(&mut self.pending_brush_name);
+                    ui.add_space(6.0);
+                    ui.label(format!("{}: {}",tr(lang,"Format","الصيغة"),draft.source_format));
+                    if !draft.compatibility_note.is_empty() {
+                        ui.small(egui::RichText::new(&draft.compatibility_note).weak());
+                    }
+                    ui.separator();
+                    ui.horizontal(|ui| {
+                        if ui.button(tr(lang,"Choose icon image...","اختر صورة للفرشة...")).clicked() {
+                            choose_icon=true;
+                        }
+                        if self.pending_brush_icon_path.is_some()
+                            && ui.button(tr(lang,"Use imported preview","استخدم صورة الفرشة الأصلية")).clicked()
+                        {
+                            self.pending_brush_icon_path=None;
+                        }
+                    });
+                    if let Some(path)=self.pending_brush_icon_path.as_ref() {
+                        ui.small(format!("{}: {}",tr(lang,"Icon","الصورة"),
+                            path.file_name().and_then(|s|s.to_str()).unwrap_or("")));
+                    } else {
+                        ui.small(tr(lang,
+                            "The brush preview/tip will be used as the icon automatically.",
+                            "هيتم استخدام صورة الفرشة أو سن الفرشة كأيقونة تلقائيًا."));
+                    }
+                    if self.pending_brush_imports.len()>1 {
+                        ui.separator();
+                        ui.small(format!("{} {}",tr(lang,"Remaining brushes:","الفرش المتبقية:"),
+                            self.pending_brush_imports.len()));
+                    }
+                    ui.add_space(8.0);
+                    ui.horizontal(|ui| {
+                        if ui.button(tr(lang,"Add brush","إضافة الفرشة")).clicked() {save_import=true;}
+                        if ui.button(tr(lang,"Skip","تخطي")).clicked() {skip_import=true;}
+                    });
+                });
+
+            if choose_icon {
+                if let Some(path)=rfd::FileDialog::new()
+                    .add_filter("Image",&["png","jpg","jpeg","webp","bmp"])
+                    .pick_file()
+                {
+                    self.pending_brush_icon_path=Some(path);
+                }
+            }
+            if save_import {
+                match custom_brush::install_draft(
+                    &draft,&self.pending_brush_name,self.pending_brush_icon_path.as_deref())
+                {
+                    Ok(meta) => {
+                        self.active_custom_brush=Some(meta.id.clone());
+                        self.active_krita_brush=KritaBrushPreset::GPenInk;
+                        self.brush_opacity=meta.opacity;
+                        self.custom_brushes.push(meta);
+                        match custom_brush::save_library(&self.custom_brushes) {
+                            Ok(()) => self.brush_import_message=tr(lang,
+                                "Brush added permanently.","تمت إضافة الفرشة وحفظها في البرنامج.").to_owned(),
+                            Err(err) => self.brush_import_message=err,
+                        }
+                        self.pending_brush_imports.remove(0);
+                        self.pending_brush_icon_path=None;
+                        if let Some(next)=self.pending_brush_imports.first() {
+                            self.pending_brush_name=next.suggested_name.clone();
+                        } else {
+                            self.pending_brush_name.clear();
+                        }
+                    }
+                    Err(err) => self.brush_import_message=err,
+                }
+            } else if skip_import {
+                self.pending_brush_imports.remove(0);
+                self.pending_brush_icon_path=None;
+                if let Some(next)=self.pending_brush_imports.first() {
+                    self.pending_brush_name=next.suggested_name.clone();
+                } else {
+                    self.pending_brush_name.clear();
+                }
+            }
+        }
 
         // Relay all document mutations after each UI frame, including erasing,
         // layer operations, frame/keyframe changes, fills, text and transform.

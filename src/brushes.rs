@@ -257,6 +257,15 @@ pub fn draw_stroke_pro<F: Fn(egui::Pos2) -> egui::Pos2>(
     // an artificial halo when its own combined opacity is zero.
     if eff_alpha == 0 { return; }
 
+    if crate::custom_brush::preview(
+        painter,
+        stroke,
+        [c[0],c[1],c[2],eff_alpha],
+        |x,y| to_screen(egui::pos2(x+ox,y+oy)),
+    ) {
+        return;
+    }
+
     if let Some(texture) = crate::texture_brush::TextureBrush::for_stroke(stroke) {
         texture.preview(painter, stroke, [c[0],c[1],c[2],eff_alpha], |x,y|
             to_screen(egui::pos2(x+ox,y+oy)));
