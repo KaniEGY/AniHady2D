@@ -4922,6 +4922,21 @@ impl StickApp {
                 ui.small(tr(lang,
                     "Left-click and drag nodes. Right-click a node to delete it; right-click a selected segment to insert one.",
                     "اسحب النقط بالكلك الشمال. كلك يمين على نقطة يحذفها، وعلى جزء من الخط المحدد يضيف نقطة."));
+                ui.separator();
+                ui.horizontal_wrapped(|ui|{
+                    if ui.button(tr(lang,"Smooth","تنعيم")).clicked(){
+                        self.edit_selected_vectors("smooth");
+                    }
+                    if ui.button(tr(lang,"Simplify","تقليل النقاط")).clicked(){
+                        self.edit_selected_vectors("simplify");
+                    }
+                    if ui.button(tr(lang,"Width -10%","السُمك -10%")).clicked(){
+                        self.edit_selected_vectors("width_down");
+                    }
+                    if ui.button(tr(lang,"Width +10%","السُمك +10%")).clicked(){
+                        self.edit_selected_vectors("width_up");
+                    }
+                });
             }
             ActiveToolUI::VectorEraser => {
                 ui.strong(tr(lang,"Vector Eraser (X)","ممحاة الفيكتور (X)"));
@@ -4981,6 +4996,12 @@ impl StickApp {
                 });
                 ui.add(egui::Slider::new(&mut self.vector_stabilizer_strength, 0.0..=0.70)
                     .text(tr(lang,"Hand stabilizer","مثبّت اليد")));
+                let mut drawing_assist_changed=false;
+                drawing_assist_changed|=ui.checkbox(&mut self.config.perspective_snap_enabled,
+                    tr(lang,"Perspective Snap","تثبيت على المنظور")).changed();
+                drawing_assist_changed|=ui.checkbox(&mut self.config.smart_shape_enabled,
+                    tr(lang,"Smart Shape","شكل ذكي")).changed();
+                if drawing_assist_changed {self.config.save();}
                 ui.small(tr(lang,
                     "Smooth preview and export keep the original editable vector nodes.",
                     "الرسم الناعم والتصدير بيحافظوا على نقاط الفيكتور الأصلية للتعديل."));
@@ -5270,6 +5291,12 @@ impl StickApp {
                     ui.label(tr(lang, "Stabilizer:", "مثبت اليد:"));
                     ui.add(egui::Slider::new(&mut self.stabilizer_strength, 0.0..=0.75));
                 });
+                let mut drawing_assist_changed=false;
+                drawing_assist_changed|=ui.checkbox(&mut self.config.perspective_snap_enabled,
+                    tr(lang,"Perspective Snap","تثبيت على المنظور")).changed();
+                drawing_assist_changed|=ui.checkbox(&mut self.config.smart_shape_enabled,
+                    tr(lang,"Smart Shape","شكل ذكي")).changed();
+                if drawing_assist_changed {self.config.save();}
                 ui.separator();
                 ui.strong(tr(lang, "Brush Tip Shape", "شكل الفرشة"));
                 ui.horizontal_wrapped(|ui| {
@@ -9432,7 +9459,8 @@ impl eframe::App for StickApp {
                         self.active_sizable_tool_size(),
                         self.active_tool_size_percent()
                     ) {
-                        let label=if self.active_tool_ui==ActiveToolUI::Sculpt {
+                        let label=if matches!(self.active_tool_ui,
+                            ActiveToolUI::Sculpt|ActiveToolUI::PuppetWarp|ActiveToolUI::VectorEraser) {
                             tr(lang,"Radius","نطاق")
                         } else {tr(lang,"Thickness","السُمك")};
                         let overlay=ctx.layer_painter(egui::LayerId::new(
