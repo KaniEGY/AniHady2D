@@ -1494,10 +1494,25 @@ fn import_blend_file(path:&Path)->Result<Vec<ImportedBrushDraft>,String>{
             })).unwrap_or(false)
         };
         let has_explicit_assets=blend.instances_with_code(*b"BR").any(|b|is_asset_brush(&b));
+        let has_custom_icon=|brush:&blend::Instance<'_>|->bool{
+            if !brush.is_valid("icon_filepath"){return false}
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(||{
+                !brush.get_string("icon_filepath")
+                    .trim_matches(char::from(0)).trim().is_empty()
+            })).unwrap_or(false)
+        };
+        // Blender 3.6 brush-pack files often save the whole startup Brush list
+        // and do not set ID.asset_data at all. Musubibi's file has 74 BR
+        // datablocks, but the distributed Crayon is the one carrying a custom
+        // icon/thumbnail path. If explicit Asset metadata is unavailable and
+        // the file provides custom-icon brushes, treat those as pack entries
+        // instead of importing Blender's factory Airbrush/Ink/Marker/etc.
+        let has_custom_icon_brush=blend.instances_with_code(*b"BR").any(|b|has_custom_icon(&b));
 
         for (index,brush) in blend.instances_with_code(*b"BR").enumerate() {
             if out.len()>=MAX_IMPORT_BRUSHES{break}
             if has_explicit_assets && !is_asset_brush(&brush){continue}
+            if !has_explicit_assets && has_custom_icon_brush && !has_custom_icon(&brush){continue}
 
             let safe_f32=|inst:&blend::Instance<'_>,field:&str,default:f32| -> f32 {
                 if !inst.is_valid(field){return default}
@@ -1933,6 +1948,18 @@ mod tests {
         assert!(keep(false,true));
         assert!(!keep(true,false));
         assert!(keep(true,true));
+    }
+
+    #[test]
+    fn blender_pack_filter_prefers_custom_icons_when_asset_metadata_is_missing(){
+        let keep=|has_assets:bool,is_asset:bool,has_custom_icons:bool,has_custom_icon:bool|{
+            (!has_assets||is_asset) && (has_assets||!has_custom_icons||has_custom_icon)
+        };
+        assert!(keep(false,false,false,false));
+        assert!(keep(false,false,true,true));
+        assert!(!keep(false,false,true,false));
+        assert!(keep(true,true,true,false));
+        assert!(!keep(true,false,true,true));
     }
 
     #[test]
