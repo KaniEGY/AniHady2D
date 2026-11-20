@@ -3251,10 +3251,9 @@ impl StickApp {
             let mut open=true;
             let mut command_to_run:Option<String>=None;
             let mut action_to_run:Option<usize>=None;
-            let mut toggle_pin:Option<String>=None;
             let mut start_recording=false;
             let mut stop_recording=false;
-            egui::Window::new(tr(lang,"Quick Access & Auto Actions","الوصول السريع والأوامر التلقائية"))
+            egui::Window::new(tr(lang,"Drawing Commands & Auto Actions","أوامر الرسم والأوامر التلقائية"))
                 .open(&mut open)
                 .collapsible(false)
                 .default_width(460.0)
@@ -3276,16 +3275,7 @@ impl StickApp {
                                 && !en.to_ascii_lowercase().contains(&query)
                                 && !ar.contains(&self.command_search)
                             {continue}
-                            ui.horizontal(|ui|{
-                                if ui.button(&label).clicked(){command_to_run=Some(id.to_owned());}
-                                let pinned=self.drawing_assets.quick_access.iter().any(|x|x==id);
-                                if ui.small_button(if pinned{"★"}else{"☆"})
-                                    .on_hover_text(tr(lang,
-                                        if pinned{"Remove from Quick Access"}else{"Pin to Quick Access"},
-                                        if pinned{"شيل من الوصول السريع"}else{"ثبّت في الوصول السريع"}))
-                                    .clicked()
-                                {toggle_pin=Some(id.to_owned());}
-                            });
+                            if ui.button(&label).clicked(){command_to_run=Some(id.to_owned());}
                         }
                     });
                     ui.separator();
@@ -3314,12 +3304,6 @@ impl StickApp {
                     }
                 });
             self.show_command_palette=open;
-            if let Some(id)=toggle_pin {
-                if self.drawing_assets.quick_access.iter().any(|x|x==&id) {
-                    self.drawing_assets.unpin(&id);
-                } else {self.drawing_assets.pin(&id);}
-                let _=self.drawing_assets.save();
-            }
             if start_recording {
                 self.auto_action_recording=true;
                 self.auto_action_buffer.clear();
