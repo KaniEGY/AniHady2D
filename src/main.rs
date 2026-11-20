@@ -1877,6 +1877,7 @@ struct StickApp {
     bucket_dilate_contract: f32,
     bucket_thickness: f32,
     bucket_reference_all_layers: bool,
+    bucket_reference_only: bool,
     brush_tip_shape: BrushTipShape,
     zoom_level: f32,
     pan_offset: egui::Vec2,
@@ -2095,6 +2096,7 @@ impl StickApp {
             bucket_dilate_contract: 0.0,
             bucket_thickness: 0.0,
             bucket_reference_all_layers: true,
+            bucket_reference_only: false,
             brush_tip_shape: BrushTipShape::Round,
             zoom_level: 0.75,
             pan_offset: egui::Vec2::ZERO,
@@ -3912,7 +3914,7 @@ impl StickApp {
                 y: (self.project.height as f32-height)*0.5,
                 width, height, rotation_deg: 0.0, flip_h: false, flip_v: false });
             kf.insert(self.current_frame, fd);
-            self.project.layers.insert(0, Layer { name: format!("Img_{}", img_name), visible: true, locked: false, is_guide: false, xp_first_paint_rewarded: false, opacity: 1.0, effect: LayerEffectPreset::None, keyframes: kf });
+            self.project.layers.insert(0, Layer { name: format!("Img_{}", img_name), visible: true, locked: false, is_guide: false, is_reference: false, xp_first_paint_rewarded: false, opacity: 1.0, effect: LayerEffectPreset::None, keyframes: kf });
             self.active_layer_idx = 0;
             self.clear_cel_selection();
             self.selected_media_idx = Some(0);
@@ -3964,7 +3966,7 @@ impl StickApp {
                     fd.media_items.push(MediaItem { path: f_path.to_string_lossy().to_string(), media_type: MediaType::VideoFrame, x: 0.0, y: 0.0, width: self.project.width as f32, height: self.project.height as f32, rotation_deg: 0.0, flip_h: false, flip_v: false });
                     kf.insert(self.current_frame + i, fd);
                 }
-                self.project.layers.insert(0, Layer { name: "Video_Layer".to_string(), visible: true, locked: false, is_guide: false, xp_first_paint_rewarded: false, opacity: 1.0, effect: LayerEffectPreset::None, keyframes: kf });
+                self.project.layers.insert(0, Layer { name: "Video_Layer".to_string(), visible: true, locked: false, is_guide: false, is_reference: false, xp_first_paint_rewarded: false, opacity: 1.0, effect: LayerEffectPreset::None, keyframes: kf });
                 self.active_layer_idx = 0;
                 self.clear_cel_selection();
                 self.selected_media_idx = Some(0);
@@ -4588,6 +4590,25 @@ impl StickApp {
                     "Left-click and drag nodes. Right-click a node to delete it; right-click a selected segment to insert one.",
                     "اسحب النقط بالكلك الشمال. كلك يمين على نقطة يحذفها، وعلى جزء من الخط المحدد يضيف نقطة."));
             }
+            ActiveToolUI::VectorEraser => {
+                ui.strong(tr(lang,"Vector Eraser (X)","ممحاة الفيكتور (X)"));
+                ui.add(egui::Slider::new(&mut self.vector_eraser_size,2.0..=120.0)
+                    .text(tr(lang,"Radius","الحجم")));
+                ui.horizontal_wrapped(|ui|{
+                    ui.selectable_value(&mut self.vector_eraser_mode,
+                        drawing_power::VectorEraseMode::ToIntersection,
+                        tr(lang,"To intersection","لحد التقاطع"));
+                    ui.selectable_value(&mut self.vector_eraser_mode,
+                        drawing_power::VectorEraseMode::Segment,
+                        tr(lang,"Touched segment","الجزء الملموس"));
+                    ui.selectable_value(&mut self.vector_eraser_mode,
+                        drawing_power::VectorEraseMode::WholeStroke,
+                        tr(lang,"Whole stroke","الخط كله"));
+                });
+                ui.small(tr(lang,
+                    "Only vector strokes are affected. 'To intersection' removes the section between crossings like CSP.",
+                    "بتأثر على خطوط الفيكتور بس. وضع لحد التقاطع بيمسح الجزء بين التقاطعات."));
+            }
             ActiveToolUI::Sculpt => {
                 ui.strong(tr(lang,"Sculpt / Finger (J)","النحت / الصباع (J)"));
                 ui.label(tr(lang,"Drag nearby linework to reshape it with soft falloff.",
@@ -4596,6 +4617,16 @@ impl StickApp {
                     .text(tr(lang,"Radius","حجم التأثير")));
                 ui.add(egui::Slider::new(&mut self.sculpt_strength,0.05..=1.0)
                     .text(tr(lang,"Strength","قوة التأثير")));
+            }
+            ActiveToolUI::PuppetWarp => {
+                ui.strong(tr(lang,"Puppet Warp (W)","تحريك شبكي (W)"));
+                ui.add(egui::Slider::new(&mut self.puppet_radius,20.0..=500.0)
+                    .text(tr(lang,"Influence radius","نطاق التأثير")));
+                ui.add(egui::Slider::new(&mut self.puppet_strength,0.05..=1.0)
+                    .text(tr(lang,"Strength","القوة")));
+                ui.small(tr(lang,
+                    "Select strokes first, then drag a pin area to bend nearby points with smooth falloff.",
+                    "حدد الخطوط الأول، وبعدها اسحب نقطة عشان تحرك المنطقة القريبة بنعومة."));
             }
             ActiveToolUI::VectorPen => {
                 ui.strong(tr(lang, "Vector Ink Pen (P)", "قلم الفيكتور الثابت (بدون ذيل)"));
@@ -4982,12 +5013,28 @@ impl StickApp {
                 ui.small(tr(lang,
                     "Precision balances detail and memory. Positive dilate reaches under ink; negative shrinks the fill. Thickness changes the temporary boundary mask, not your strokes.",
                     "الدقة بتوازن بين التفاصيل والذاكرة. التمدد الموجب بيدخل اللون تحت الخط، والسالب بيقلصه. السُمك بيغير قناع التعبئة المؤقت مش الرسمة."));
-                ui.checkbox(&mut self.bucket_reference_all_layers,
-                    tr(lang, "Reference all visible layers (recommended)",
-                        "استخدم حدود كل الليرات الظاهرة (مُوصى به)"));
+                ui.strong(tr(lang,"Fill reference source","مصدر حدود التعبئة"));
+                ui.horizontal_wrapped(|ui|{
+                    if ui.selectable_label(!self.bucket_reference_all_layers && !self.bucket_reference_only,
+                        tr(lang,"Current layer","اللير الحالي")).clicked(){
+                        self.bucket_reference_all_layers=false;self.bucket_reference_only=false;
+                    }
+                    if ui.selectable_label(self.bucket_reference_only,
+                        tr(lang,"Reference layers","ليرات المرجع")).clicked(){
+                        self.bucket_reference_only=true;self.bucket_reference_all_layers=false;
+                    }
+                    if ui.selectable_label(self.bucket_reference_all_layers,
+                        tr(lang,"All visible","كل الليرات الظاهرة")).clicked(){
+                        self.bucket_reference_all_layers=true;self.bucket_reference_only=false;
+                    }
+                });
+                if ui.add_enabled(self.last_selection_polygon.len()>=3,
+                    egui::Button::new(tr(lang,"Fill current selection","لوّن التحديد الحالي"))).clicked(){
+                    self.fill_last_selection();
+                }
                 ui.small(tr(lang,
-                    "The visible layers are used only as fill boundaries; the new color is always created on the active layer. Lower gap tolerance if adjacent regions merge.",
-                    "الليرات الظاهرة بتتستخدم كحدود للتعبئة بس؛ اللون الجديد بيتحط دايمًا على اللير النشط. قلل قفل الفجوات لو منطقتين اتصلوا ببعض."));
+                    "Reference layers are used only as boundaries. The new color is always created on the active layer.",
+                    "ليرات المرجع بتتستخدم كحدود فقط، واللون الجديد بيتحط على اللير النشط."));
             }
             ActiveToolUI::Eyedropper => {
                 ui.strong(tr(lang, "Eyedropper • Pick Fill / Line", "القطّارة • لون التعبئة أو الخط"));
@@ -7380,7 +7427,7 @@ impl eframe::App for StickApp {
                     self.save_undo_state();
                     let mut kf = HashMap::new();
                     kf.insert(1, Default::default());
-                    self.project.layers.insert(0, Layer { name: format!("Layer_{}", self.project.layers.len() + 1), visible: true, locked: false, is_guide: false, xp_first_paint_rewarded: false, opacity: 1.0, effect: LayerEffectPreset::None, keyframes: kf });
+                    self.project.layers.insert(0, Layer { name: format!("Layer_{}", self.project.layers.len() + 1), visible: true, locked: false, is_guide: false, is_reference: false, xp_first_paint_rewarded: false, opacity: 1.0, effect: LayerEffectPreset::None, keyframes: kf });
                     self.active_layer_idx = 0;
                     self.has_unsaved_changes = true;
                 }
@@ -7487,7 +7534,7 @@ impl eframe::App for StickApp {
                         ui.label(egui::RichText::new(format!("{} {} • {} {}{}",
                             layer.keyframes.len(), tr(lang, "frames", "فريم"),
                             stroke_count, tr(lang, "strokes", "خط"),
-                            if layer.is_guide { " • GUIDE" } else { "" }))
+                            if layer.is_guide { " • GUIDE" } else if layer.is_reference { " • REF" } else { "" }))
                             .small().color(egui::Color32::from_gray(160)));
                         response
                     }).inner;
@@ -7516,6 +7563,13 @@ impl eframe::App for StickApp {
                             if layer.is_guide { "Disable Guide Layer" } else { "Make Guide Layer (not exported)" },
                             if layer.is_guide { "إلغاء وضع الإرشاد" } else { "لير إرشادي (مش بيتصدر)" })).clicked() {
                             layer.is_guide = !layer.is_guide;
+                            self.has_unsaved_changes = true;
+                            ui.close_menu();
+                        }
+                        if ui.button(tr(lang,
+                            if layer.is_reference { "Disable Reference Layer" } else { "Set as Fill Reference" },
+                            if layer.is_reference { "إلغاء لير المرجع" } else { "استخدمه كمرجع للتعبئة" })).clicked() {
+                            layer.is_reference = !layer.is_reference;
                             self.has_unsaved_changes = true;
                             ui.close_menu();
                         }
