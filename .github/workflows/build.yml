@@ -52,15 +52,30 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force -Path dist
           Copy-Item target/release/Stick.exe dist/Stick.exe
-          $hash = (Get-FileHash dist/Stick.exe -Algorithm SHA256).Hash.ToLowerInvariant()
-          "$hash  Stick.exe" | Set-Content dist/SHA256SUMS.txt -Encoding ascii
           "${{ steps.meta.outputs.version }}.${{ github.run_number }}" | Out-File -FilePath dist/version.txt -Encoding ascii -NoNewline
+
+          # The public updater downloads this compressed package instead of the
+          # ~30 MB raw EXE. Keep Stick.exe in the Release for older clients.
+          Compress-Archive -Path dist/Stick.exe -DestinationPath dist/Stick-update.zip -CompressionLevel Optimal -Force
+
+          $exeHash = (Get-FileHash dist/Stick.exe -Algorithm SHA256).Hash.ToLowerInvariant()
+          $zipHash = (Get-FileHash dist/Stick-update.zip -Algorithm SHA256).Hash.ToLowerInvariant()
+          @(
+            "$exeHash  Stick.exe"
+            "$zipHash  Stick-update.zip"
+          ) | Set-Content dist/SHA256SUMS.txt -Encoding ascii
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
           name: Stick-Windows
-          path: dist/
+          # Keep the Actions artifact small like before. The updater ZIP is
+          # published to Releases separately and would otherwise be duplicated
+          # inside this artifact ZIP.
+          path: |
+            dist/Stick.exe
+            dist/version.txt
+            dist/SHA256SUMS.txt
 
       - name: Publish Direct Release
         if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
@@ -73,5 +88,6 @@ jobs:
           make_latest: true
           files: |
             dist/Stick.exe
+            dist/Stick-update.zip
             dist/version.txt
             dist/SHA256SUMS.txt

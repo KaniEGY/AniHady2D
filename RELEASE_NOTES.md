@@ -89,6 +89,9 @@
 - Artist System and level-up overlays now block canvas/tool input behind the popup, preventing custom cursor and drawing interactions from leaking into background windows.
 
 ### What's new
+- Launcher branding now shows **Stick + the app icon** instead of “Stick Studio”, and the mode prompt is now “What are you here to do?” / «انت داخل تعمل ايه ؟».
+- The in-app updater now prefers a **compressed `Stick-update.zip`** from GitHub Releases, verifies its SHA-256, extracts and validates `Stick.exe`, then performs the existing safe restart swap. Legacy releases containing only `Stick.exe` still work.
+- GitHub Actions keeps the normal `Stick-Windows` artifact small by not nesting the updater ZIP inside it; the compressed updater package is published separately to Releases.
 - Added **Add brush / أضف فرشة** beside the built-in raster brush presets. Users can import multiple brushes, rename each one, optionally choose a custom icon, keep them permanently across restarts, and right-click an imported brush to delete it.
 - Imported brush strokes use the existing project brush-texture ID and share the same canvas/export renderer. The Vector Ink/Vector Pen renderer is unchanged.
 - Added brush import families for **Krita** (`.kpp`, `.bundle`, `.myb`, `.gbr`, `.gih`, `.abr`), **Clip Studio Paint** (`.sut`, `.sutg`, `.abr`, with legacy `.tos` compatibility fallback), and **Blender Grease Pencil Brush Assets** (`.blend` / `.asset.blend`), plus common image brush tips.
