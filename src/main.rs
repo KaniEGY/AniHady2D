@@ -5593,18 +5593,18 @@ impl eframe::App for StickApp {
                 0 => self.config.tool_lasso = k_name,
                 1 => self.config.tool_free_transform = k_name,
                 2 => self.config.tool_vector_select = k_name,
-                13 => self.config.tool_vector_eraser = k_name,
-                3 => self.config.tool_sculpt = k_name,
-                14 => self.config.tool_puppet = k_name,
-                4 => self.config.tool_pen = k_name,
-                5 => self.config.tool_brush = k_name,
-                6 => self.config.tool_eraser = k_name,
-                7 => self.config.tool_eraser_partial = k_name,
-                8 => self.config.tool_bucket = k_name,
-                9 => self.config.tool_eyedropper = k_name,
-                10 => self.config.tool_text = k_name,
-                11 => self.config.tool_shape = k_name,
-                12 => self.config.tool_hand = k_name,
+                3 => self.config.tool_vector_eraser = k_name,
+                4 => self.config.tool_sculpt = k_name,
+                5 => self.config.tool_puppet = k_name,
+                6 => self.config.tool_pen = k_name,
+                7 => self.config.tool_brush = k_name,
+                8 => self.config.tool_eraser = k_name,
+                9 => self.config.tool_eraser_partial = k_name,
+                10 => self.config.tool_bucket = k_name,
+                11 => self.config.tool_eyedropper = k_name,
+                12 => self.config.tool_text = k_name,
+                13 => self.config.tool_shape = k_name,
+                14 => self.config.tool_hand = k_name,
                 100 => self.config.quick_color_key = k_name,
                 101 => self.config.size_gesture_key = k_name,
                 102 => self.config.opacity_gesture_key = k_name,
@@ -6247,6 +6247,9 @@ impl eframe::App for StickApp {
                             self.config.tool_lasso = d.tool_lasso;
                             self.config.tool_free_transform = d.tool_free_transform;
                             self.config.tool_vector_select = d.tool_vector_select;
+                            self.config.tool_vector_eraser = d.tool_vector_eraser;
+                            self.config.tool_sculpt = d.tool_sculpt;
+                            self.config.tool_puppet = d.tool_puppet;
                             self.config.tool_pen = d.tool_pen;
                             self.config.tool_brush = d.tool_brush;
                             self.config.tool_eraser = d.tool_eraser;
