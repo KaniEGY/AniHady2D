@@ -1484,13 +1484,11 @@ fn import_blend_file(path:&Path)->Result<Vec<ImportedBrushDraft>,String>{
                 let id=brush.get("id");
                 if !id.is_valid("asset_data"){return false}
                 let asset=id.get("asset_data");
-                // Reading a real AssetMetaData field verifies the pointer is
-                // non-null; a null asset_data pointer is rejected safely.
-                if asset.is_valid("description"){
-                    let _=asset.get_string("description");
-                    true
-                }else if asset.is_valid("author"){
-                    let _=asset.get_string("author");
+                // catalog_simple_name is a fixed char[64] in Blender's
+                // AssetMetaData DNA, so reading it is a reliable pointer probe
+                // even when optional author/description pointers are null.
+                if asset.is_valid("catalog_simple_name"){
+                    let _=asset.get_string("catalog_simple_name");
                     true
                 }else{false}
             })).unwrap_or(false)
