@@ -2843,11 +2843,11 @@ impl StickApp {
         let bg = self.stage_bg_color;
         let sfx_ok = self.config.sound_effects_enabled;
         let state_arc = Arc::clone(&self.export_task_state);
-        *state_arc.lock().unwrap() = ExportTaskState::Running("جاري تصدير الفريمات بالتوازي فائق السرعة...".to_string());
+        *state_arc.lock().unwrap_or_else(|poison| poison.into_inner()) = ExportTaskState::Running("جاري تصدير الفريمات بالتوازي فائق السرعة...".to_string());
 
         std::thread::spawn(move || {
             let res = exporter::export_video_multi_format(&proj_clone, &output_path, fmt, bg);
-            let mut st = state_arc.lock().unwrap();
+            let mut st = state_arc.lock().unwrap_or_else(|poison| poison.into_inner());
             match res {
                 Ok(_) => {
                     play_sfx_async(sfx_ok, SfxType::ExportSuccess, false);
@@ -3945,7 +3945,7 @@ impl StickApp {
 
     fn check_for_updates(&mut self, ctx: egui::Context) {
         self.show_update_dialog = true;
-        *self.update_state.lock().unwrap() = UpdateState::Checking;
+        *self.update_state.lock().unwrap_or_else(|poison| poison.into_inner()) = UpdateState::Checking;
         let state = Arc::clone(&self.update_state);
         let installed = self.installed_version.clone();
         std::thread::spawn(move || {
@@ -3954,13 +3954,13 @@ impl StickApp {
                 Ok(None) => UpdateState::UpToDate,
                 Err(error) => UpdateState::Error(error),
             };
-            *state.lock().unwrap() = next;
+            *state.lock().unwrap_or_else(|poison| poison.into_inner()) = next;
             ctx.request_repaint();
         });
     }
 
     fn refresh_release_history(&mut self, ctx: egui::Context) {
-        *self.rollback_state.lock().unwrap() = RollbackState::Checking;
+        *self.rollback_state.lock().unwrap_or_else(|poison| poison.into_inner()) = RollbackState::Checking;
         self.rollback_choice = None;
         let state = Arc::clone(&self.rollback_state);
         let installed = self.installed_version.clone();
@@ -3969,7 +3969,7 @@ impl StickApp {
                 Ok(releases) => RollbackState::Available(releases),
                 Err(error) => RollbackState::Error(error),
             };
-            *state.lock().unwrap() = result;
+            *state.lock().unwrap_or_else(|poison| poison.into_inner()) = result;
             ctx.request_repaint();
         });
     }
@@ -3985,7 +3985,7 @@ impl StickApp {
             self.show_project_notice = true;
             return;
         }
-        *self.update_state.lock().unwrap() = UpdateState::Downloading {
+        *self.update_state.lock().unwrap_or_else(|poison| poison.into_inner()) = UpdateState::Downloading {
             received: 0,
             total: info.size,
         };
@@ -4009,7 +4009,7 @@ impl StickApp {
                 },
                 Err(error) => UpdateState::Error(format!("Couldn't find Stick.exe: {error}")),
             };
-            *state.lock().unwrap() = next;
+            *state.lock().unwrap_or_else(|poison| poison.into_inner()) = next;
             ctx.request_repaint();
         });
     }
@@ -4030,13 +4030,13 @@ impl StickApp {
             .and_then(|current| updater::spawn_replacer(&current, &staged_exe, &version));
         match result {
             Ok(()) => std::process::exit(0),
-            Err(error) => *self.update_state.lock().unwrap() = UpdateState::Error(error),
+            Err(error) => *self.update_state.lock().unwrap_or_else(|poison| poison.into_inner()) = UpdateState::Error(error),
         }
     }
 
     fn render_update_dialog(&mut self, ctx: &egui::Context, lang: AppLang) {
         if self.show_update_dialog {
-            let update_snapshot = self.update_state.lock().unwrap().clone();
+            let update_snapshot = self.update_state.lock().unwrap_or_else(|poison| poison.into_inner()).clone();
             egui::Window::new(tr(lang, "Check for Updates", "تحديثات البرنامج"))
                 .collapsible(false)
                 .resizable(false)
@@ -5540,7 +5540,7 @@ impl eframe::App for StickApp {
         }
 
         if self.show_export_studio {
-            let task_st = self.export_task_state.lock().unwrap().clone();
+            let task_st = self.export_task_state.lock().unwrap_or_else(|poison| poison.into_inner()).clone();
             egui::Window::new(tr(lang, "Stick Export Studio", "استوديو التصدير الاحترافي")).collapsible(false).resizable(false).default_width(460.0).anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0]).show(ctx, |ui| {
                 ui.horizontal(|ui| {
                     ui.selectable_value(&mut self.export_studio_tab, 0, tr(lang, "🎬 Video & GIF", "🎬 فيديو و GIF"));
@@ -5553,11 +5553,11 @@ impl eframe::App for StickApp {
                     ExportTaskState::Running(msg) => { ui.horizontal(|ui| { ui.spinner(); ui.label(fix_ar(&msg)); }); ctx.request_repaint(); }
                     ExportTaskState::Done(msg) => {
                         ui.colored_label(egui::Color32::GREEN, fix_ar(&msg));
-                        if ui.button(tr(lang, "Done", "تم")).clicked() { *self.export_task_state.lock().unwrap() = ExportTaskState::Idle; self.show_export_studio = false; }
+                        if ui.button(tr(lang, "Done", "تم")).clicked() { *self.export_task_state.lock().unwrap_or_else(|poison| poison.into_inner()) = ExportTaskState::Idle; self.show_export_studio = false; }
                     }
                     ExportTaskState::Failed(err) => {
                         ui.colored_label(egui::Color32::LIGHT_RED, fix_ar(&err));
-                        if ui.button(tr(lang, "Close", "إغلاق")).clicked() { *self.export_task_state.lock().unwrap() = ExportTaskState::Idle; self.show_export_studio = false; }
+                        if ui.button(tr(lang, "Close", "إغلاق")).clicked() { *self.export_task_state.lock().unwrap_or_else(|poison| poison.into_inner()) = ExportTaskState::Idle; self.show_export_studio = false; }
                     }
                     ExportTaskState::Idle => {
                         if self.export_studio_tab == 0 {
@@ -5585,7 +5585,7 @@ impl eframe::App for StickApp {
                                         if p.extension().is_none() { p.set_extension(ext); }
                                         if exporter::export_single_image_format(&self.project, self.current_frame, &p, self.selected_image_format, self.stage_bg_color).is_ok() {
                                             self.play_sfx(SfxType::ExportSuccess);
-                                            *self.export_task_state.lock().unwrap() = ExportTaskState::Done("تم حفظ الصورة!".to_string());
+                                            *self.export_task_state.lock().unwrap_or_else(|poison| poison.into_inner()) = ExportTaskState::Done("تم حفظ الصورة!".to_string());
                                         }
                                     }
                                 }
@@ -5597,7 +5597,7 @@ impl eframe::App for StickApp {
                                 if let Some(mut p) = rfd::FileDialog::new().add_filter("PNG", &["png"]).set_file_name("SpriteSheet.png").save_file() {
                                     if p.extension().is_none() { p.set_extension("png"); }
                                     if exporter::export_sprite_sheet(&self.project, &p).is_ok() {
-                                        *self.export_task_state.lock().unwrap() = ExportTaskState::Done("تم تصدير Sprite Sheet!".to_string());
+                                        *self.export_task_state.lock().unwrap_or_else(|poison| poison.into_inner()) = ExportTaskState::Done("تم تصدير Sprite Sheet!".to_string());
                                     }
                                 }
                             }
@@ -5608,7 +5608,7 @@ impl eframe::App for StickApp {
                                 if let Some(mut p) = rfd::FileDialog::new().add_filter("JSON", &["json"]).set_file_name("Lottie.json").save_file() {
                                     if p.extension().is_none() { p.set_extension("json"); }
                                     if exporter::export_lottie_json(&self.project, &p).is_ok() {
-                                        *self.export_task_state.lock().unwrap() = ExportTaskState::Done("تم تصدير Lottie JSON!".to_string());
+                                        *self.export_task_state.lock().unwrap_or_else(|poison| poison.into_inner()) = ExportTaskState::Done("تم تصدير Lottie JSON!".to_string());
                                     }
                                 }
                             }
@@ -6048,7 +6048,7 @@ impl eframe::App for StickApp {
                             "Official GitHub releases only. The old version is downloaded, hash-checked, and installed when Stick restarts.",
                             "الإصدارات الرسمية فقط من GitHub. هننزّل النسخة القديمة ونتحقق منها قبل استبدال البرنامج."));
                         ui.separator();
-                        let snapshot = self.rollback_state.lock().unwrap().clone();
+                        let snapshot = self.rollback_state.lock().unwrap_or_else(|poison| poison.into_inner()).clone();
                         if matches!(snapshot, RollbackState::Idle) {
                             self.refresh_release_history(ctx.clone());
                         } else {
