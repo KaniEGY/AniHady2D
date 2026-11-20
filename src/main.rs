@@ -3014,6 +3014,7 @@ impl StickApp {
         self.selection_rect_start = None;
         self.selection_rect_current = None;
         self.lasso_points.clear();
+        self.last_selection_polygon.clear();
     }
 
     fn save_undo_state(&mut self) {
@@ -3042,6 +3043,141 @@ impl StickApp {
             self.play_sfx(SfxType::UiClick);
             self.status_message = tr(self.config.lang, "Redo", "إعادة");
         }
+    }
+
+    fn perspective_snap_config(&self) -> drawing_power::PerspectiveSnap {
+        drawing_power::PerspectiveSnap {
+            mode: self.config.perspective_mode,
+            width: self.project.width as f32,
+            height: self.project.height as f32,
+            vp_x: self.config.vanishing_x,
+            vp_y: self.config.vanishing_y,
+            left_vp_x: self.config.vanishing_left_x,
+            right_vp_x: self.config.vanishing_right_x,
+            two_point_y: self.config.vanishing_2point_y,
+            parallel_angle_deg: self.config.perspective_parallel_angle_deg,
+        }
+    }
+
+    fn snap_drawing_point(&self, anchor: egui::Pos2, target: egui::Pos2) -> egui::Pos2 {
+        if !self.config.perspective_snap_enabled || self.config.perspective_mode == 0 {
+            return target;
+        }
+        let (x,y)=drawing_power::snap_to_perspective(
+            (anchor.x,anchor.y),(target.x,target.y),self.perspective_snap_config());
+        egui::pos2(x,y)
+    }
+
+    fn fill_last_selection(&mut self) {
+        if self.last_selection_polygon.len()<3 || self.is_active_layer_locked() {
+            self.status_message=tr(self.config.lang,
+                "Make a lasso or box selection first.",
+                "اعمل تحديد حر أو مربع الأول.");
+            return;
+        }
+        let polygon:Vec<(f32,f32)>=self.last_selection_polygon.iter()
+            .map(|p|(p.x,p.y)).collect();
+        let Some(fill)=drawing_power::selection_fill_stroke(&polygon,self.brush_color) else {
+            return;
+        };
+        self.save_undo_state();
+        self.ensure_editable_keyframe();
+        if let Some(layer)=self.project.layers.get_mut(self.active_layer_idx) {
+            if let Some(frame)=layer.keyframes.get_mut(&self.current_frame) {
+                let insert_at=frame.strokes.iter().rposition(|s|
+                    s.color[3]==0 && s.fill_color.is_some()).map(|i|i+1).unwrap_or(0);
+                frame.strokes.insert(insert_at,fill);
+                self.has_unsaved_changes=true;
+                self.status_message=tr(self.config.lang,
+                    "Selection filled.","تم تلوين التحديد.");
+            }
+        }
+    }
+
+    fn edit_selected_vectors(&mut self, mode:&str) -> bool {
+        if self.selected_stroke_indices.is_empty() || self.is_active_layer_locked() {return false;}
+        self.save_undo_state();
+        self.ensure_editable_keyframe();
+        let selected=self.selected_stroke_indices.clone();
+        let mut changed=false;
+        if let Some(layer)=self.project.layers.get_mut(self.active_layer_idx) {
+            if let Some(frame)=layer.keyframes.get_mut(&self.current_frame) {
+                match mode {
+                    "smooth" => {
+                        for i in selected {
+                            if let Some(stroke)=frame.strokes.get_mut(i).filter(|s|s.is_vector) {
+                                let before=stroke.points.clone();
+                                vector_path::smooth_freehand_nodes(&mut stroke.points,0.48);
+                                changed|=stroke.points!=before;
+                            }
+                        }
+                    }
+                    "simplify" => {
+                        for i in selected {
+                            if let Some(stroke)=frame.strokes.get_mut(i).filter(|s|s.is_vector) {
+                                let before=stroke.points.len();
+                                stroke.simplify_vector_nodes(self.vector_tolerance);
+                                changed|=stroke.points.len()!=before;
+                            }
+                        }
+                    }
+                    "width_up" => {
+                        changed=drawing_power::change_vector_width(
+                            &mut frame.strokes,&selected,1.10)>0;
+                    }
+                    "width_down" => {
+                        changed=drawing_power::change_vector_width(
+                            &mut frame.strokes,&selected,0.90)>0;
+                    }
+                    _=>{}
+                }
+            }
+        }
+        if changed {self.has_unsaved_changes=true;} else {self.undo_stack.pop();}
+        changed
+    }
+
+    fn execute_drawing_command(&mut self, id:&str) {
+        if self.auto_action_recording
+            && !matches!(id,"undo"|"redo")
+            && self.auto_action_buffer.len()<128
+        {
+            self.auto_action_buffer.push(id.to_owned());
+        }
+        match id {
+            "undo"=>self.undo(),
+            "redo"=>self.redo(),
+            "tool_brush"=>self.active_tool_ui=ActiveToolUI::Brush,
+            "tool_vector_pen"=>self.active_tool_ui=ActiveToolUI::VectorPen,
+            "tool_vector_eraser"=>self.active_tool_ui=ActiveToolUI::VectorEraser,
+            "tool_bucket"=>self.active_tool_ui=ActiveToolUI::Bucket,
+            "tool_puppet"=>self.active_tool_ui=ActiveToolUI::PuppetWarp,
+            "vector_smooth"=>{self.edit_selected_vectors("smooth");},
+            "vector_simplify"=>{self.edit_selected_vectors("simplify");},
+            "vector_width_up"=>{self.edit_selected_vectors("width_up");},
+            "vector_width_down"=>{self.edit_selected_vectors("width_down");},
+            "toggle_perspective_snap"=>{
+                self.config.perspective_snap_enabled=!self.config.perspective_snap_enabled;
+                self.config.save();
+            }
+            "toggle_smart_shape"=>{
+                self.config.smart_shape_enabled=!self.config.smart_shape_enabled;
+                self.config.save();
+            }
+            "fill_selection"=>self.fill_last_selection(),
+            "flip_h"=>self.canvas_flip_h=!self.canvas_flip_h,
+            "flip_v"=>self.canvas_flip_v=!self.canvas_flip_v,
+            _=>{}
+        }
+    }
+
+    fn run_auto_action(&mut self,index:usize) {
+        let Some(commands)=self.drawing_assets.auto_actions.get(index)
+            .map(|a|a.commands.clone()) else{return};
+        let was_recording=self.auto_action_recording;
+        self.auto_action_recording=false;
+        for id in commands {self.execute_drawing_command(&id);}
+        self.auto_action_recording=was_recording;
     }
 
     fn get_effective_keyframe_index(layer: &Layer, frame: usize) -> Option<usize> {
@@ -3114,8 +3250,10 @@ impl StickApp {
             ActiveToolUI::VectorPen => Some(self.vector_pen_size),
             ActiveToolUI::EraserRed => Some(self.eraser_full_size),
             ActiveToolUI::EraserGreen => Some(self.eraser_partial_size),
+            ActiveToolUI::VectorEraser => Some(self.vector_eraser_size),
             ActiveToolUI::ShapeLine => Some(self.shape_outline_size),
             ActiveToolUI::Sculpt => Some(self.sculpt_radius),
+            ActiveToolUI::PuppetWarp => Some(self.puppet_radius),
             _ => None,
         }
     }
@@ -3126,8 +3264,10 @@ impl StickApp {
             ActiveToolUI::VectorPen => self.vector_pen_size = value.clamp(1.0, 100.0),
             ActiveToolUI::EraserRed => self.eraser_full_size = value.clamp(2.0, 120.0),
             ActiveToolUI::EraserGreen => self.eraser_partial_size = value.clamp(2.0, 120.0),
+            ActiveToolUI::VectorEraser => self.vector_eraser_size = value.clamp(2.0,120.0),
             ActiveToolUI::ShapeLine => self.shape_outline_size = value.clamp(1.0, 120.0),
             ActiveToolUI::Sculpt => self.sculpt_radius = value.clamp(8.0, 360.0),
+            ActiveToolUI::PuppetWarp => self.puppet_radius = value.clamp(20.0,500.0),
             _ => {}
         }
     }
@@ -3161,7 +3301,7 @@ impl StickApp {
     fn active_tool_visual_radius_px(&self, scale: f32) -> Option<f32> {
         let size=self.active_sizable_tool_size()?;
         Some(match self.active_tool_ui {
-            ActiveToolUI::Sculpt => size*scale,
+            ActiveToolUI::Sculpt | ActiveToolUI::PuppetWarp | ActiveToolUI::VectorEraser => size*scale,
             _ => size*scale*0.5,
         })
     }
@@ -3171,9 +3311,10 @@ impl StickApp {
         let (min,max)=match self.active_tool_ui {
             ActiveToolUI::Brush => (1.0,120.0),
             ActiveToolUI::VectorPen => (1.0,100.0),
-            ActiveToolUI::EraserRed | ActiveToolUI::EraserGreen => (2.0,120.0),
+            ActiveToolUI::EraserRed | ActiveToolUI::EraserGreen | ActiveToolUI::VectorEraser => (2.0,120.0),
             ActiveToolUI::ShapeLine => (1.0,120.0),
             ActiveToolUI::Sculpt => (8.0,360.0),
+            ActiveToolUI::PuppetWarp => (20.0,500.0),
             _ => return None,
         };
         Some(((value-min)/(max-min)*100.0).clamp(0.0,100.0))
