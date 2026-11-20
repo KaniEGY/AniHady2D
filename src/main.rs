@@ -36,6 +36,9 @@ mod transform_handles;
 mod media_transform;
 mod audio_timeline;
 mod canvas_quick_menu;
+mod drawing_power;
+mod drawing_assets;
+mod pose_guide;
 
 use arabic_reshaper::arabic_reshape;
 use brushes::{draw_brush_preset_icon, draw_stroke_pro};
@@ -88,7 +91,9 @@ enum ActiveToolUI {
     SelectLasso,
     FreeTransform,
     VectorDirectSelect,
+    VectorEraser,
     Sculpt,
+    PuppetWarp,
     VectorPen,
     Brush,
     EraserRed,
@@ -448,11 +453,13 @@ fn tr_notice(lang: AppLang, en: &str, ar: &str) -> String {
 }
 
 
-const TOOLBAR_ITEMS: [ActiveToolUI; 13] = [
+const TOOLBAR_ITEMS: [ActiveToolUI; 15] = [
     ActiveToolUI::SelectLasso,
     ActiveToolUI::FreeTransform,
     ActiveToolUI::VectorDirectSelect,
+    ActiveToolUI::VectorEraser,
     ActiveToolUI::Sculpt,
+    ActiveToolUI::PuppetWarp,
     ActiveToolUI::VectorPen,
     ActiveToolUI::Brush,
     ActiveToolUI::EraserRed,
@@ -470,7 +477,9 @@ fn tool_display_name(tool: ActiveToolUI, lang: AppLang) -> String {
         ActiveToolUI::SelectLasso => ("Lasso", "تحديد حر"),
         ActiveToolUI::FreeTransform => ("Transform", "تحويل"),
         ActiveToolUI::VectorDirectSelect => ("Vector Nodes", "نقاط الفيكتور"),
+        ActiveToolUI::VectorEraser => ("Vector Eraser", "ممحاة فيكتور"),
         ActiveToolUI::Sculpt => ("Sculpt / Finger", "نحت / صباع"),
+        ActiveToolUI::PuppetWarp => ("Puppet Warp", "تحريك شبكي"),
         ActiveToolUI::VectorPen => ("Ink Pen", "قلم حبر"),
         ActiveToolUI::Brush => ("Brush", "فرشاة"),
         ActiveToolUI::EraserRed => ("Eraser", "ممحاة"),
@@ -490,7 +499,9 @@ fn tool_shortcut<'a>(tool: ActiveToolUI, config: &'a AppConfig) -> &'a str {
         ActiveToolUI::SelectLasso => &config.tool_lasso,
         ActiveToolUI::FreeTransform => &config.tool_free_transform,
         ActiveToolUI::VectorDirectSelect => &config.tool_vector_select,
+        ActiveToolUI::VectorEraser => &config.tool_vector_eraser,
         ActiveToolUI::Sculpt => &config.tool_sculpt,
+        ActiveToolUI::PuppetWarp => &config.tool_puppet,
         ActiveToolUI::VectorPen => &config.tool_pen,
         ActiveToolUI::Brush => &config.tool_brush,
         ActiveToolUI::EraserRed => &config.tool_eraser,
@@ -619,6 +630,10 @@ struct AppConfig {
     perspective_ray_count: u16,
     #[serde(default)]
     perspective_parallel_angle_deg: f32,
+    #[serde(default)]
+    perspective_snap_enabled: bool,
+    #[serde(default)]
+    smart_shape_enabled: bool,
     #[serde(default = "default_timeline_height")]
     timeline_dock_height: f32,
     #[serde(default)]
@@ -686,9 +701,13 @@ struct AppConfig {
     tool_free_transform: String,
     #[serde(default = "default_vec_sel_key")]
     tool_vector_select: String,
+    #[serde(default = "default_vector_eraser_key")]
+    tool_vector_eraser: String,
     tool_pen: String,
     #[serde(default = "default_sculpt_key")]
     tool_sculpt: String,
+    #[serde(default = "default_puppet_key")]
+    tool_puppet: String,
     tool_brush: String,
     tool_eraser: String,
     #[serde(default = "default_partial_eraser_key")]
@@ -795,6 +814,8 @@ fn default_lasso_key() -> String { "L".to_string() }
 fn default_free_tr_key() -> String { "Q".to_string() }
 fn default_vec_sel_key() -> String { "G".to_string() }
 fn default_sculpt_key() -> String { "J".to_string() }
+fn default_vector_eraser_key() -> String { "X".to_string() }
+fn default_puppet_key() -> String { "W".to_string() }
 fn default_partial_eraser_key() -> String { "T".to_string() }
 fn default_text_key() -> String { "N".to_string() }
 fn default_shape_key() -> String { "U".to_string() }
@@ -836,6 +857,8 @@ impl Default for AppConfig {
             perspective_show_horizon: true,
             perspective_ray_count: default_perspective_ray_count(),
             perspective_parallel_angle_deg: 0.0,
+            perspective_snap_enabled: false,
+            smart_shape_enabled: false,
             timeline_dock_height: default_timeline_height(),
             timeline_style: 0,
             timeline_new_cell_width: default_new_timeline_cell_width(),
@@ -870,8 +893,10 @@ impl Default for AppConfig {
             tool_lasso: "L".to_string(),
             tool_free_transform: "Q".to_string(),
             tool_vector_select: "G".to_string(),
+            tool_vector_eraser: default_vector_eraser_key(),
             tool_pen: "P".to_string(),
             tool_sculpt: default_sculpt_key(),
+            tool_puppet: default_puppet_key(),
             tool_brush: "B".to_string(),
             tool_eraser: "E".to_string(),
             tool_eraser_partial: "T".to_string(),
@@ -1318,7 +1343,9 @@ fn get_tool_ui_color(tool: ActiveToolUI) -> egui::Color32 {
         ActiveToolUI::SelectNormal | ActiveToolUI::SelectLasso => egui::Color32::from_rgb(56, 189, 248),
         ActiveToolUI::FreeTransform => egui::Color32::from_rgb(245, 158, 11),
         ActiveToolUI::VectorDirectSelect => egui::Color32::from_rgb(192, 132, 252),
+        ActiveToolUI::VectorEraser => egui::Color32::from_rgb(244, 114, 182),
         ActiveToolUI::Sculpt => egui::Color32::from_rgb(250, 136, 185),
+        ActiveToolUI::PuppetWarp => egui::Color32::from_rgb(34, 211, 238),
         ActiveToolUI::VectorPen => egui::Color32::from_rgb(139, 92, 246),
         ActiveToolUI::Brush => egui::Color32::from_rgb(249, 115, 22),
         ActiveToolUI::EraserRed => egui::Color32::from_rgb(239, 68, 68),
@@ -1432,10 +1459,23 @@ fn draw_tool_ui_icon(painter: &egui::Painter, rect: egui::Rect, tool: ActiveTool
             }
             painter.line_segment([p(-5.,9.),p(9.,-9.)],egui::Stroke::new(1.0,primary));
         }
+        ActiveToolUI::VectorEraser => {
+            painter.line_segment([p(-9.,8.),p(8.,-9.)],egui::Stroke::new(4.0,primary));
+            painter.line_segment([p(-8.,-8.),p(8.,8.)],egui::Stroke::new(1.5,pale));
+            painter.circle_stroke(p(5.,-5.),4.5,egui::Stroke::new(1.5,primary));
+        }
         ActiveToolUI::Sculpt => {
             painter.circle_stroke(p(-3.,-2.),8.0,egui::Stroke::new(2.0,primary));
             painter.line_segment([p(-8.,7.),p(7.,-8.)],egui::Stroke::new(3.4,primary));
             painter.circle_filled(p(7.,-8.),3.0,pale);
+        }
+        ActiveToolUI::PuppetWarp => {
+            for q in [p(-7.,-7.),p(7.,-7.),p(-7.,7.),p(7.,7.)] {
+                painter.circle_filled(q,2.6,primary);
+            }
+            painter.line_segment([p(-7.,-7.),p(7.,7.)],egui::Stroke::new(1.5,primary));
+            painter.line_segment([p(7.,-7.),p(-7.,7.)],egui::Stroke::new(1.5,primary));
+            painter.circle_stroke(c,5.5,egui::Stroke::new(1.2,pale));
         }
         ActiveToolUI::VectorPen => {
             painter.add(egui::Shape::convex_polygon(
