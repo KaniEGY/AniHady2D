@@ -9534,11 +9534,15 @@ impl eframe::App for StickApp {
                             drawing_power::VectorEraseMode::ToIntersection=>1,
                             drawing_power::VectorEraseMode::WholeStroke=>2,
                         });
-                        if let Some(choice)=canvas_quick_menu::show_mode_menu(ctx,menu,&[
-                            ("◐",tr(lang,"PART","جزئي").as_str()),
-                            ("✂",tr(lang,"CROSS","تقاطع").as_str()),
-                            ("×",tr(lang,"ALL","كامل").as_str()),
-                        ],selected) {
+                        let part_label=tr(lang,"PART","جزئي");
+                        let cross_label=tr(lang,"CROSS","تقاطع");
+                        let all_label=tr(lang,"ALL","كامل");
+                        let items=[
+                            ("◐",part_label.as_str()),
+                            ("✂",cross_label.as_str()),
+                            ("×",all_label.as_str()),
+                        ];
+                        if let Some(choice)=canvas_quick_menu::show_mode_menu(ctx,menu,&items,selected) {
                             if choice==usize::MAX {self.canvas_quick_menu=None;}
                             else {
                                 self.vector_eraser_mode=match choice {
@@ -9553,10 +9557,10 @@ impl eframe::App for StickApp {
                     }
                     canvas_quick_menu::QuickMenuKind::RasterEraser=>{
                         let selected=Some(if self.eraser_mode==eraser_tools::EraserMode::Partial{0}else{1});
-                        if let Some(choice)=canvas_quick_menu::show_mode_menu(ctx,menu,&[
-                            ("◐",tr(lang,"PART","جزئي").as_str()),
-                            ("×",tr(lang,"ALL","كامل").as_str()),
-                        ],selected) {
+                        let part_label=tr(lang,"PART","جزئي");
+                        let all_label=tr(lang,"ALL","كامل");
+                        let items=[("◐",part_label.as_str()),("×",all_label.as_str())];
+                        if let Some(choice)=canvas_quick_menu::show_mode_menu(ctx,menu,&items,selected) {
                             if choice==usize::MAX {self.canvas_quick_menu=None;}
                             else {
                                 self.eraser_mode=if choice==0 {eraser_tools::EraserMode::Partial}
@@ -9567,11 +9571,15 @@ impl eframe::App for StickApp {
                         }
                     }
                     canvas_quick_menu::QuickMenuKind::CanvasView=>{
-                        if let Some(choice)=canvas_quick_menu::show_mode_menu(ctx,menu,&[
-                            ("↔",tr(lang,"MIRROR","يمين/شمال").as_str()),
-                            ("↕",tr(lang,"FLIP","فوق/تحت").as_str()),
-                            ("↺",tr(lang,"RESET","إرجاع").as_str()),
-                        ],None) {
+                        let mirror_label=tr(lang,"MIRROR","يمين/شمال");
+                        let flip_label=tr(lang,"FLIP","فوق/تحت");
+                        let reset_label=tr(lang,"RESET","إرجاع");
+                        let items=[
+                            ("↔",mirror_label.as_str()),
+                            ("↕",flip_label.as_str()),
+                            ("↺",reset_label.as_str()),
+                        ];
+                        if let Some(choice)=canvas_quick_menu::show_mode_menu(ctx,menu,&items,None) {
                             if choice!=usize::MAX {
                                 match choice {
                                     0=>self.canvas_flip_h=!self.canvas_flip_h,
