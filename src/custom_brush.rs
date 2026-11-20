@@ -24,7 +24,7 @@ use tiny_skia::{FilterQuality, Pixmap, PixmapPaint, Transform};
 const MAX_TIPS: usize = 32;
 const MAX_IMPORT_BRUSHES: usize = 128;
 const MAX_TIP_SIDE: u32 = 512;
-const CUSTOM_BRUSH_ENGINE_VERSION: u32 = 2;
+const CUSTOM_BRUSH_ENGINE_VERSION: u32 = 3;
 
 fn default_tip_scale() -> f32 { 1.0 }
 fn default_engine_version() -> u32 { 0 }
@@ -1013,20 +1013,54 @@ fn import_sut_file(path:&Path)->Result<Vec<ImportedBrushDraft>,String>{
         let mut st=con.prepare("SELECT name FROM sqlite_master WHERE type='table'").map_err(|e|e.to_string())?;
         let rows=st.query_map([],|r|r.get::<_,String>(0)).map_err(|e|e.to_string())?;
         let mut names=Vec::new();
-        for row in rows {
-            if let Ok(name)=row { names.push(name); }
-        }
+        for row in rows { if let Ok(name)=row { names.push(name); } }
         names
     };
     if !tables.iter().any(|x|x=="Variant"){return Err("Clip Studio file has no Variant table".into())}
-    let variant=first_row_map(&con,"Variant")?;
-    let name=if tables.iter().any(|x|x=="Node"){
-        con.query_row("SELECT NodeName FROM Node WHERE NodeName IS NOT NULL AND NodeName<>'' LIMIT 1",[],|r|r.get::<_,String>(0)).ok()
-    }else{None}.unwrap_or_else(||path.file_stem().and_then(|s|s.to_str()).unwrap_or("Clip Studio Brush").to_owned());
+
+    // A .sut can contain init/current variants. The old importer always took
+    // row #1, which makes unrelated CSP brushes collapse to similar defaults.
+    // Follow Node.NodeVariantID to the actual active brush variant instead.
+    let node_info:Option<(String,Value)>=if tables.iter().any(|x|x=="Node"){
+        con.query_row(
+            "SELECT COALESCE(NodeName,''), NodeVariantID
+             FROM Node
+             WHERE NodeVariantID IS NOT NULL
+             ORDER BY _PW_ID DESC LIMIT 1",
+            [],
+            |r|Ok((r.get::<_,String>(0)?,r.get::<_,Value>(1)?))
+        ).ok()
+    }else{None};
+    let name=node_info.as_ref().map(|(n,_)|n.clone())
+        .filter(|n|!n.trim().is_empty())
+        .unwrap_or_else(||path.file_stem().and_then(|s|s.to_str())
+            .unwrap_or("Clip Studio Brush").to_owned());
+    let variant=if let Some((_,variant_id))=node_info.as_ref() {
+        row_map_where(&con,"Variant","VariantID",variant_id)
+            .or_else(|_|first_row_map(&con,"Variant"))?
+    } else {
+        first_row_map(&con,"Variant")?
+    };
+
+    let num=|k:&str,d:f32|value_f32(variant.get(k)).unwrap_or(d);
+    let bool_num=|k:&str|num(k,0.0)>0.5;
+    let opacity=(num("Opacity",100.0)/100.0).clamp(0.05,1.0);
+    let flow=(num("BrushFlow",100.0)/100.0).clamp(0.02,1.0);
+    let auto=num("BrushAutoIntervalType",0.0) as i32;
+    let spacing=if auto==0{(num("BrushInterval",10.0)/100.0).clamp(0.01,2.0)}
+        else{match auto{1=>0.05,2=>0.10,3=>0.25,_=>0.10}};
+    let mut rotation=num("BrushRotation",0.0);
+    if bool_num("BrushVerticalThicknes"){rotation+=90.0;}
+    let follow_stroke=(num("BrushRotationEffector",1.0) as i32 & 0x02)!=0;
+    let hardness=(num("BrushHardness",100.0)/100.0).clamp(0.02,0.999);
+    let roundness=(num("BrushThickness",100.0)/100.0).clamp(0.05,1.0);
+    let size_pressure=if matches!(variant.get("BrushSizeEffector"),Some(Value::Blob(b)) if !b.is_empty()){1.0}else{0.0};
+    let opacity_pressure=if matches!(variant.get("BrushOpacityEffector"),Some(Value::Blob(b)) if !b.is_empty()){1.0}else{0.0};
 
     let mut tips=Vec::new();
     let mut icon=None;
-    if tables.iter().any(|x|x=="MaterialFile") {
+    let uses_material_tip=bool_num("BrushUsePatternImage");
+    if uses_material_tip && tables.iter().any(|x|x=="MaterialFile") {
         if let Ok(mut st)=con.prepare("SELECT FileData FROM MaterialFile WHERE FileData IS NOT NULL") {
             if let Ok(rows)=st.query_map([],|r|r.get::<_,Vec<u8>>(0)) {
                 for row in rows.filter_map(Result::ok).take(MAX_TIPS) {
@@ -1041,31 +1075,41 @@ fn import_sut_file(path:&Path)->Result<Vec<ImportedBrushDraft>,String>{
         }
     }
     let has_embedded_tip=!tips.is_empty();
-    let num=|k:&str,d:f32|value_f32(variant.get(k)).unwrap_or(d);
-    let size=num("BrushSize",30.0);
-    let _=size;
-    let opacity=(num("Opacity",100.0)/100.0).clamp(0.05,1.0);
-    let flow=(num("BrushFlow",100.0)/100.0).clamp(0.02,1.0);
-    let auto=num("BrushAutoIntervalType",0.0) as i32;
-    let spacing=if auto==0{(num("BrushInterval",10.0)/100.0).clamp(0.02,2.0)}
-        else{match auto{1=>0.05,2=>0.10,3=>0.25,_=>0.10}};
-    let rotation=num("BrushRotation",0.0);
-    let scatter=if num("BrushUseSpray",0.0)>0.5{0.75}else{0.0};
-    if tips.is_empty(){tips.push(round_tip(96,num("BrushHardness",100.0)/100.0));}
+
+    let spray=bool_num("BrushUseSpray");
+    let mut scatter=0.0;
+    let mut tip_scale=1.0;
+    if spray {
+        let particle=num("BrushSpraySize",100.0).max(1.0);
+        let area=num("BrushSize",30.0).max(1.0);
+        tip_scale=(particle/100.0).clamp(0.05,4.0);
+        scatter=(area/(particle.max(1.0)*2.0)).clamp(0.0,3.0);
+    }
+    if tips.is_empty(){
+        let tip=if roundness<0.97 {
+            elliptical_tip(128,hardness,roundness,rotation)
+        } else {
+            round_tip(128,hardness)
+        };
+        tips.push(tip);
+    }
+
     Ok(vec![ImportedBrushDraft{
         suggested_name:name,source_format:"Clip Studio Paint .sut".into(),source_path:path.to_path_buf(),
-        tips,icon,spacing,opacity,flow,size_pressure:1.0,opacity_pressure:0.0,angle_deg:rotation,
-        follow_stroke:false,scatter,random_tip:num("BrushPatternOrderType",0.0) as i32==3,tip_scale:1.0,
-        render_mode:if has_embedded_tip {
+        tips,icon,spacing,opacity,flow,size_pressure,opacity_pressure,angle_deg:rotation,
+        follow_stroke,scatter,random_tip:num("BrushPatternOrderType",0.0) as i32==3,tip_scale,
+        render_mode:if has_embedded_tip || spray {
             CustomBrushRenderMode::Stamp
         } else {
             CustomBrushRenderMode::Continuous
         },
         auxiliary_resource_path:None,
-        compatibility_note:"CSP size/opacity/flow/spacing/rotation and readable embedded tip material are mapped. Auto/round tools render continuously; bitmap material brushes keep stamp mode. CSP-only color mixing remains approximated.".into(),
+        compatibility_note:format!(
+            "CSP active Variant mapped: spacing {:.0}%, hardness {:.0}%, roundness {:.0}%, material tip {}, spray {}, pressure size {}, pressure opacity {}.",
+            spacing*100.0,hardness*100.0,roundness*100.0,has_embedded_tip,spray,
+            size_pressure>0.0,opacity_pressure>0.0),
     }])
 }
-
 fn import_sutg_file(path:&Path)->Result<Vec<ImportedBrushDraft>,String>{
     if fs::read(path).map(|b|b.starts_with(b"SQLite format 3\0")).unwrap_or(false) {
         return import_sut_file(path);
@@ -1092,6 +1136,25 @@ fn import_sutg_file(path:&Path)->Result<Vec<ImportedBrushDraft>,String>{
         "This tool-group container was accepted, but its vendor-specific grouping could not be decoded; Stick created a safe raster baseline.")])
 }
 
+fn row_map_where(
+    con:&Connection,table:&str,column:&str,value:&Value
+)->Result<HashMap<String,Value>,String>{
+    let table=table.replace('"',"");
+    let column=column.replace('"',"");
+    let sql=format!("SELECT * FROM \"{table}\" WHERE \"{column}\"=?1 LIMIT 1");
+    let mut st=con.prepare(&sql).map_err(|e|e.to_string())?;
+    let names:Vec<String>=st.column_names().iter().map(|s|s.to_string()).collect();
+    let mut rows=st.query([value]).map_err(|e|e.to_string())?;
+    let Some(row)=rows.next().map_err(|e|e.to_string())? else{
+        return Err("Requested Clip Studio Variant row was not found.".into())
+    };
+    let mut out=HashMap::new();
+    for (i,name) in names.into_iter().enumerate(){
+        if let Ok(v)=row.get::<_,Value>(i){out.insert(name,v);}
+    }
+    Ok(out)
+}
+
 fn first_row_map(con:&Connection,table:&str)->Result<HashMap<String,Value>,String>{
     let sql=format!("SELECT * FROM \"{}\" LIMIT 1",table.replace('"',""));
     let mut st=con.prepare(&sql).map_err(|e|e.to_string())?;
@@ -1112,61 +1175,108 @@ fn import_blend_file(path:&Path)->Result<Vec<ImportedBrushDraft>,String>{
     let result=std::panic::catch_unwind(std::panic::AssertUnwindSafe(||{
         let blend=blend::Blend::from_path(path).map_err(|e|format!("Blender .blend: {e:?}"))?;
         let mut out=Vec::new();
-        for (index,brush) in blend.instances_with_code(*b"BR").take(MAX_IMPORT_BRUSHES).enumerate() {
-            let safe_f32=|field:&str,default:f32| -> f32 {
-                if !brush.is_valid(field){return default}
-                std::panic::catch_unwind(std::panic::AssertUnwindSafe(||brush.get_f32(field)))
+
+        for (index,brush) in blend.instances_with_code(*b"BR").enumerate() {
+            if out.len()>=MAX_IMPORT_BRUSHES{break}
+
+            let safe_f32=|inst:&blend::Instance<'_>,field:&str,default:f32| -> f32 {
+                if !inst.is_valid(field){return default}
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(||inst.get_f32(field)))
                     .unwrap_or(default)
             };
-            let safe_i32=|field:&str,default:i32| -> i32 {
-                if !brush.is_valid(field){return default}
-                std::panic::catch_unwind(std::panic::AssertUnwindSafe(||brush.get_i32(field)))
+            let safe_i32=|inst:&blend::Instance<'_>,field:&str,default:i32| -> i32 {
+                if !inst.is_valid(field){return default}
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(||inst.get_i32(field)))
                     .unwrap_or(default)
             };
-            let safe_u32=|field:&str,default:u32| -> u32 {
-                if !brush.is_valid(field){return default}
-                std::panic::catch_unwind(std::panic::AssertUnwindSafe(||brush.get_u32(field)))
-                    .unwrap_or_else(|_|safe_i32(field,default as i32) as u32)
+            let safe_i8=|inst:&blend::Instance<'_>,field:&str,default:i8| -> i8 {
+                if !inst.is_valid(field){return default}
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(||inst.get_i8(field)))
+                    .unwrap_or(default)
             };
+            let safe_f32_vec=|inst:&blend::Instance<'_>,field:&str| -> Vec<f32> {
+                if !inst.is_valid(field){return Vec::new()}
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(||inst.get_f32_vec(field)))
+                    .unwrap_or_default()
+            };
+
+            // Only Grease Pencil brushes have a valid gpencil_settings pointer.
+            // The previous importer accepted every Blender Brush datablock,
+            // which is why Mask/Multiply/Multires/Sculpt tools appeared as
+            // dozens of identical "2D brushes" in Stick.
+            if !brush.is_valid("gpencil_settings"){continue}
+            let gp=match std::panic::catch_unwind(std::panic::AssertUnwindSafe(||brush.get("gpencil_settings"))){
+                Ok(settings)=>settings,
+                Err(_)=>continue,
+            };
+            let gp_type=safe_i8(&brush,"gpencil_brush_type",0);
+            if gp_type!=0 {continue} // DRAW only; exclude Fill/Eraser/Tint.
+
             let raw_name=std::panic::catch_unwind(std::panic::AssertUnwindSafe(||{
                 brush.get("id").get_string("name")
             })).unwrap_or_else(|_|format!("BRBrush {}",index+1));
             let name=raw_name.strip_prefix("BR").unwrap_or(&raw_name).trim().to_owned();
-            let size=safe_i32("size",30).clamp(1,5000);
-            let alpha=safe_f32("alpha",1.0).clamp(0.05,1.0);
-            let raw_flow=safe_f32("flow",1.0);
-            let flow=if raw_flow<=0.001{1.0}else{raw_flow.clamp(0.02,1.0)};
-            let spacing=(safe_i32("spacing",10) as f32/100.0).clamp(0.02,2.0);
-            let jitter=safe_f32("jitter",0.0).clamp(0.0,3.0);
-            let hardness=safe_f32("hardness",0.95).clamp(0.0,0.999);
-            let smooth=safe_f32("smooth_stroke_factor",0.0).clamp(0.0,1.0);
-            let flags=safe_u32("flag",0);
-            let size_pressure=if flags&(1<<3)!=0{1.0}else{0.0};
-            let opacity_pressure=if flags&(1<<2)!=0{1.0}else{0.0};
-            let gp_type=safe_i32("gpencil_brush_type",0);
+
+            let size=safe_i32(&brush,"size",30).clamp(1,5000);
+            let alpha=safe_f32(&brush,"alpha",1.0).clamp(0.05,1.0);
+            let raw_flow=safe_f32(&brush,"flow",1.0);
+            let flow=(if raw_flow<=0.001{1.0}else{raw_flow}).clamp(0.02,1.0);
+            let spacing=(safe_i32(&brush,"spacing",10) as f32/100.0).clamp(0.01,2.0);
+
+            let gp_strength=safe_f32(&gp,"draw_strength",1.0).clamp(0.02,1.0);
+            let jitter=safe_f32(&gp,"draw_jitter",
+                safe_f32(&brush,"jitter",0.0)).clamp(0.0,3.0);
+            let hardness=safe_f32(&gp,"hardness",
+                safe_f32(&brush,"hardness",0.9)).clamp(0.02,0.999);
+            let angle=safe_f32(&gp,"draw_angle",0.0).to_degrees();
+            let aspect=safe_f32_vec(&gp,"aspect_ratio");
+            let aspect_ratio=if aspect.len()>=2 {
+                let a=aspect[0].abs().max(0.01);
+                let b=aspect[1].abs().max(0.01);
+                (a.min(b)/a.max(b)).clamp(0.08,1.0)
+            } else {
+                safe_f32(&brush,"tip_scale_x",1.0).abs().clamp(0.08,1.0)
+            };
+            let smooth=safe_f32(&gp,"active_smooth",
+                safe_f32(&gp,"draw_smoothfac",
+                    safe_f32(&brush,"smooth_stroke_factor",0.0))).clamp(0.0,1.0);
+            let input_samples=safe_i32(&gp,"input_samples",
+                safe_i32(&brush,"input_samples",1)).max(1);
+            let gp_flags=safe_i32(&gp,"flag",0) as u32;
+            let size_pressure=if gp_flags&(1<<0)!=0{1.0}else{0.0};
+            let opacity_pressure=if gp_flags&(1<<1)!=0{1.0}else{0.0};
+            let pressure_jitter=gp_flags&(1<<2)!=0;
+
+            let tip=if aspect_ratio<0.97 {
+                elliptical_tip(128,hardness,aspect_ratio,angle)
+            } else {
+                round_tip(128,hardness)
+            };
+
             out.push(ImportedBrushDraft{
-                suggested_name:if name.is_empty(){format!("Blender Brush {}",index+1)}else{name},
-                source_format:"Blender Grease Pencil .blend/.asset.blend".into(),
-                source_path:path.to_path_buf(),tips:vec![round_tip(96,hardness)],icon:None,
-                spacing,opacity:alpha,flow,size_pressure,opacity_pressure,angle_deg:0.0,
+                suggested_name:if name.is_empty(){format!("Blender GP Brush {}",index+1)}else{name},
+                source_format:"Blender Grease Pencil Draw Brush .blend/.asset.blend".into(),
+                source_path:path.to_path_buf(),tips:vec![tip],icon:None,
+                spacing,opacity:(alpha*gp_strength).clamp(0.05,1.0),flow,
+                size_pressure,opacity_pressure,angle_deg:angle,
                 follow_stroke:false,scatter:jitter,random_tip:false,tip_scale:1.0,
                 render_mode:CustomBrushRenderMode::Continuous,
                 auxiliary_resource_path:None,
                 compatibility_note:format!(
-                    "Blender Brush settings mapped: size {size}px, spacing {:.0}%, opacity {:.0}%, jitter {:.2}, smooth {:.2}, Grease Pencil type {}. Asset materials/textures without a Stick equivalent are approximated.",
-                    spacing*100.0,alpha*100.0,jitter,smooth,gp_type),
+                    "Blender Grease Pencil Draw settings mapped: {}px, spacing {:.0}%, strength {:.0}%, hardness {:.0}%, aspect {:.2}, jitter {:.2}{} , smoothing {:.2}, input samples {}.",
+                    size,spacing*100.0,gp_strength*100.0,hardness*100.0,aspect_ratio,jitter,
+                    if pressure_jitter{" + pressure"}else{""},smooth,input_samples),
             });
         }
         Ok::<_,String>(out)
     })).map_err(|_|"Blender asset parser rejected this .blend safely".to_string())??;
+
     if result.is_empty() {
-        Ok(vec![baseline_draft(path,"Blender Grease Pencil .blend/.asset.blend",
-            "No Brush datablocks were found; Stick created a safe raster baseline.")])
+        Err("No Grease Pencil DRAW brushes were found in this .blend. Sculpt/Mask/Fill/Erase Blender tools are intentionally not imported as drawing brushes.".into())
     } else {
         Ok(result)
     }
 }
-
 fn tips_from_resource(filename:&str,data:&[u8])->Vec<TipMask>{
     let ext=Path::new(filename).extension().and_then(|s|s.to_str()).unwrap_or("").to_ascii_lowercase();
     match ext.as_str(){
