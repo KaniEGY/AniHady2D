@@ -3180,6 +3180,198 @@ impl StickApp {
         self.auto_action_recording=was_recording;
     }
 
+    fn render_drawing_power_windows(&mut self,ctx:&egui::Context,lang:AppLang) {
+        if self.show_command_palette {
+            let mut open=true;
+            let mut command_to_run:Option<String>=None;
+            let mut action_to_run:Option<usize>=None;
+            let mut toggle_pin:Option<String>=None;
+            let mut start_recording=false;
+            let mut stop_recording=false;
+            egui::Window::new(tr(lang,"Quick Access & Auto Actions","الوصول السريع والأوامر التلقائية"))
+                .open(&mut open)
+                .collapsible(false)
+                .default_width(460.0)
+                .show(ctx,|ui|{
+                    ui.horizontal(|ui|{
+                        ui.label("⌕");
+                        ui.add(egui::TextEdit::singleline(&mut self.command_search)
+                            .hint_text(tr(lang,"Search drawing commands...","ابحث عن أمر رسم..."))
+                            .desired_width(f32::INFINITY));
+                    });
+                    ui.separator();
+                    let query=self.command_search.to_ascii_lowercase();
+                    egui::ScrollArea::vertical().max_height(260.0).show(ui,|ui|{
+                        for id in drawing_assets::COMMANDS {
+                            let (en,ar)=drawing_assets::command_label(id);
+                            let label=tr(lang,en,ar);
+                            if !query.is_empty()
+                                && !id.to_ascii_lowercase().contains(&query)
+                                && !en.to_ascii_lowercase().contains(&query)
+                                && !ar.contains(&self.command_search)
+                            {continue}
+                            ui.horizontal(|ui|{
+                                if ui.button(&label).clicked(){command_to_run=Some(id.to_owned());}
+                                let pinned=self.drawing_assets.quick_access.iter().any(|x|x==id);
+                                if ui.small_button(if pinned{"★"}else{"☆"})
+                                    .on_hover_text(tr(lang,
+                                        if pinned{"Remove from Quick Access"}else{"Pin to Quick Access"},
+                                        if pinned{"شيل من الوصول السريع"}else{"ثبّت في الوصول السريع"}))
+                                    .clicked()
+                                {toggle_pin=Some(id.to_owned());}
+                            });
+                        }
+                    });
+                    ui.separator();
+                    ui.horizontal(|ui|{
+                        ui.strong(tr(lang,"Auto Actions","الأوامر التلقائية"));
+                        if !self.auto_action_recording {
+                            if ui.button(tr(lang,"● Record","● تسجيل")).clicked(){start_recording=true;}
+                        } else if ui.button(tr(lang,"■ Stop & Save","■ إيقاف وحفظ")).clicked(){
+                            stop_recording=true;
+                        }
+                    });
+                    if self.auto_action_recording {
+                        ui.horizontal(|ui|{
+                            ui.label(tr(lang,"Action name","اسم الأمر"));
+                            ui.text_edit_singleline(&mut self.auto_action_name);
+                        });
+                        ui.small(format!("{}: {}",tr(lang,"Recorded steps","الخطوات المسجلة"),
+                            self.auto_action_buffer.len()));
+                    }
+                    for (index,action) in self.drawing_assets.auto_actions.iter().enumerate() {
+                        ui.horizontal(|ui|{
+                            if ui.button(format!("▶ {}",action.name)).clicked(){action_to_run=Some(index);}
+                            ui.small(format!("{} {}",action.commands.len(),
+                                tr(lang,"steps","خطوات")));
+                        });
+                    }
+                });
+            self.show_command_palette=open;
+            if let Some(id)=toggle_pin {
+                if self.drawing_assets.quick_access.iter().any(|x|x==&id) {
+                    self.drawing_assets.unpin(&id);
+                } else {self.drawing_assets.pin(&id);}
+                let _=self.drawing_assets.save();
+            }
+            if start_recording {
+                self.auto_action_recording=true;
+                self.auto_action_buffer.clear();
+            }
+            if stop_recording {
+                self.auto_action_recording=false;
+                let commands=std::mem::take(&mut self.auto_action_buffer);
+                if self.drawing_assets.push_recorded_action(
+                    self.auto_action_name.clone(),commands)
+                {
+                    let _=self.drawing_assets.save();
+                }
+            }
+            if let Some(id)=command_to_run {self.execute_drawing_command(&id);}
+            if let Some(index)=action_to_run {self.run_auto_action(index);}
+        }
+
+        if self.show_assets_library {
+            let mut open=true;
+            let mut picked_color=None;
+            let mut add_color_to=None;
+            let mut action_to_run=None;
+            let mut open_pose=false;
+            egui::Window::new(tr(lang,"Drawing Assets","مكتبة الرسم"))
+                .open(&mut open).default_width(430.0).show(ctx,|ui|{
+                    ui.label(tr(lang,
+                        "Local palettes and Auto Actions. Imported brushes stay in the Brush tool.",
+                        "باليتات وأوامر تلقائية محلية. الفرش المستوردة موجودة داخل أداة الفرشة."));
+                    ui.separator();
+                    for (pi,palette) in self.drawing_assets.palettes.iter().enumerate() {
+                        ui.horizontal(|ui|{
+                            ui.strong(&palette.name);
+                            if ui.small_button("+")
+                                .on_hover_text(tr(lang,"Add current color","ضيف اللون الحالي")).clicked()
+                            {add_color_to=Some(pi);}
+                        });
+                        ui.horizontal_wrapped(|ui|{
+                            for color in &palette.colors {
+                                let c=egui::Color32::from_rgba_unmultiplied(
+                                    color[0],color[1],color[2],color[3]);
+                                let (rect,response)=ui.allocate_exact_size(
+                                    egui::vec2(25.0,25.0),egui::Sense::click());
+                                ui.painter().rect_filled(rect,4.0,c);
+                                ui.painter().rect_stroke(rect,4.0,
+                                    egui::Stroke::new(1.0,egui::Color32::from_gray(120)));
+                                if response.clicked(){picked_color=Some(*color);}
+                            }
+                        });
+                        ui.add_space(5.0);
+                    }
+                    ui.separator();
+                    ui.strong(tr(lang,"Auto Actions","الأوامر التلقائية"));
+                    for (index,action) in self.drawing_assets.auto_actions.iter().enumerate(){
+                        if ui.button(format!("▶ {}  ·  {} {}",action.name,
+                            action.commands.len(),tr(lang,"steps","خطوات"))).clicked()
+                        {action_to_run=Some(index);}
+                    }
+                    ui.separator();
+                    if ui.button(tr(lang,"Pose Reference Guide","مرجع وضعية الجسم")).clicked(){
+                        open_pose=true;
+                    }
+                });
+            self.show_assets_library=open;
+            if let Some(color)=picked_color {self.brush_color=color;}
+            if let Some(index)=add_color_to {
+                if self.drawing_assets.add_color_to_palette(index,self.brush_color) {
+                    let _=self.drawing_assets.save();
+                }
+            }
+            if let Some(index)=action_to_run {self.run_auto_action(index);}
+            if open_pose {
+                self.show_pose_guide=true;
+                self.pose_guide.visible=true;
+            }
+        }
+
+        if self.show_pose_guide {
+            let mut open=true;
+            egui::Window::new(tr(lang,"Pose Reference","مرجع الوضعية"))
+                .open(&mut open).default_width(330.0).show(ctx,|ui|{
+                    ui.checkbox(&mut self.pose_guide.visible,
+                        tr(lang,"Show guide on canvas","اظهر المرجع على الكانفا"));
+                    ui.add(egui::Slider::new(&mut self.pose_guide.scale,0.25..=3.0)
+                        .text(tr(lang,"Scale","الحجم")));
+                    ui.add(egui::Slider::new(&mut self.pose_guide.opacity,0.05..=1.0)
+                        .text(tr(lang,"Opacity","الشفافية")));
+                    ui.horizontal(|ui|{
+                        ui.add(egui::DragValue::new(&mut self.pose_guide.x).range(0.0..=1.0)
+                            .speed(0.01).prefix("X "));
+                        ui.add(egui::DragValue::new(&mut self.pose_guide.y).range(0.0..=1.0)
+                            .speed(0.01).prefix("Y "));
+                    });
+                    ui.separator();
+                    for (label,value) in [
+                        (tr(lang,"Torso","الجذع"),&mut self.pose_guide.torso_tilt_deg),
+                        (tr(lang,"Left upper arm","الذراع الشمال"),&mut self.pose_guide.left_arm_deg),
+                        (tr(lang,"Right upper arm","الذراع اليمين"),&mut self.pose_guide.right_arm_deg),
+                        (tr(lang,"Left forearm","الساعد الشمال"),&mut self.pose_guide.left_forearm_deg),
+                        (tr(lang,"Right forearm","الساعد اليمين"),&mut self.pose_guide.right_forearm_deg),
+                        (tr(lang,"Left thigh","الفخذ الشمال"),&mut self.pose_guide.left_leg_deg),
+                        (tr(lang,"Right thigh","الفخذ اليمين"),&mut self.pose_guide.right_leg_deg),
+                        (tr(lang,"Left shin","الساق الشمال"),&mut self.pose_guide.left_shin_deg),
+                        (tr(lang,"Right shin","الساق اليمين"),&mut self.pose_guide.right_shin_deg),
+                    ] {
+                        ui.add(egui::Slider::new(value,-180.0..=180.0).text(label));
+                    }
+                    if ui.button(tr(lang,"Reset pose","رجّع الوضعية")).clicked(){
+                        *self.pose_guide=pose_guide::PoseGuide::default();
+                        self.pose_guide.visible=true;
+                    }
+                    ui.small(tr(lang,
+                        "This is a fast articulated drawing reference and is never exported.",
+                        "ده مرجع مفصلي سريع للرسم ومش بيظهر في التصدير."));
+                });
+            self.show_pose_guide=open;
+        }
+    }
+
     fn get_effective_keyframe_index(layer: &Layer, frame: usize) -> Option<usize> {
         layer.keyframes.keys().filter(|&&k| k <= frame).max().copied()
     }
@@ -9445,7 +9637,7 @@ impl eframe::App for StickApp {
                 }
             }
 
-            if self.show_pose_guide || self.pose_guide.visible {
+            if self.pose_guide.visible {
                 pose_guide::draw(&painter,&self.pose_guide,(stage_w,stage_h),&to_screen);
             }
 
