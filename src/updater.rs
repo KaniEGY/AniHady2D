@@ -144,6 +144,157 @@ fn verify_pe_file(bytes: &[u8]) -> bool {
     bytes.get(offset..offset.saturating_add(4)) == Some(&b"PE\0\0"[..])
 }
 
+fn download_with_ureq_once<F: FnMut(u64, u64)>(
+    info:&ReleaseInfo,
+    destination:&Path,
+    mut on_progress:F,
+)->Result<(),String>{
+    use std::io::Write;
+
+    let response=ureq::AgentBuilder::new()
+        .timeout_connect(Duration::from_secs(25))
+        .timeout_read(Duration::from_secs(90))
+        .build()
+        .get(&info.url)
+        // Force a fresh HTTP connection for every updater attempt. This avoids
+        // reusing a TLS connection that a CDN/proxy has already half-closed.
+        .set("Connection","close")
+        .set("User-Agent","Stick-Updater")
+        .call().map_err(|e|format!("HTTPS request failed: {e}"))?;
+
+    let mut reader=response.into_reader();
+    let mut file=std::fs::File::create(destination)
+        .map_err(|e|format!("Can't write to the Stick install folder: {e}"))?;
+    let mut total=0u64;
+    let mut chunk=[0u8;64*1024];
+    on_progress(0,info.size);
+
+    loop {
+        let n=reader.read(&mut chunk)
+            .map_err(|e|format!("HTTPS stream failed: {e}"))?;
+        if n==0 {break}
+        total+=n as u64;
+        if total>info.size || total>MAX_EXE_SIZE {
+            return Err("Update package is larger than the published release.".into());
+        }
+        file.write_all(&chunk[..n])
+            .map_err(|e|format!("Couldn't write the downloaded update: {e}"))?;
+        on_progress(total,info.size);
+    }
+    file.sync_all().map_err(|e|format!("Couldn't finish writing the update: {e}"))?;
+    if total!=info.size {
+        return Err(format!(
+            "Downloaded {} bytes but GitHub published {} bytes.",
+            total,info.size
+        ));
+    }
+    Ok(())
+}
+
+fn download_with_windows_curl(info:&ReleaseInfo,destination:&Path)->Result<(),String>{
+    // Windows 10/11 ship curl.exe using the Windows TLS stack (Schannel).
+    // It is deliberately a fallback for TLS/CDN failures in the Rust client,
+    // not a replacement for our SHA-256 and PE verification below.
+    let output=std::process::Command::new("curl.exe")
+        .arg("--location")
+        .arg("--fail")
+        .arg("--silent")
+        .arg("--show-error")
+        .arg("--retry").arg("3")
+        .arg("--retry-delay").arg("1")
+        .arg("--connect-timeout").arg("25")
+        .arg("--max-time").arg("240")
+        .arg("--proto").arg("=https")
+        .arg("--proto-redir").arg("=https")
+        .arg("--user-agent").arg("Stick-Updater")
+        .arg("--output").arg(destination)
+        .arg(&info.url)
+        .output()
+        .map_err(|e|format!("Windows curl could not start: {e}"))?;
+
+    if !output.status.success() {
+        let stderr=String::from_utf8_lossy(&output.stderr).trim().to_owned();
+        return Err(if stderr.is_empty() {
+            format!("Windows curl failed with exit code {:?}",output.status.code())
+        } else {
+            format!("Windows curl failed: {stderr}")
+        });
+    }
+    Ok(())
+}
+
+fn verify_downloaded_package(info:&ReleaseInfo,path:&Path)->Result<(),String>{
+    let metadata=std::fs::metadata(path)
+        .map_err(|e|format!("Couldn't inspect the downloaded update: {e}"))?;
+    if metadata.len()!=info.size {
+        return Err(format!(
+            "The downloaded update is incomplete ({} / {} bytes).",
+            metadata.len(),info.size
+        ));
+    }
+    if metadata.len()>MAX_EXE_SIZE {
+        return Err("The downloaded update package is too large.".into());
+    }
+
+    let mut file=std::fs::File::open(path)
+        .map_err(|e|format!("Couldn't verify the downloaded update: {e}"))?;
+    let mut hasher=Sha256::new();
+    let mut chunk=[0u8;128*1024];
+    loop {
+        let n=file.read(&mut chunk)
+            .map_err(|e|format!("Couldn't verify the downloaded update: {e}"))?;
+        if n==0 {break}
+        hasher.update(&chunk[..n]);
+    }
+    let digest=format!("{:x}",hasher.finalize());
+    if digest!=info.sha256 {
+        return Err("SHA-256 mismatch. The update was canceled for safety.".into());
+    }
+    Ok(())
+}
+
+fn download_with_transport_fallback<F: FnMut(u64, u64)>(
+    info:&ReleaseInfo,
+    destination:&Path,
+    mut on_progress:F,
+)->Result<(),String>{
+    let mut rust_errors=Vec::new();
+
+    for attempt in 1..=3 {
+        let _=std::fs::remove_file(destination);
+        match download_with_ureq_once(info,destination,|done,total|on_progress(done,total)) {
+            Ok(())=>{
+                match verify_downloaded_package(info,destination) {
+                    Ok(())=>return Ok(()),
+                    Err(e)=>rust_errors.push(format!("attempt {attempt} verification: {e}")),
+                }
+            }
+            Err(e)=>rust_errors.push(format!("attempt {attempt}: {e}")),
+        }
+        std::thread::sleep(Duration::from_millis(350*attempt as u64));
+    }
+
+    // A TLS decryption/record failure can be specific to rustls/ureq, an
+    // antivirus HTTPS interceptor or a CDN edge. Retry through Windows
+    // Schannel so users do not have to download the release manually.
+    let _=std::fs::remove_file(destination);
+    on_progress(0,info.size);
+    match download_with_windows_curl(info,destination) {
+        Ok(())=>{
+            verify_downloaded_package(info,destination)?;
+            on_progress(info.size,info.size);
+            Ok(())
+        }
+        Err(curl_error)=>{
+            let _=std::fs::remove_file(destination);
+            Err(format!(
+                "All secure download methods failed. Rust HTTPS: {}. Windows TLS fallback: {}",
+                rust_errors.join(" | "),curl_error
+            ))
+        }
+    }
+}
+
 pub fn download_verified_with_progress<F: FnMut(u64, u64)>(
     info: &ReleaseInfo, current_exe: &Path, mut on_progress: F,
 ) -> Result<PathBuf, String> {
@@ -165,51 +316,17 @@ pub fn download_verified_with_progress<F: FnMut(u64, u64)>(
     let _ = std::fs::remove_file(&package_tmp);
     let _ = std::fs::remove_file(&extracted_tmp);
 
-    // Download the published package exactly as GitHub hashed it. New releases
-    // use a compressed ZIP; older releases keep working through the legacy EXE.
-    on_progress(0, info.size);
-    let download_result = (|| -> Result<(), String> {
-        let response = ureq::AgentBuilder::new()
-            .timeout_connect(Duration::from_secs(25))
-            .timeout_read(Duration::from_secs(90))
-            .build()
-            .get(&info.url)
-            .set("User-Agent", "Stick-Updater")
-            .call().map_err(|e| format!("Couldn't download the update: {e}"))?;
+    // Download through the Rust HTTPS client first. If a CDN/proxy/AV TLS
+    // interceptor breaks that stream (for example "cannot decrypt peer's
+    // message"), retry with fresh connections and finally Windows Schannel.
+    let download_result=download_with_transport_fallback(
+        info,
+        &package_tmp,
+        |done,total|on_progress(done,total),
+    );
 
-        let mut reader = response.into_reader();
-        let mut file = std::fs::File::create(&package_tmp)
-            .map_err(|e| format!("Can't write to the Stick install folder: {e}"))?;
-        let mut hasher = Sha256::new();
-        let mut total = 0u64;
-        let mut chunk = [0u8; 64 * 1024];
-
-        loop {
-            let n = reader.read(&mut chunk)
-                .map_err(|e| format!("Update download interrupted: {e}"))?;
-            if n == 0 { break; }
-            total += n as u64;
-            if total > info.size || total > MAX_EXE_SIZE {
-                return Err("Update package is larger than the published release.".into());
-            }
-            hasher.update(&chunk[..n]);
-            file.write_all(&chunk[..n])
-                .map_err(|e| format!("Couldn't write the downloaded update: {e}"))?;
-            on_progress(total, info.size);
-        }
-        file.sync_all().map_err(|e| format!("Couldn't finish writing the update: {e}"))?;
-        if total != info.size {
-            return Err("The downloaded update package is incomplete.".into());
-        }
-        let digest = format!("{:x}", hasher.finalize());
-        if digest != info.sha256 {
-            return Err("SHA-256 mismatch. The update was canceled for safety.".into());
-        }
-        Ok(())
-    })();
-
-    if let Err(error) = download_result {
-        let _ = std::fs::remove_file(&package_tmp);
+    if let Err(error)=download_result {
+        let _=std::fs::remove_file(&package_tmp);
         return Err(error);
     }
 
@@ -437,6 +554,33 @@ mod tests {
         beta["prerelease"] = Value::Bool(true);
         assert!(parse_rollback_history(&serde_json::json!([unsigned, beta]),"4.1.0.130").unwrap().is_empty());
     }
+    #[test] fn download_verifier_rejects_wrong_hash_and_wrong_size() {
+        let unique=format!("stick-updater-test-{}-{}.bin",std::process::id(),
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos());
+        let path=std::env::temp_dir().join(unique);
+        std::fs::write(&path,b"hello update").unwrap();
+
+        let mut good_hasher=Sha256::new();
+        good_hasher.update(b"hello update");
+        let good_hash=format!("{:x}",good_hasher.finalize());
+        let good=ReleaseInfo{
+            version:"4.1.0.999".into(),
+            url:"https://github.com/KaniEGY/Stick/releases/download/v4.1.0.999/Stick-update.zip".into(),
+            sha256:good_hash,
+            size:12,
+        };
+        assert!(verify_downloaded_package(&good,&path).is_ok());
+
+        let mut bad_size=good.clone();
+        bad_size.size=13;
+        assert!(verify_downloaded_package(&bad_size,&path).unwrap_err().contains("incomplete"));
+
+        let mut bad_hash=good;
+        bad_hash.sha256="0".repeat(64);
+        assert!(verify_downloaded_package(&bad_hash,&path).unwrap_err().contains("SHA-256"));
+        let _=std::fs::remove_file(path);
+    }
+
     #[test] fn reject_html_disguised_as_executable() {
         assert!(!verify_pe_file(b"<html>hello</html>"));
         let mut exe=vec![0u8; 256];
