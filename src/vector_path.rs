@@ -3,6 +3,7 @@
 use crate::project::{Stroke, StrokePoint};
 
 const MAX_CONTROL_POINTS: usize = 5_000;
+const MAX_RENDER_SAMPLES: usize = 24_000;
 const MAX_SUBDIVISIONS: usize = 24;
 const CORNER_COS_THRESHOLD: f32 = 0.15;
 
