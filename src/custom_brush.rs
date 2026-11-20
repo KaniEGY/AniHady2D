@@ -1292,6 +1292,7 @@ fn import_blend_file(path:&Path)->Result<Vec<ImportedBrushDraft>,String>{
             let mut material_mode=0i32; // 0=line, 1=dot, 2=square
             let mut material_texture_path=String::new();
             let mut material_texture_tip:Option<TipMask>=None;
+            let mut material_texture_source:Option<PathBuf>=None;
             let mut texture_scale=1.0f32;
             let mut random_size=0.0f32;
             let mut random_strength=0.0f32;
@@ -1319,8 +1320,10 @@ fn import_blend_file(path:&Path)->Result<Vec<ImportedBrushDraft>,String>{
                                     material_texture_path=std::panic::catch_unwind(
                                         std::panic::AssertUnwindSafe(||img.get_string("filepath")))
                                         .unwrap_or_default();
-                                    if let Some(texture)=blender_external_image(path,&material_texture_path) {
+                                    if let Some((texture,texture_path))=
+                                        blender_external_image(path,&material_texture_path) {
                                         material_texture_tip=Some(tip_from_image(&texture));
+                                        material_texture_source=Some(texture_path);
                                     }
                                 }
                             }
@@ -1361,7 +1364,7 @@ fn import_blend_file(path:&Path)->Result<Vec<ImportedBrushDraft>,String>{
                 } else {
                     CustomBrushRenderMode::Continuous
                 },
-                auxiliary_resource_path:None,
+                auxiliary_resource_path:material_texture_source,
                 compatibility_note:format!(
                     "Blender GP Draw mapped: {}px, spacing {:.0}%, strength {:.0}%, hardness {:.0}%, aspect {:.2}, jitter {:.2}{}, material mode {}, random size {:.2}, strength {:.2}, rotation {:.2},{} smoothing {:.2}, input samples {}.",
                     size,spacing*100.0,gp_strength*100.0,hardness*100.0,aspect_ratio,final_jitter,
@@ -1530,7 +1533,7 @@ fn square_tip(size:u32,hardness:f32)->TipMask{
     TipMask{width:size,height:size,data}
 }
 
-fn blender_external_image(blend_path:&Path,raw:&str)->Option<DynamicImage>{
+fn blender_external_image(blend_path:&Path,raw:&str)->Option<(DynamicImage,PathBuf)>{
     let raw=raw.trim_matches(char::from(0)).trim();
     if raw.is_empty(){return None}
     let parent=blend_path.parent().unwrap_or(Path::new("."));
@@ -1540,7 +1543,7 @@ fn blender_external_image(blend_path:&Path,raw:&str)->Option<DynamicImage>{
         let candidate=PathBuf::from(raw);
         if candidate.is_absolute(){candidate}else{parent.join(candidate)}
     };
-    image::open(path).ok()
+    image::open(&path).ok().map(|image|(image,path))
 }
 
 fn round_tip(size:u32,hardness:f32)->TipMask{
