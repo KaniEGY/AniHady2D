@@ -529,6 +529,10 @@ pub struct Layer {
     pub locked: bool,
     #[serde(default)]
     pub is_guide: bool,
+    /// Reference layers participate in bucket boundaries without forcing the
+    /// user to sample every visible paint layer.
+    #[serde(default)]
+    pub is_reference: bool,
     /// Whether a real stroke has already earned this layer's one-time credit.
     #[serde(default)]
     pub xp_first_paint_rewarded: bool,
@@ -673,6 +677,7 @@ impl Default for AniProject {
                 visible: true,
                 locked: false,
                 is_guide: false,
+                is_reference: false,
                 xp_first_paint_rewarded: false,
                 opacity: 1.0,
                 effect: LayerEffectPreset::None,
@@ -1020,6 +1025,7 @@ pub fn import_adobe_animate_project(path: &Path) -> Result<AniProject, String> {
                 visible: true,
                 locked: false,
                 is_guide: false,
+                is_reference: false,
                 xp_first_paint_rewarded: false,
                 opacity: 1.0,
                 effect: LayerEffectPreset::None,
