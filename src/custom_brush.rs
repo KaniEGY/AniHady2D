@@ -1047,7 +1047,7 @@ fn import_sut_file(path:&Path)->Result<Vec<ImportedBrushDraft>,String>{
             "SELECT COALESCE(NodeName,''), NodeVariantID
              FROM Node
              WHERE NodeVariantID IS NOT NULL
-             ORDER BY _PW_ID DESC LIMIT 1",
+             LIMIT 1",
             [],
             |r|Ok((r.get::<_,String>(0)?,r.get::<_,Value>(1)?))
         ).ok()
@@ -1075,8 +1075,8 @@ fn import_sut_file(path:&Path)->Result<Vec<ImportedBrushDraft>,String>{
     let follow_stroke=(num("BrushRotationEffector",1.0) as i32 & 0x02)!=0;
     let hardness=(num("BrushHardness",100.0)/100.0).clamp(0.02,0.999);
     let roundness=(num("BrushThickness",100.0)/100.0).clamp(0.05,1.0);
-    let size_pressure=if matches!(variant.get("BrushSizeEffector"),Some(Value::Blob(b)) if !b.is_empty()){1.0}else{0.0};
-    let opacity_pressure=if matches!(variant.get("BrushOpacityEffector"),Some(Value::Blob(b)) if !b.is_empty()){1.0}else{0.0};
+    let size_pressure=if csp_effector_uses_pressure(variant.get("BrushSizeEffector")){1.0}else{0.0};
+    let opacity_pressure=if csp_effector_uses_pressure(variant.get("BrushOpacityEffector")){1.0}else{0.0};
 
     let mut tips=Vec::new();
     let mut icon=None;
@@ -1189,6 +1189,15 @@ fn first_row_map(con:&Connection,table:&str)->Result<HashMap<String,Value>,Strin
     }
     Ok(out)
 }
+fn csp_effector_uses_pressure(value:Option<&Value>)->bool{
+    let Some(Value::Blob(blob))=value else{return false};
+    if blob.len()<12{return false}
+    let header=u32::from_be_bytes([blob[0],blob[1],blob[2],blob[3]]) as usize;
+    if header<40 || header>blob.len(){return false}
+    let enabled=i32::from_be_bytes([blob[8],blob[9],blob[10],blob[11]]);
+    enabled&0x10!=0
+}
+
 fn value_f32(v:Option<&Value>)->Option<f32>{
     match v?{Value::Integer(x)=>Some(*x as f32),Value::Real(x)=>Some(*x as f32),Value::Text(s)=>s.parse().ok(),_=>None}
 }
@@ -1590,6 +1599,19 @@ mod tests {
         assert!(centers.len()>40,"only {} stamps",centers.len());
         let max_gap=centers.windows(2).map(|w|w[1]-w[0]).fold(0.0_f32,f32::max);
         assert!(max_gap<=2.1,"visible bead gap: {max_gap}");
+    }
+
+    #[test]
+    fn csp_effector_requires_actual_pressure_bit() {
+        let mut blob=vec![0u8;44];
+        blob[0..4].copy_from_slice(&(44u32.to_be_bytes()));
+        // Non-empty blob with tilt only must NOT become pressure.
+        blob[8..12].copy_from_slice(&(0x20i32.to_be_bytes()));
+        let tilt=Value::Blob(blob.clone());
+        assert!(!csp_effector_uses_pressure(Some(&tilt)));
+        blob[8..12].copy_from_slice(&(0x10i32.to_be_bytes()));
+        let pressure=Value::Blob(blob);
+        assert!(csp_effector_uses_pressure(Some(&pressure)));
     }
 
     #[test]
