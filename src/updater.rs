@@ -298,8 +298,6 @@ fn download_with_transport_fallback<F: FnMut(u64, u64)>(
 pub fn download_verified_with_progress<F: FnMut(u64, u64)>(
     info: &ReleaseInfo, current_exe: &Path, mut on_progress: F,
 ) -> Result<PathBuf, String> {
-    use std::io::Write;
-
     let official = info.url.starts_with(RELEASE_URL_PREFIX)
         && (info.url.ends_with("/Stick-update.zip") || info.url.ends_with("/Stick.exe"));
     if !official {
