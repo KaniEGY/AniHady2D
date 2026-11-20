@@ -202,6 +202,7 @@ fn convert_legacy_v1(leg: LegacyProjectV1, label: &str) -> Result<(AniProject, M
             visible: l.visible,
             locked: l.locked,
             is_guide: false,
+            is_reference: false,
             xp_first_paint_rewarded: false,
             opacity: 1.0,
 
@@ -257,6 +258,7 @@ fn migrate_step_by_step(mut proj: AniProject, from_schema: u32) -> Result<AniPro
                         visible: true,
                         locked: false,
                         is_guide: false,
+            is_reference: false,
                         xp_first_paint_rewarded: false,
                         opacity: 1.0,
 
