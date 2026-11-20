@@ -3094,6 +3094,50 @@ impl StickApp {
         }
     }
 
+    fn save_selected_as_drawing_asset(&mut self) {
+        if self.selected_stroke_indices.is_empty() {return;}
+        let Some(layer)=self.project.layers.get(self.active_layer_idx) else{return};
+        let frame=self.project.evaluate_layer_at_frame(layer,self.current_frame);
+        let mut strokes:Vec<Stroke>=self.selected_stroke_indices.iter()
+            .filter_map(|&i|frame.strokes.get(i).cloned()).collect();
+        if strokes.is_empty(){return}
+        let mut minx=f32::INFINITY; let mut miny=f32::INFINITY;
+        for stroke in &strokes {for p in &stroke.points {
+            minx=minx.min(p.x);miny=miny.min(p.y);
+        }}
+        if !minx.is_finite()||!miny.is_finite(){return}
+        for stroke in &mut strokes {for p in &mut stroke.points {
+            p.x-=minx;p.y-=miny;
+        }}
+        let name=format!("Drawing Asset {}",self.drawing_assets.stroke_assets.len()+1);
+        if self.drawing_assets.push_stroke_asset(name,strokes) {
+            let _=self.drawing_assets.save();
+            self.status_message=tr(self.config.lang,
+                "Selected drawing saved to Assets.","تم حفظ الرسم المحدد في المكتبة.");
+        }
+    }
+
+    fn insert_drawing_asset(&mut self,index:usize) {
+        let Some(mut strokes)=self.drawing_assets.stroke_assets.get(index)
+            .map(|a|a.strokes.clone()) else{return};
+        if strokes.is_empty()||self.is_active_layer_locked(){return}
+        let mut maxx=0.0f32;let mut maxy=0.0f32;
+        for s in &strokes {for p in &s.points {maxx=maxx.max(p.x);maxy=maxy.max(p.y);}}
+        let ox=(self.project.width as f32-maxx)*0.5;
+        let oy=(self.project.height as f32-maxy)*0.5;
+        for s in &mut strokes {for p in &mut s.points {p.x+=ox;p.y+=oy;}}
+        self.save_undo_state();
+        self.ensure_editable_keyframe();
+        if let Some(layer)=self.project.layers.get_mut(self.active_layer_idx) {
+            if let Some(frame)=layer.keyframes.get_mut(&self.current_frame) {
+                let start=frame.strokes.len();
+                frame.strokes.extend(strokes);
+                self.selected_stroke_indices=(start..frame.strokes.len()).collect();
+                self.has_unsaved_changes=true;
+            }
+        }
+    }
+
     fn edit_selected_vectors(&mut self, mode:&str) -> bool {
         if self.selected_stroke_indices.is_empty() || self.is_active_layer_locked() {return false;}
         self.save_undo_state();
@@ -3280,9 +3324,26 @@ impl StickApp {
             egui::Window::new(tr(lang,"Drawing Assets","مكتبة الرسم"))
                 .open(&mut open).default_width(430.0).show(ctx,|ui|{
                     ui.label(tr(lang,
-                        "Local palettes and Auto Actions. Imported brushes stay in the Brush tool.",
-                        "باليتات وأوامر تلقائية محلية. الفرش المستوردة موجودة داخل أداة الفرشة."));
+                        "Local palettes, reusable drawings and Auto Actions. Imported brushes stay in the Brush tool.",
+                        "باليتات ورسومات قابلة لإعادة الاستخدام وأوامر تلقائية. الفرش المستوردة موجودة داخل أداة الفرشة."));
+                    if ui.add_enabled(!self.selected_stroke_indices.is_empty(),
+                        egui::Button::new(tr(lang,
+                            "Save selected drawing as Asset","احفظ الرسم المحدد في المكتبة"))).clicked()
+                    {
+                        add_color_to=Some(usize::MAX);
+                    }
                     ui.separator();
+                    if !self.drawing_assets.stroke_assets.is_empty() {
+                        ui.strong(tr(lang,"Reusable Drawing Assets","رسومات محفوظة"));
+                        for (index,asset) in self.drawing_assets.stroke_assets.iter().enumerate() {
+                            if ui.button(format!("＋ {}  ·  {} {}",
+                                asset.name,asset.strokes.len(),tr(lang,"strokes","خطوط"))).clicked()
+                            {
+                                action_to_run=Some(usize::MAX-index);
+                            }
+                        }
+                        ui.separator();
+                    }
                     for (pi,palette) in self.drawing_assets.palettes.iter().enumerate() {
                         ui.horizontal(|ui|{
                             ui.strong(&palette.name);
@@ -3319,11 +3380,20 @@ impl StickApp {
             self.show_assets_library=open;
             if let Some(color)=picked_color {self.brush_color=color;}
             if let Some(index)=add_color_to {
-                if self.drawing_assets.add_color_to_palette(index,self.brush_color) {
+                if index==usize::MAX {
+                    self.save_selected_as_drawing_asset();
+                } else if self.drawing_assets.add_color_to_palette(index,self.brush_color) {
                     let _=self.drawing_assets.save();
                 }
             }
-            if let Some(index)=action_to_run {self.run_auto_action(index);}
+            if let Some(index)=action_to_run {
+                if index<=self.drawing_assets.auto_actions.len().saturating_sub(1) {
+                    self.run_auto_action(index);
+                } else {
+                    let asset_index=usize::MAX-index;
+                    self.insert_drawing_asset(asset_index);
+                }
+            }
             if open_pose {
                 self.show_pose_guide=true;
                 self.pose_guide.visible=true;
