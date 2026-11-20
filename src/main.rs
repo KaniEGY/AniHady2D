@@ -747,8 +747,8 @@ fn default_cursor_scale() -> f32 { 1.0 }
 fn default_tablet_pressure_sensitivity() -> f32 { 1.0 }
 fn default_tablet_min_pressure() -> f32 { 0.02 }
 fn default_quick_color_key() -> String { "Z".to_string() }
-fn default_size_gesture_key() -> String { "Alt".to_string() }
-fn default_opacity_gesture_key() -> String { "Ctrl".to_string() }
+fn default_size_gesture_key() -> String { "Ctrl".to_string() }
+fn default_opacity_gesture_key() -> String { "Alt".to_string() }
 fn default_flip_canvas_h_key() -> String { "V".to_string() }
 fn default_flip_canvas_v_key() -> String { "F".to_string() }
 fn default_select_compat_key() -> String { "M".to_string() }
@@ -931,6 +931,14 @@ impl AppConfig {
                     if parsed.tool_select.eq_ignore_ascii_case("V")
                         && parsed.flip_canvas_h_key.eq_ignore_ascii_case("V") {
                         parsed.tool_select = default_select_compat_key();
+                    }
+                    // Old Stick default was Alt=size and Ctrl=opacity.
+                    // The requested workflow is Ctrl+wheel=size and Alt+wheel=opacity.
+                    // Swap only the untouched legacy pair so custom bindings survive.
+                    if parsed.size_gesture_key.eq_ignore_ascii_case("Alt")
+                        && parsed.opacity_gesture_key.eq_ignore_ascii_case("Ctrl") {
+                        parsed.size_gesture_key="Ctrl".to_owned();
+                        parsed.opacity_gesture_key="Alt".to_owned();
                     }
                     return parsed;
                 }
@@ -1767,6 +1775,8 @@ struct StickApp {
     pending_brush_name: String,
     pending_brush_icon_path: Option<PathBuf>,
     brush_import_message: String,
+    custom_brush_multi_delete_mode: bool,
+    custom_brush_delete_selection: Vec<String>,
     brush_opacity: f32,
     vector_pen_opacity: f32,
     shape_opacity: f32,
@@ -1889,8 +1899,6 @@ struct StickApp {
     /// the pointer crosses into the CentralPanel while the button is held.
     canvas_primary_capture: bool,
     last_secondary_pointer_pos: Option<egui::Pos2>,
-    alt_size_drag_origin: Option<(egui::Pos2, f32)>,
-    ctrl_opacity_drag_origin: Option<(egui::Pos2, f32)>,
     canvas_quick_menu: Option<canvas_quick_menu::QuickMenuState>,
     show_quick_custom_color: bool,
 }
@@ -1971,6 +1979,8 @@ impl StickApp {
             pending_brush_name: String::new(),
             pending_brush_icon_path: None,
             brush_import_message: String::new(),
+            custom_brush_multi_delete_mode: false,
+            custom_brush_delete_selection: Vec::new(),
             brush_opacity: 1.0,
             vector_pen_opacity: 1.0,
             shape_opacity: 1.0,
@@ -2090,8 +2100,6 @@ impl StickApp {
             last_pointer_pos: None,
             canvas_primary_capture: false,
             last_secondary_pointer_pos: None,
-            alt_size_drag_origin: None,
-            ctrl_opacity_drag_origin: None,
             canvas_quick_menu: None,
             show_quick_custom_color: false,
         }
@@ -4552,6 +4560,7 @@ impl StickApp {
                 ui.add_space(4.0);
                 let mut add_brush_requested=false;
                 let mut delete_custom_brush:Option<String>=None;
+                let mut delete_selected_custom_brushes=false;
                 ui.horizontal_wrapped(|ui| {
                     for (preset, en, ar) in KritaBrushPreset::MENU {
                         let short_name = tr(lang, en, ar);
@@ -4572,10 +4581,13 @@ impl StickApp {
 
                     for meta in &self.custom_brushes {
                         let disabled=!meta.disabled_reason.is_empty();
-                        let is_sel=!disabled
+                        let bulk_selected=self.custom_brush_delete_selection.iter()
+                            .any(|id|id==&meta.id);
+                        let is_sel=!disabled && !self.custom_brush_multi_delete_mode
                             && self.active_custom_brush.as_deref()==Some(meta.id.as_str());
                         let (btn_rect,resp)=ui.allocate_exact_size(egui::vec2(44.0,44.0),egui::Sense::click());
-                        let bg=if disabled { egui::Color32::from_rgb(62,48,48) }
+                        let bg=if bulk_selected { egui::Color32::from_rgb(170,70,62) }
+                            else if disabled { egui::Color32::from_rgb(62,48,48) }
                             else if is_sel { egui::Color32::from_rgb(0,122,204) }
                             else if resp.hovered(){egui::Color32::from_rgb(62,64,72)}
                             else{egui::Color32::from_rgb(44,46,52)};
@@ -4589,6 +4601,15 @@ impl StickApp {
                                 egui::Align2::RIGHT_TOP,"!",egui::FontId::proportional(16.0),
                                 egui::Color32::from_rgb(255,120,110));
                         }
+                        if bulk_selected {
+                            ui.painter().circle_filled(
+                                icon_area.left_top()+egui::vec2(8.0,8.0),7.0,
+                                egui::Color32::from_rgb(225,72,64));
+                            ui.painter().text(
+                                icon_area.left_top()+egui::vec2(8.0,8.0),
+                                egui::Align2::CENTER_CENTER,"✓",
+                                egui::FontId::proportional(10.0),egui::Color32::WHITE);
+                        }
                         let short:String=meta.name.chars().take(8).collect();
                         ui.painter().text(egui::pos2(btn_rect.center().x,btn_rect.bottom()-7.0),
                             egui::Align2::CENTER_CENTER,short,egui::FontId::proportional(9.0),
@@ -4599,11 +4620,19 @@ impl StickApp {
                             format!("{}\n{}",meta.name,meta.source_format)
                         };
                         if resp.clone().on_hover_text(hover).clicked() {
-                            if disabled {
+                            if self.custom_brush_multi_delete_mode {
+                                if let Some(pos)=self.custom_brush_delete_selection.iter()
+                                    .position(|id|id==&meta.id) {
+                                    self.custom_brush_delete_selection.remove(pos);
+                                } else {
+                                    self.custom_brush_delete_selection.push(meta.id.clone());
+                                }
+                            } else if disabled {
                                 self.brush_import_message=meta.disabled_reason.clone();
                             } else {
                                 self.active_custom_brush=Some(meta.id.clone());
                                 self.active_krita_brush=KritaBrushPreset::GPenInk;
+                                self.brush_size=meta.default_size.clamp(1.0,120.0);
                                 self.brush_opacity=meta.opacity;
                                 self.play_sfx(SfxType::UiClick);
                             }
@@ -4617,6 +4646,15 @@ impl StickApp {
                             }
                             if ui.button(tr(lang,"Delete brush","حذف الفرشة")).clicked() {
                                 delete_custom_brush=Some(meta.id.clone());
+                                ui.close_menu();
+                            }
+                            if ui.button(tr(lang,
+                                "Select multiple to delete","تحديد حذف متعدد")).clicked() {
+                                self.custom_brush_multi_delete_mode=true;
+                                if !self.custom_brush_delete_selection.iter()
+                                    .any(|id|id==&meta.id) {
+                                    self.custom_brush_delete_selection.push(meta.id.clone());
+                                }
                                 ui.close_menu();
                             }
                         });
@@ -4641,6 +4679,23 @@ impl StickApp {
                     }
                 });
 
+                if self.custom_brush_multi_delete_mode {
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label(format!("{} {}",
+                            tr(lang,"Selected:","المحدد:"),
+                            self.custom_brush_delete_selection.len()));
+                        if ui.add_enabled(!self.custom_brush_delete_selection.is_empty(),
+                            egui::Button::new(tr(lang,
+                                "Delete selected","حذف المحدد"))).clicked() {
+                            delete_selected_custom_brushes=true;
+                        }
+                        if ui.button(tr(lang,"Cancel selection","إلغاء التحديد")).clicked() {
+                            self.custom_brush_multi_delete_mode=false;
+                            self.custom_brush_delete_selection.clear();
+                        }
+                    });
+                }
+
                 if let Some(id)=delete_custom_brush {
                     custom_brush::delete_brush(&id);
                     self.custom_brushes.retain(|b|b.id!=id);
@@ -4649,6 +4704,23 @@ impl StickApp {
                         self.active_krita_brush=KritaBrushPreset::GPenInk;
                         self.brush_opacity=KritaBrushPreset::GPenInk.default_opacity();
                     }
+                    if let Err(err)=custom_brush::save_library(&self.custom_brushes) {
+                        self.brush_import_message=err;
+                    }
+                }
+
+                if delete_selected_custom_brushes {
+                    let selected=self.custom_brush_delete_selection.clone();
+                    for id in &selected { custom_brush::delete_brush(id); }
+                    self.custom_brushes.retain(|b|!selected.iter().any(|id|id==&b.id));
+                    if self.active_custom_brush.as_ref()
+                        .is_some_and(|id|selected.iter().any(|selected_id|selected_id==id)) {
+                        self.active_custom_brush=None;
+                        self.active_krita_brush=KritaBrushPreset::GPenInk;
+                        self.brush_opacity=KritaBrushPreset::GPenInk.default_opacity();
+                    }
+                    self.custom_brush_delete_selection.clear();
+                    self.custom_brush_multi_delete_mode=false;
                     if let Err(err)=custom_brush::save_library(&self.custom_brushes) {
                         self.brush_import_message=err;
                     }
@@ -4671,15 +4743,50 @@ impl StickApp {
                             Ok(_) => self.brush_import_message=tr(lang,
                                 "No usable brushes were found in that file.",
                                 "ملقيناش فرش قابلة للاستخدام جوه الملف.").to_owned(),
-                            Err(err) => self.brush_import_message=format!("{}: {err}",
-                                tr(lang,"Brush import failed","فشل استيراد الفرشة")),
+                            Err(err) => {
+                                if let Some(required)=custom_brush::required_krita_resource(&path) {
+                                    let selected=rfd::FileDialog::new()
+                                        .set_title(tr(lang,
+                                            "Choose the required Krita brush tip",
+                                            "اختار ملف سن فرشة Krita المطلوب"))
+                                        .set_file_name(&required)
+                                        .add_filter("Krita brush tip",&["gih","gbr","png","jpg","jpeg","webp","bmp"])
+                                        .pick_file();
+                                    if let Some(resource)=selected {
+                                        match custom_brush::import_file_with_resource(&path,&resource) {
+                                            Ok(drafts) if !drafts.is_empty()=>{
+                                                self.pending_brush_imports=drafts;
+                                                self.pending_brush_name=self.pending_brush_imports[0].suggested_name.clone();
+                                                self.pending_brush_icon_path=None;
+                                                self.brush_import_message=format!("{} {}",
+                                                    tr(lang,"Loaded required resource:","تم تحميل ملف السن المطلوب:"),
+                                                    required);
+                                            }
+                                            Ok(_)=>self.brush_import_message=tr(lang,
+                                                "The selected resource did not create a usable brush.",
+                                                "ملف السن المحدد لم ينتج فرشة قابلة للاستخدام.").to_owned(),
+                                            Err(resource_err)=>self.brush_import_message=format!(
+                                                "{}: {resource_err}",
+                                                tr(lang,"Brush resource failed","فشل ملف سن الفرشة")),
+                                        }
+                                    } else {
+                                        self.brush_import_message=format!(
+                                            "{}: {err}\n{}: {required}",
+                                            tr(lang,"Brush import failed","فشل استيراد الفرشة"),
+                                            tr(lang,"Required file","الملف المطلوب"));
+                                    }
+                                } else {
+                                    self.brush_import_message=format!("{}: {err}",
+                                        tr(lang,"Brush import failed","فشل استيراد الفرشة"));
+                                }
+                            },
                         }
                     }
                 }
 
                 if let Some(id)=self.active_custom_brush.as_deref() {
                     if let Some(meta)=self.custom_brushes.iter().find(|b|b.id==id) {
-                        ui.small(format!("{} • {}",meta.name,meta.source_format));
+                        ui.small(format!("{} • {} • {:.0}px",meta.name,meta.source_format,meta.default_size));
                         if !meta.disabled_reason.is_empty() {
                             ui.colored_label(egui::Color32::from_rgb(255,120,110),
                                 &meta.disabled_reason);
@@ -5583,8 +5690,8 @@ impl eframe::App for StickApp {
                         ui.separator();
                         for (en,ar,key) in [
                             ("Quick color wheel","عجلة الألوان السريعة",self.config.quick_color_key.as_str()),
-                            ("Adjust tool size (hold + move mouse)","تغيير حجم الأداة (ضغط مطول + حركة الماوس)",self.config.size_gesture_key.as_str()),
-                            ("Adjust opacity (hold + move mouse)","تغيير الشفافية (ضغط مطول + حركة الماوس)",self.config.opacity_gesture_key.as_str()),
+                            ("Adjust tool size (hold + mouse wheel, 5%)","تغيير حجم الأداة (ضغط مطول + اسكرول، 5%)",self.config.size_gesture_key.as_str()),
+                            ("Adjust opacity (hold + mouse wheel, 5%)","تغيير الشفافية (ضغط مطول + اسكرول، 5%)",self.config.opacity_gesture_key.as_str()),
                             ("Mirror canvas horizontally","عكس الكانفا يمين/شمال",self.config.flip_canvas_h_key.as_str()),
                             ("Flip canvas vertically","قلب الكانفا فوق/تحت",self.config.flip_canvas_v_key.as_str()),
                         ] {
@@ -8773,16 +8880,18 @@ impl eframe::App for StickApp {
                 }
             }
 
-            let can_alt_adjust_size = self.active_sizable_tool_size().is_some();
-            if size_gesture_down && can_alt_adjust_size && is_over_canvas && !any_modal_open
-                && self.canvas_quick_menu.is_none() {
-                if let Some(pos) = pointer_pos {
-                    if let Some((origin, start_size)) = self.alt_size_drag_origin {
-                        let delta = (pos.x - origin.x) - (pos.y - origin.y);
-                        self.set_active_sizable_tool_size(start_size + delta * 0.22);
-                    } else if let Some(start_size) = self.active_sizable_tool_size() {
-                        self.alt_size_drag_origin = Some((pos, start_size));
+            let can_scroll_adjust_size=self.active_sizable_tool_size().is_some();
+            if size_gesture_down && can_scroll_adjust_size && is_over_canvas && !any_modal_open
+                && self.canvas_quick_menu.is_none()
+            {
+                if scroll_y!=0.0 {
+                    if let Some(current)=self.active_sizable_tool_size() {
+                        // Exactly one 5% size step per wheel direction event.
+                        let factor=if scroll_y>0.0 {1.05}else{0.95};
+                        self.set_active_sizable_tool_size(current*factor);
                     }
+                }
+                if let Some(pos)=pointer_pos {
                     if let (Some(radius),Some(value),Some(percent))=(
                         self.active_tool_visual_radius_px(scale),
                         self.active_sizable_tool_size(),
@@ -8799,31 +8908,27 @@ impl eframe::App for StickApp {
                         );
                     }
                 }
-                ctx.set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
+                ctx.set_cursor_icon(egui::CursorIcon::None);
                 ctx.request_repaint();
-            } else {
-                self.alt_size_drag_origin = None;
             }
 
-            let can_ctrl_adjust_opacity=self.active_tool_opacity().is_some();
-            if opacity_gesture_down && !size_gesture_down && can_ctrl_adjust_opacity && is_over_canvas
-                && !any_modal_open && self.canvas_quick_menu.is_none() {
-                if let Some(pos)=pointer_pos {
-                    if let Some((origin,start_opacity))=self.ctrl_opacity_drag_origin {
-                        let delta=(pos.x-origin.x)-(pos.y-origin.y);
-                        self.set_active_tool_opacity(start_opacity+delta*0.0045);
-                    } else if let Some(start)=self.active_tool_opacity() {
-                        self.ctrl_opacity_drag_origin=Some((pos,start));
+            let can_scroll_adjust_opacity=self.active_tool_opacity().is_some();
+            if opacity_gesture_down && !size_gesture_down && can_scroll_adjust_opacity
+                && is_over_canvas && !any_modal_open && self.canvas_quick_menu.is_none()
+            {
+                if scroll_y!=0.0 {
+                    if let Some(current)=self.active_tool_opacity() {
+                        // Opacity uses percentage points: 100% -> 95% -> 90%...
+                        let delta=if scroll_y>0.0 {0.05}else{-0.05};
+                        self.set_active_tool_opacity(current+delta);
                     }
-                    if let Some(opacity)=self.active_tool_opacity() {
-                        canvas_quick_menu::draw_opacity_feedback(
-                            &painter,pos,self.brush_color,opacity);
-                    }
+                }
+                if let (Some(pos),Some(opacity))=(pointer_pos,self.active_tool_opacity()) {
+                    canvas_quick_menu::draw_opacity_feedback(
+                        &painter,pos,self.brush_color,opacity);
                 }
                 ctx.set_cursor_icon(egui::CursorIcon::None);
                 ctx.request_repaint();
-            } else {
-                self.ctrl_opacity_drag_origin=None;
             }
 
             if scroll_y != 0.0 && is_over_canvas && !any_modal_open
@@ -10196,6 +10301,7 @@ impl eframe::App for StickApp {
                     Ok(meta) => {
                         self.active_custom_brush=Some(meta.id.clone());
                         self.active_krita_brush=KritaBrushPreset::GPenInk;
+                        self.brush_size=meta.default_size.clamp(1.0,120.0);
                         self.brush_opacity=meta.opacity;
                         self.custom_brushes.push(meta);
                         match custom_brush::save_library(&self.custom_brushes) {
@@ -10593,8 +10699,8 @@ mod tool_discovery_tests {
     fn quick_canvas_control_shortcut_defaults_are_stable() {
         let config=AppConfig::default();
         assert_eq!(config.quick_color_key,"Z");
-        assert_eq!(config.size_gesture_key,"Alt");
-        assert_eq!(config.opacity_gesture_key,"Ctrl");
+        assert_eq!(config.size_gesture_key,"Ctrl");
+        assert_eq!(config.opacity_gesture_key,"Alt");
     }
 
     #[test]
