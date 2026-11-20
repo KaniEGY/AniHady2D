@@ -9692,7 +9692,7 @@ impl eframe::App for StickApp {
                 self.zoom_level = new_zoom;
             }
             if (space_down || self.active_tool_ui == ActiveToolUI::HandCanvas)
-                && pointer_down && is_over_canvas && !any_modal_open {
+                && pointer_down && is_over_canvas && !any_modal_open && !self.pose_edit_mode {
                 if let (Some(c), Some(l)) = (pointer_pos, self.last_pointer_pos) { self.pan_offset += c - l; }
             }
             // With the hand tool, left drag pans; right drag rotates the entire stage view.
