@@ -163,6 +163,77 @@ pub fn smoothed_path(points: &[StrokePoint]) -> Vec<Point> {
     out
 }
 
+
+/// Smooth render-only centerline for the freehand Vector Ink pen.
+///
+/// Unlike `smoothed_path`, this intentionally rounds sharp freehand turns.
+/// Geometric shapes keep using `smoothed_path`, so squares/triangles still
+/// have exact corners. The saved editable nodes are never changed.
+pub fn smoothed_ink_path(points: &[StrokePoint]) -> Vec<Point> {
+    if points.is_empty()
+        || points.len() > MAX_CONTROL_POINTS
+        || points.iter().any(|p| !p.x.is_finite() || !p.y.is_finite())
+    {
+        return Vec::new();
+    }
+    let closed=points.len()>3 && distance(
+        (points[0].x,points[0].y),
+        (points[points.len()-1].x,points[points.len()-1].y)
+    )<=0.001;
+    let end=points.len()-usize::from(closed);
+    let mut path:Vec<Point>=Vec::with_capacity(end);
+    for p in &points[..end] {
+        let q=(p.x,p.y);
+        if path.last().is_none_or(|&last|distance(last,q)>0.001){path.push(q);}
+    }
+    if path.len()<2 {return path;}
+
+    // Two Chaikin passes remove the visible V-shaped/miter corner produced by
+    // freehand samples, while staying bounded (<= ~4x control-node count).
+    for _ in 0..2 {
+        if path.len()*2+2>MAX_RENDER_SAMPLES {break;}
+        let source=path;
+        let n=source.len();
+        let mut next=Vec::with_capacity(n*2+2);
+        if closed {
+            for i in 0..n {
+                let a=source[i];
+                let b=source[(i+1)%n];
+                next.push((a.0*0.75+b.0*0.25,a.1*0.75+b.1*0.25));
+                next.push((a.0*0.25+b.0*0.75,a.1*0.25+b.1*0.75));
+            }
+        } else {
+            next.push(source[0]);
+            for pair in source.windows(2) {
+                let a=pair[0]; let b=pair[1];
+                next.push((a.0*0.75+b.0*0.25,a.1*0.75+b.1*0.25));
+                next.push((a.0*0.25+b.0*0.75,a.1*0.25+b.1*0.75));
+            }
+            next.push(source[n-1]);
+        }
+        path=next;
+    }
+
+    // Densify long spans to keep thick vector ink visually smooth at high DPI.
+    let mut dense=Vec::with_capacity(path.len()*2);
+    for (i,p) in path.iter().copied().enumerate() {
+        if i==0 {dense.push(p);continue;}
+        let a=*dense.last().unwrap();
+        let len=distance(a,p);
+        let steps=((len/3.0).ceil() as usize).clamp(1,16);
+        for j in 1..=steps {
+            let t=j as f32/steps as f32;
+            dense.push((a.0+(p.0-a.0)*t,a.1+(p.1-a.1)*t));
+            if dense.len()>=MAX_RENDER_SAMPLES {break;}
+        }
+        if dense.len()>=MAX_RENDER_SAMPLES {break;}
+    }
+    if closed && !dense.is_empty() && dense.last()!=dense.first() {
+        dense.push(dense[0]);
+    }
+    dense
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum QuickNodeEdit {
     Inserted { stroke: usize, point: usize },
@@ -441,6 +512,18 @@ mod tests {
         assert!(path.contains(&(40., 0.)));
         assert!(path.iter().all(|&(x, y)| x >= -0.001 && x <= 40.001 && y >= -0.001 && y <= 40.001));
         assert!(path.iter().all(|&(x, y)| (x - 40.).abs() < 0.001 || y.abs() < 0.001));
+    }
+
+    #[test]
+    fn freehand_ink_rounds_a_right_angle_without_mutating_nodes() {
+        let nodes=vec![p(0.,0.),p(40.,0.),p(40.,40.)];
+        let before=nodes.clone();
+        let path=smoothed_ink_path(&nodes);
+        assert_eq!(nodes,before);
+        assert!(path.len()>nodes.len());
+        assert!(!path.contains(&(40.,0.)), "freehand render should round the hard vertex");
+        assert_eq!(path.first(),Some(&(0.,0.)));
+        assert_eq!(path.last(),Some(&(40.,40.)));
     }
 
     #[test]
