@@ -116,8 +116,8 @@ fn solve_two_bone(
     let candidates=[target_angle+alpha,target_angle-alpha];
     let current=current_upper_deg.to_radians();
     let upper=candidates.into_iter().min_by(|a,b|{
-        let da=norm_angle((a-current).to_degrees()).abs();
-        let db=norm_angle((b-current).to_degrees()).abs();
+        let da=norm_angle((*a-current).to_degrees()).abs();
+        let db=norm_angle((*b-current).to_degrees()).abs();
         da.total_cmp(&db)
     }).unwrap_or(target_angle);
     let elbow=anchor+egui::vec2(upper.cos()*l1,upper.sin()*l1);
