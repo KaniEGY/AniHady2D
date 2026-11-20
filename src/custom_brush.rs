@@ -1472,6 +1472,27 @@ fn import_blend_file(path:&Path)->Result<Vec<ImportedBrushDraft>,String>{
         let blend=blend::Blend::from_path(path).map_err(|e|format!("Blender .blend: {e:?}"))?;
         let mut out=Vec::new();
 
+        let safe_i8=|inst:&blend::Instance<'_>,field:&str,default:i8| -> i8 {
+            if !inst.is_valid(field){return default}
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(||inst.get_i8(field)))
+                .unwrap_or(default)
+        };
+        let is_gp_draw_brush=|brush:&blend::Instance<'_>|->bool{
+            if !brush.is_valid("gpencil_settings"){return false}
+            let gp=match std::panic::catch_unwind(
+                std::panic::AssertUnwindSafe(||brush.get("gpencil_settings"))) {
+                Ok(settings)=>settings,
+                Err(_)=>return false,
+            };
+            if !gp.is_valid("draw_strength") && !gp.is_valid("flag"){return false}
+            let gp_type=if brush.is_valid("gpencil_brush_type"){
+                safe_i8(brush,"gpencil_brush_type",0)
+            }else{
+                safe_i8(brush,"gpencil_tool",0)
+            };
+            gp_type==0
+        };
+
         // Asset-browser .blend packs commonly contain normal Blender helper
         // brushes in addition to the brush the artist actually distributed.
         // Musubibi's Crayon is one such pack: importing every BR datablock
@@ -1493,7 +1514,8 @@ fn import_blend_file(path:&Path)->Result<Vec<ImportedBrushDraft>,String>{
                 }else{false}
             })).unwrap_or(false)
         };
-        let has_explicit_assets=blend.instances_with_code(*b"BR").any(|b|is_asset_brush(&b));
+        let has_explicit_assets=blend.instances_with_code(*b"BR")
+            .any(|b|is_gp_draw_brush(&b)&&is_asset_brush(&b));
         let has_custom_icon=|brush:&blend::Instance<'_>|->bool{
             if !brush.is_valid("icon_filepath"){return false}
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(||{
@@ -1507,10 +1529,12 @@ fn import_blend_file(path:&Path)->Result<Vec<ImportedBrushDraft>,String>{
         // icon/thumbnail path. If explicit Asset metadata is unavailable and
         // the file provides custom-icon brushes, treat those as pack entries
         // instead of importing Blender's factory Airbrush/Ink/Marker/etc.
-        let has_custom_icon_brush=blend.instances_with_code(*b"BR").any(|b|has_custom_icon(&b));
+        let has_custom_icon_brush=blend.instances_with_code(*b"BR")
+            .any(|b|is_gp_draw_brush(&b)&&has_custom_icon(&b));
 
         for (index,brush) in blend.instances_with_code(*b"BR").enumerate() {
             if out.len()>=MAX_IMPORT_BRUSHES{break}
+            if !is_gp_draw_brush(&brush){continue}
             if has_explicit_assets && !is_asset_brush(&brush){continue}
             if !has_explicit_assets && has_custom_icon_brush && !has_custom_icon(&brush){continue}
 
@@ -1524,11 +1548,6 @@ fn import_blend_file(path:&Path)->Result<Vec<ImportedBrushDraft>,String>{
                 std::panic::catch_unwind(std::panic::AssertUnwindSafe(||inst.get_i32(field)))
                     .unwrap_or(default)
             };
-            let safe_i8=|inst:&blend::Instance<'_>,field:&str,default:i8| -> i8 {
-                if !inst.is_valid(field){return default}
-                std::panic::catch_unwind(std::panic::AssertUnwindSafe(||inst.get_i8(field)))
-                    .unwrap_or(default)
-            };
             let safe_i16=|inst:&blend::Instance<'_>,field:&str,default:i16| -> i16 {
                 if !inst.is_valid(field){return default}
                 std::panic::catch_unwind(std::panic::AssertUnwindSafe(||inst.get_i16(field)))
@@ -1540,28 +1559,13 @@ fn import_blend_file(path:&Path)->Result<Vec<ImportedBrushDraft>,String>{
                     .unwrap_or_default()
             };
 
-            // Only Grease Pencil brushes have a valid gpencil_settings pointer.
-            // The previous importer accepted every Blender Brush datablock,
-            // which is why Mask/Multiply/Multires/Sculpt tools appeared as
-            // dozens of identical "2D brushes" in Stick.
-            if !brush.is_valid("gpencil_settings"){continue}
-            let gp=match std::panic::catch_unwind(std::panic::AssertUnwindSafe(||brush.get("gpencil_settings"))){
+            // Candidate pre-pass already proved this is a real Grease Pencil
+            // DRAW brush. Fetch the settings once more for the detailed mapping.
+            let gp=match std::panic::catch_unwind(
+                std::panic::AssertUnwindSafe(||brush.get("gpencil_settings"))) {
                 Ok(settings)=>settings,
                 Err(_)=>continue,
             };
-            // Do not accept a null gpencil_settings pointer merely because the
-            // Brush DNA type contains that member. A real GP draw brush exposes
-            // the dynamics fields we need below.
-            if !gp.is_valid("draw_strength") && !gp.is_valid("flag"){continue}
-            // Blender 3.6 stores this as Brush.gpencil_tool; newer DNA
-            // exposes the renamed gpencil_brush_type. Support both so old
-            // Grease Pencil packs (including Musubibi) are classified correctly.
-            let gp_type=if brush.is_valid("gpencil_brush_type"){
-                safe_i8(&brush,"gpencil_brush_type",0)
-            }else{
-                safe_i8(&brush,"gpencil_tool",0)
-            };
-            if gp_type!=0 {continue} // DRAW only; exclude Fill/Eraser/Tint.
 
             let raw_name=std::panic::catch_unwind(std::panic::AssertUnwindSafe(||{
                 brush.get("id").get_string("name")
