@@ -1228,6 +1228,11 @@ fn import_blend_file(path:&Path)->Result<Vec<ImportedBrushDraft>,String>{
                 std::panic::catch_unwind(std::panic::AssertUnwindSafe(||inst.get_i8(field)))
                     .unwrap_or(default)
             };
+            let safe_i16=|inst:&blend::Instance<'_>,field:&str,default:i16| -> i16 {
+                if !inst.is_valid(field){return default}
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(||inst.get_i16(field)))
+                    .unwrap_or(default)
+            };
             let safe_f32_vec=|inst:&blend::Instance<'_>,field:&str| -> Vec<f32> {
                 if !inst.is_valid(field){return Vec::new()}
                 std::panic::catch_unwind(std::panic::AssertUnwindSafe(||inst.get_f32_vec(field)))
@@ -1281,10 +1286,66 @@ fn import_blend_file(path:&Path)->Result<Vec<ImportedBrushDraft>,String>{
             let opacity_pressure=if gp_flags&(1<<1)!=0{1.0}else{0.0};
             let pressure_jitter=gp_flags&(1<<2)!=0;
 
-            let tip=if aspect_ratio<0.97 {
+            // Grease Pencil materials can change a brush from a plain line
+            // into textured/dot/square media. Preserve that distinction and
+            // load external //relative stroke textures when the asset ships them.
+            let mut material_mode=0i32; // 0=line, 1=dot, 2=square
+            let mut material_texture_path=String::new();
+            let mut material_texture_tip:Option<TipMask>=None;
+            let mut texture_scale=1.0f32;
+            let mut random_size=0.0f32;
+            let mut random_strength=0.0f32;
+            let mut random_rotation=0.0f32;
+            if gp.is_valid("material") {
+                if let Ok(material)=std::panic::catch_unwind(
+                    std::panic::AssertUnwindSafe(||gp.get("material"))) {
+                    if material.is_valid("gp_style") {
+                        if let Ok(style)=std::panic::catch_unwind(
+                            std::panic::AssertUnwindSafe(||material.get("gp_style"))) {
+                            material_mode=safe_i32(&style,"mode",0);
+                            random_size=safe_f32(&style,"random_size_factor",0.0).clamp(0.0,1.0);
+                            random_strength=safe_f32(&style,"random_strength_factor",0.0).clamp(0.0,1.0);
+                            random_rotation=safe_f32(&style,"random_rotation_factor",0.0).clamp(0.0,1.0);
+                            let tex_scale=safe_f32_vec(&style,"texture_scale");
+                            if !tex_scale.is_empty() {
+                                texture_scale=tex_scale.iter().map(|v|v.abs())
+                                    .filter(|v|*v>0.001).fold(1.0f32,|a,b|a.min(b))
+                                    .clamp(0.05,8.0);
+                            }
+                            let stroke_style=safe_i16(&style,"stroke_style",0);
+                            if stroke_style==1 && style.is_valid("sima") {
+                                if let Ok(img)=std::panic::catch_unwind(
+                                    std::panic::AssertUnwindSafe(||style.get("sima"))) {
+                                    material_texture_path=std::panic::catch_unwind(
+                                        std::panic::AssertUnwindSafe(||img.get_string("filepath")))
+                                        .unwrap_or_default();
+                                    if let Some(texture)=blender_external_image(path,&material_texture_path) {
+                                        material_texture_tip=Some(tip_from_image(&texture));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            let tip=if let Some(texture_tip)=material_texture_tip.clone() {
+                texture_tip
+            } else if material_mode==2 {
+                square_tip(128,hardness)
+            } else if aspect_ratio<0.97 {
                 elliptical_tip(128,hardness,aspect_ratio,angle)
             } else {
                 round_tip(128,hardness)
+            };
+            let textured=material_texture_tip.is_some();
+            let final_jitter=(jitter+random_size*0.35).clamp(0.0,3.0);
+            let material_note=if !material_texture_path.is_empty() && !textured {
+                format!(" texture '{}' was referenced but not found beside the .blend;",material_texture_path)
+            } else if textured {
+                " external stroke texture loaded;".to_owned()
+            } else {
+                String::new()
             };
 
             out.push(ImportedBrushDraft{
@@ -1293,13 +1354,19 @@ fn import_blend_file(path:&Path)->Result<Vec<ImportedBrushDraft>,String>{
                 source_path:path.to_path_buf(),tips:vec![tip],icon:None,default_size:size as f32,
                 spacing,opacity:(alpha*gp_strength).clamp(0.05,1.0),flow,
                 size_pressure,opacity_pressure,angle_deg:angle,
-                follow_stroke:false,scatter:jitter,random_tip:false,tip_scale:1.0,
-                render_mode:CustomBrushRenderMode::Continuous,
+                follow_stroke:material_mode!=0,scatter:final_jitter,random_tip:false,
+                tip_scale:texture_scale,
+                render_mode:if material_mode!=0 || textured {
+                    CustomBrushRenderMode::Stamp
+                } else {
+                    CustomBrushRenderMode::Continuous
+                },
                 auxiliary_resource_path:None,
                 compatibility_note:format!(
-                    "Blender Grease Pencil Draw settings mapped: {}px, spacing {:.0}%, strength {:.0}%, hardness {:.0}%, aspect {:.2}, jitter {:.2}{} , smoothing {:.2}, input samples {}.",
-                    size,spacing*100.0,gp_strength*100.0,hardness*100.0,aspect_ratio,jitter,
-                    if pressure_jitter{" + pressure"}else{""},smooth,input_samples),
+                    "Blender GP Draw mapped: {}px, spacing {:.0}%, strength {:.0}%, hardness {:.0}%, aspect {:.2}, jitter {:.2}{}, material mode {}, random size {:.2}, strength {:.2}, rotation {:.2},{} smoothing {:.2}, input samples {}.",
+                    size,spacing*100.0,gp_strength*100.0,hardness*100.0,aspect_ratio,final_jitter,
+                    if pressure_jitter{" + pressure"}else{""},material_mode,random_size,
+                    random_strength,random_rotation,material_note,smooth,input_samples),
             });
         }
         Ok::<_,String>(out)
@@ -1447,6 +1514,33 @@ fn elliptical_tip(size:u32,hardness:f32,ratio:f32,angle_deg:f32)->TipMask{
         data.push((alpha*255.0).round() as u8);
     }}
     TipMask{width:size,height:size,data}
+}
+
+fn square_tip(size:u32,hardness:f32)->TipMask{
+    let size=size.max(8);
+    let hard=hardness.clamp(0.0,0.999);
+    let mut data=Vec::with_capacity((size*size) as usize);
+    for y in 0..size { for x in 0..size {
+        let fx=((x as f32+0.5)/size as f32*2.0-1.0).abs();
+        let fy=((y as f32+0.5)/size as f32*2.0-1.0).abs();
+        let d=fx.max(fy);
+        let a=if d<=hard{1.0}else{((1.0-d)/(1.0-hard)).clamp(0.0,1.0)};
+        data.push((a*255.0).round() as u8);
+    }}
+    TipMask{width:size,height:size,data}
+}
+
+fn blender_external_image(blend_path:&Path,raw:&str)->Option<DynamicImage>{
+    let raw=raw.trim_matches(char::from(0)).trim();
+    if raw.is_empty(){return None}
+    let parent=blend_path.parent().unwrap_or(Path::new("."));
+    let path=if let Some(relative)=raw.strip_prefix("//") {
+        parent.join(relative.replace('\\',"/"))
+    } else {
+        let candidate=PathBuf::from(raw);
+        if candidate.is_absolute(){candidate}else{parent.join(candidate)}
+    };
+    image::open(path).ok()
 }
 
 fn round_tip(size:u32,hardness:f32)->TipMask{
