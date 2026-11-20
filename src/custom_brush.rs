@@ -640,7 +640,8 @@ fn import_gbr_file(path:&Path)->Result<Vec<ImportedBrushDraft>,String>{
         tips:vec![tip],icon:None,spacing:(spacing as f32/100.0).clamp(0.02,2.0),
         opacity:1.0,flow:1.0,size_pressure:1.0,opacity_pressure:0.0,angle_deg:0.0,
         follow_stroke:false,scatter:0.0,random_tip:false,tip_scale:1.0,
-        render_mode:CustomBrushRenderMode::Stamp,compatibility_note:String::new(),
+        render_mode:CustomBrushRenderMode::Stamp,
+        auxiliary_resource_path:None,compatibility_note:String::new(),
     }])
 }
 
