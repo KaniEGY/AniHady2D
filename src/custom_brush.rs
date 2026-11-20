@@ -1538,7 +1538,14 @@ fn import_blend_file(path:&Path)->Result<Vec<ImportedBrushDraft>,String>{
             // Brush DNA type contains that member. A real GP draw brush exposes
             // the dynamics fields we need below.
             if !gp.is_valid("draw_strength") && !gp.is_valid("flag"){continue}
-            let gp_type=safe_i8(&brush,"gpencil_brush_type",0);
+            // Blender 3.6 stores this as Brush.gpencil_tool; newer DNA
+            // exposes the renamed gpencil_brush_type. Support both so old
+            // Grease Pencil packs (including Musubibi) are classified correctly.
+            let gp_type=if brush.is_valid("gpencil_brush_type"){
+                safe_i8(&brush,"gpencil_brush_type",0)
+            }else{
+                safe_i8(&brush,"gpencil_tool",0)
+            };
             if gp_type!=0 {continue} // DRAW only; exclude Fill/Eraser/Tint.
 
             let raw_name=std::panic::catch_unwind(std::panic::AssertUnwindSafe(||{
