@@ -815,7 +815,7 @@ fn default_free_tr_key() -> String { "Q".to_string() }
 fn default_vec_sel_key() -> String { "G".to_string() }
 fn default_sculpt_key() -> String { "J".to_string() }
 fn default_vector_eraser_key() -> String { "X".to_string() }
-fn default_puppet_key() -> String { "W".to_string() }
+fn default_puppet_key() -> String { "Y".to_string() }
 fn default_partial_eraser_key() -> String { "T".to_string() }
 fn default_text_key() -> String { "N".to_string() }
 fn default_shape_key() -> String { "U".to_string() }
@@ -4760,7 +4760,7 @@ impl StickApp {
                     .text(tr(lang,"Strength","قوة التأثير")));
             }
             ActiveToolUI::PuppetWarp => {
-                ui.strong(tr(lang,"Puppet Warp (W)","تحريك شبكي (W)"));
+                ui.strong(tr(lang,"Puppet Warp (Y)","تحريك شبكي (Y)"));
                 ui.add(egui::Slider::new(&mut self.puppet_radius,20.0..=500.0)
                     .text(tr(lang,"Influence radius","نطاق التأثير")));
                 ui.add(egui::Slider::new(&mut self.puppet_strength,0.05..=1.0)
@@ -5471,7 +5471,8 @@ impl eframe::App for StickApp {
             now, ctrl_z, ctrl_y, ctrl_s, ctrl_shift_s, ctrl_c, ctrl_v, ctrl_k, del_pressed, f10_pressed,
             space_down, ctrl_down, alt_down, zoom_in_nav, zoom_out_nav, pan_right_nav, pan_left_nav,
             scroll_y, close_req, pointer_down, pointer_pressed, pointer_released, pointer_pos, primary_press_pos,
-            sc_select, sc_lasso, sc_free_tr, sc_vec_sel, sc_sculpt, sc_pen, sc_brush, sc_eraser, sc_eraser_partial,
+            sc_select, sc_lasso, sc_free_tr, sc_vec_sel, sc_vec_eraser, sc_sculpt, sc_puppet,
+            sc_pen, sc_brush, sc_eraser, sc_eraser_partial,
             sc_bucket, sc_eyedropper, sc_text, sc_shape, sc_hand, sc_del_frame, sc_f6, sc_f7, sc_f8,
             sc_play, sc_prev, sc_next, sc_smaller, sc_larger, sc_reset_canvas,
             sc_flip_canvas_h, sc_flip_canvas_v, pressed_key_name,
@@ -5519,7 +5520,9 @@ impl eframe::App for StickApp {
                 is_shortcut_pressed(i, &self.config.tool_lasso),
                 is_shortcut_pressed(i, &self.config.tool_free_transform),
                 is_shortcut_pressed(i, &self.config.tool_vector_select),
+                is_shortcut_pressed(i, &self.config.tool_vector_eraser),
                 is_shortcut_pressed(i, &self.config.tool_sculpt),
+                is_shortcut_pressed(i, &self.config.tool_puppet),
                 is_shortcut_pressed(i, &self.config.tool_pen),
                 is_shortcut_pressed(i, &self.config.tool_brush),
                 is_shortcut_pressed(i, &self.config.tool_eraser),
@@ -5590,7 +5593,9 @@ impl eframe::App for StickApp {
                 0 => self.config.tool_lasso = k_name,
                 1 => self.config.tool_free_transform = k_name,
                 2 => self.config.tool_vector_select = k_name,
+                13 => self.config.tool_vector_eraser = k_name,
                 3 => self.config.tool_sculpt = k_name,
+                14 => self.config.tool_puppet = k_name,
                 4 => self.config.tool_pen = k_name,
                 5 => self.config.tool_brush = k_name,
                 6 => self.config.tool_eraser = k_name,
@@ -5681,7 +5686,9 @@ impl eframe::App for StickApp {
             if sc_select || sc_free_tr { self.active_tool_ui = ActiveToolUI::FreeTransform; }
             if sc_lasso { self.active_tool_ui = ActiveToolUI::SelectLasso; }
             if sc_vec_sel { self.active_tool_ui = ActiveToolUI::VectorDirectSelect; }
+            if sc_vec_eraser { self.active_tool_ui = ActiveToolUI::VectorEraser; }
             if sc_sculpt { self.active_tool_ui = ActiveToolUI::Sculpt; }
+            if sc_puppet { self.active_tool_ui = ActiveToolUI::PuppetWarp; }
             if sc_pen { self.active_tool_ui = ActiveToolUI::VectorPen; }
             if sc_brush { self.active_tool_ui = ActiveToolUI::Brush; }
             if sc_eraser { self.active_tool_ui = ActiveToolUI::EraserRed; }
