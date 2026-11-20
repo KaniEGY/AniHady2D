@@ -100,6 +100,32 @@ fn norm_angle(mut a:f32)->f32{
     while a<=-180.0{a+=360.0}
     a
 }
+
+fn solve_two_bone(
+    anchor:egui::Pos2,target:egui::Pos2,l1:f32,l2:f32,current_upper_deg:f32
+)->(f32,f32){
+    let raw=target-anchor;
+    let raw_len=raw.length();
+    let direction=if raw_len>0.0001 {raw/raw_len}else{dir(current_upper_deg,1.0)};
+    let min_d=(l1-l2).abs()+0.001;
+    let max_d=(l1+l2-0.001).max(min_d);
+    let d=raw_len.clamp(min_d,max_d);
+    let target_angle=direction.y.atan2(direction.x);
+    let cos_alpha=((d*d+l1*l1-l2*l2)/(2.0*d*l1.max(0.001))).clamp(-1.0,1.0);
+    let alpha=cos_alpha.acos();
+    let candidates=[target_angle+alpha,target_angle-alpha];
+    let current=current_upper_deg.to_radians();
+    let upper=candidates.into_iter().min_by(|a,b|{
+        let da=norm_angle((a-current).to_degrees()).abs();
+        let db=norm_angle((b-current).to_degrees()).abs();
+        da.total_cmp(&db)
+    }).unwrap_or(target_angle);
+    let elbow=anchor+egui::vec2(upper.cos()*l1,upper.sin()*l1);
+    let effective_target=anchor+direction*d;
+    let lower=angle_deg(elbow,effective_target);
+    (norm_angle(upper.to_degrees()),norm_angle(lower))
+}
+
 fn layout(guide:&PoseGuide,canvas:(f32,f32))->PoseLayout{
     let base=canvas.0.min(canvas.1)*0.22*guide.scale.clamp(0.25,3.0);
     let root=egui::pos2(canvas.0*guide.x.clamp(0.0,1.0),canvas.1*guide.y.clamp(0.0,1.0));
@@ -213,12 +239,28 @@ pub fn drag_joint(
         PoseJoint::LeftHip=>guide.hip_deg=norm_angle(angle_deg(g.root,stage_pos)-180.0),
         PoseJoint::LeftElbow=>guide.left_arm_deg=norm_angle(angle_deg(g.ls,stage_pos)),
         PoseJoint::RightElbow=>guide.right_arm_deg=norm_angle(angle_deg(g.rs,stage_pos)),
-        PoseJoint::LeftWrist=>guide.left_forearm_deg=norm_angle(angle_deg(g.le,stage_pos)),
-        PoseJoint::RightWrist=>guide.right_forearm_deg=norm_angle(angle_deg(g.re,stage_pos)),
+        PoseJoint::LeftWrist=>{
+            let (upper,lower)=solve_two_bone(
+                g.ls,stage_pos,g.base*0.34,g.base*0.31,guide.left_arm_deg);
+            guide.left_arm_deg=upper;guide.left_forearm_deg=lower;
+        }
+        PoseJoint::RightWrist=>{
+            let (upper,lower)=solve_two_bone(
+                g.rs,stage_pos,g.base*0.34,g.base*0.31,guide.right_arm_deg);
+            guide.right_arm_deg=upper;guide.right_forearm_deg=lower;
+        }
         PoseJoint::LeftKnee=>guide.left_leg_deg=norm_angle(angle_deg(g.lh,stage_pos)),
         PoseJoint::RightKnee=>guide.right_leg_deg=norm_angle(angle_deg(g.rh,stage_pos)),
-        PoseJoint::LeftAnkle=>guide.left_shin_deg=norm_angle(angle_deg(g.lk,stage_pos)),
-        PoseJoint::RightAnkle=>guide.right_shin_deg=norm_angle(angle_deg(g.rk,stage_pos)),
+        PoseJoint::LeftAnkle=>{
+            let (upper,lower)=solve_two_bone(
+                g.lh,stage_pos,g.base*0.44,g.base*0.42,guide.left_leg_deg);
+            guide.left_leg_deg=upper;guide.left_shin_deg=lower;
+        }
+        PoseJoint::RightAnkle=>{
+            let (upper,lower)=solve_two_bone(
+                g.rh,stage_pos,g.base*0.44,g.base*0.42,guide.right_leg_deg);
+            guide.right_leg_deg=upper;guide.right_shin_deg=lower;
+        }
     }
 }
 
@@ -236,6 +278,17 @@ mod tests{
         let p:PoseGuide=serde_json::from_str(r#"{"visible":true,"x":0.5,"y":0.5,"scale":1.0,"opacity":0.5,"torso_tilt_deg":0.0,"shoulder_deg":0.0,"hip_deg":0.0,"left_arm_deg":125.0,"right_arm_deg":55.0,"left_forearm_deg":105.0,"right_forearm_deg":75.0,"left_leg_deg":110.0,"right_leg_deg":70.0,"left_shin_deg":95.0,"right_shin_deg":85.0}"#).unwrap();
         assert_eq!(p.head_scale,1.0);
     }
+    #[test] fn wrist_ik_moves_both_arm_segments(){
+        let mut p=PoseGuide::default();
+        let before_upper=p.left_arm_deg;
+        let before_lower=p.left_forearm_deg;
+        let g=layout(&p,(1000.0,800.0));
+        drag_joint(&mut p,PoseJoint::LeftWrist,(1000.0,800.0),
+            g.ls+egui::vec2(-60.0,90.0));
+        assert_ne!(p.left_arm_deg,before_upper);
+        assert_ne!(p.left_forearm_deg,before_lower);
+    }
+
     #[test] fn dragging_left_elbow_changes_only_left_upper_arm(){
         let mut p=PoseGuide::default();
         let before=p.right_arm_deg;
