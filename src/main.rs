@@ -6424,6 +6424,15 @@ impl eframe::App for StickApp {
                         });
                         ui.separator();
                         let mut changed = false;
+                        changed |= ui.checkbox(&mut self.config.perspective_snap_enabled,
+                            tr(lang,"Snap drawing strokes to the active ruler",
+                                "ثبّت خطوط الرسم على المنظور النشط")).changed();
+                        changed |= ui.checkbox(&mut self.config.smart_shape_enabled,
+                            tr(lang,"Smart Shape after freehand drawing",
+                                "حوّل الشكل المرسوم بإيدك لشكل هندسي نظيف")).changed();
+                        ui.small(tr(lang,
+                            "Perspective Snap affects Brush, Vector Ink and Shapes while the guide is enabled.",
+                            "تثبيت المنظور بيشتغل مع الفرشة وقلم الفيكتور والأشكال لما يكون دليل المنظور شغال."));
                         changed |= ui.add(egui::Slider::new(&mut self.config.perspective_spacing, 8.0..=300.0)
                             .text(tr(lang, "Grid size / line spacing", "حجم المربعات / مسافة الخطوط"))).changed();
                         changed |= ui.add(egui::Slider::new(&mut self.config.perspective_line_width, 0.5..=5.0)
@@ -6473,6 +6482,7 @@ impl eframe::App for StickApp {
                             self.config.perspective_show_horizon = true;
                             self.config.perspective_ray_count = default_perspective_ray_count();
                             self.config.perspective_parallel_angle_deg = 0.0;
+                            self.config.perspective_snap_enabled = false;
                             self.config.perspective_mode = 0;
                             changed = true;
                         }
