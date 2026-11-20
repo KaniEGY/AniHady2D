@@ -603,16 +603,16 @@ fn parse_vbr_text(text:&str,path:&Path)->Result<ImportedBrushDraft,String>{
     let (shape,offset)=if shaped {
         (lines.get(3).copied().unwrap_or("circle").to_ascii_lowercase(),1usize)
     } else {("circle".to_owned(),0usize)};
-    let spacing=lines.get(3+offset).and_then(|v|v.parse::<f32>().ok()).unwrap_or(10.0);
-    let radius=lines.get(4+offset).and_then(|v|v.parse::<f32>().ok()).unwrap_or(15.0)
-        .clamp(0.5,2048.0);
+    let spacing:f32=lines.get(3+offset).and_then(|v|v.parse::<f32>().ok()).unwrap_or(10.0_f32);
+    let radius:f32=lines.get(4+offset).and_then(|v|v.parse::<f32>().ok()).unwrap_or(15.0_f32)
+        .clamp(0.5_f32,2048.0_f32);
     let (spikes,hard_index)=if shaped {
         (lines.get(5+offset).and_then(|v|v.parse::<usize>().ok()).unwrap_or(2),6+offset)
-    } else {(2usize),5usize};
-    let hardness=lines.get(hard_index).and_then(|v|v.parse::<f32>().ok()).unwrap_or(0.9)
-        .clamp(0.0,0.999);
-    let aspect=lines.get(hard_index+1).and_then(|v|v.parse::<f32>().ok()).unwrap_or(1.0);
-    let angle=lines.get(hard_index+2).and_then(|v|v.parse::<f32>().ok()).unwrap_or(0.0);
+    } else {(2usize,5usize)};
+    let hardness:f32=lines.get(hard_index).and_then(|v|v.parse::<f32>().ok()).unwrap_or(0.9_f32)
+        .clamp(0.0_f32,0.999_f32);
+    let aspect:f32=lines.get(hard_index+1).and_then(|v|v.parse::<f32>().ok()).unwrap_or(1.0_f32);
+    let angle:f32=lines.get(hard_index+2).and_then(|v|v.parse::<f32>().ok()).unwrap_or(0.0_f32);
     let ratio=if aspect.abs()<=1.0 {aspect.abs().max(0.05)}
         else {(1.0/(1.0+aspect.abs()/20.0)).clamp(0.05,1.0)};
     let tip=match shape.as_str() {
