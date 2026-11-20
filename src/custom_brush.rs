@@ -2055,7 +2055,7 @@ mod tests {
             brush_texture_id:Some("custom:test".into()),tip_shape:crate::project::BrushTipShape::Round,
         };
         let mut centers=Vec::new();
-        emit_stamps(&stroke,&brush,|stamp|centers.push(stamp.center[0]));
+        emit_stamps(&stroke,&brush,None,|stamp|centers.push(stamp.center[0]));
         assert!(centers.len()>40,"only {} stamps",centers.len());
         let max_gap=centers.windows(2).map(|w|w[1]-w[0]).fold(0.0_f32,f32::max);
         assert!(max_gap<=2.1,"visible bead gap: {max_gap}");
@@ -2091,7 +2091,7 @@ mod tests {
     }
 
     #[test]
-    fn continuous_external_brush_oversamples_large_sizes() {
+    fn continuous_external_brush_preserves_vendor_spacing_at_large_sizes() {
         let meta=CustomBrushMeta{
             id:"continuous".into(),name:"continuous".into(),source_format:"Krita .kpp".into(),
             source_path:String::new(),icon_path:String::new(),tip_paths:vec![],
@@ -2116,10 +2116,11 @@ mod tests {
         let mut centers=Vec::new();
         emit_stamps(&stroke,&brush,|stamp|centers.push(stamp.center[0]));
         let max_gap=centers.windows(2).map(|w|w[1]-w[0]).fold(0.0_f32,f32::max);
-        // Centers may be up to 4px apart at 100px diameter: the stamps still
-        // overlap by ~96px, so the stroke is visually continuous while avoiding
-        // the excessive dab count that made imported brushes feel heavy.
-        assert!(max_gap<=4.1,"continuous brush sampling regressed: {max_gap}");
+        // A 10% vendor spacing at 100px diameter should remain about 10px.
+        // That still gives ~90% overlap, but no longer explodes into redundant
+        // 2.5-4% dabs that made imported brushes heavy and too similar.
+        assert!(max_gap<=10.1,"vendor spacing mapping regressed: {max_gap}");
+        assert!(max_gap>=8.0,"spacing collapsed back into oversampling: {max_gap}");
     }
 
     #[test]
