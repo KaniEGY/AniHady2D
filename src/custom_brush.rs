@@ -963,23 +963,61 @@ fn import_kpp_file(path:&Path)->Result<Vec<ImportedBrushDraft>,String>{
     Ok(vec![parse_kpp_bytes(&data,path)?])
 }
 
+fn find_nearby_resource(root:&Path,file:&std::ffi::OsStr,max_depth:usize)->Option<Vec<u8>>{
+    fn walk(dir:&Path,file:&std::ffi::OsStr,depth:usize,max_depth:usize,seen:&mut usize)->Option<Vec<u8>>{
+        if depth>max_depth || *seen>4096 {return None}
+        let entries=fs::read_dir(dir).ok()?;
+        for entry in entries.flatten() {
+            *seen+=1;
+            if *seen>4096 {return None}
+            let path=entry.path();
+            if path.is_file() && path.file_name().is_some_and(|name|
+                name.to_string_lossy().eq_ignore_ascii_case(&file.to_string_lossy()))
+            {
+                if let Ok(bytes)=fs::read(&path){return Some(bytes)}
+            }
+            if path.is_dir() {
+                if let Some(bytes)=walk(&path,file,depth+1,max_depth,seen){return Some(bytes)}
+            }
+        }
+        None
+    }
+    let mut seen=0usize;
+    walk(root,file,0,max_depth,&mut seen)
+}
+
 fn read_krita_resource_near(source_path:&Path,filename:&str)->Option<Vec<u8>>{
     let file=Path::new(filename).file_name()?.to_owned();
     let parent=source_path.parent().unwrap_or(Path::new("."));
     let mut candidates=vec![
         parent.join(&file),
         parent.join("brushes").join(&file),
+        parent.join("resources").join(&file),
     ];
     if let Some(up)=parent.parent(){
         candidates.push(up.join("brushes").join(&file));
+        candidates.push(up.join("resources").join("brushes").join(&file));
     }
     if let Some(appdata)=std::env::var_os("APPDATA"){
-        candidates.push(PathBuf::from(appdata).join("krita").join("brushes").join(&file));
+        candidates.push(PathBuf::from(&appdata).join("krita").join("brushes").join(&file));
+        candidates.push(PathBuf::from(appdata).join("krita").join("resources").join("brushes").join(&file));
     }
     if let Some(local)=std::env::var_os("LOCALAPPDATA"){
-        candidates.push(PathBuf::from(local).join("krita").join("brushes").join(&file));
+        candidates.push(PathBuf::from(&local).join("krita").join("brushes").join(&file));
+        candidates.push(PathBuf::from(local).join("krita").join("resources").join("brushes").join(&file));
     }
-    candidates.into_iter().find_map(|p|fs::read(p).ok())
+    if let Some(bytes)=candidates.into_iter().find_map(|p|fs::read(p).ok()){
+        return Some(bytes);
+    }
+
+    // Extracted Krita packs often keep paintoppresets/ and brushes/ as siblings.
+    // Search a tightly bounded nearby tree so users do not have to manually
+    // locate every GBR/GIH dependency.
+    if let Some(bytes)=find_nearby_resource(parent,&file,2){return Some(bytes)}
+    if let Some(up)=parent.parent(){
+        if let Some(bytes)=find_nearby_resource(up,&file,2){return Some(bytes)}
+    }
+    None
 }
 
 fn parse_kpp_bytes(data:&[u8],source_path:&Path)->Result<ImportedBrushDraft,String>{
