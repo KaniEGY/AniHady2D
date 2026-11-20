@@ -10186,6 +10186,10 @@ impl eframe::App for StickApp {
                                         self.selected_vector_nodes=vec![node];
                                     }
                                     self.selected_vector_node=Some(node);
+                                    self.selected_stroke_indices=self.selected_vector_nodes.iter()
+                                        .map(|(si,_)|*si).collect();
+                                    self.selected_stroke_indices.sort_unstable();
+                                    self.selected_stroke_indices.dedup();
                                     self.vector_marquee_start=None;
                                     self.vector_marquee_current=None;
                                     self.save_undo_state();
@@ -10416,6 +10420,10 @@ impl eframe::App for StickApp {
                             }
                         }
                     }
+                    self.selected_stroke_indices=self.selected_vector_nodes.iter()
+                        .map(|(si,_)|*si).collect();
+                    self.selected_stroke_indices.sort_unstable();
+                    self.selected_stroke_indices.dedup();
                 }
                 self.transform_drag_anchor = None;
                 self.transform_rotate_pivot = None;
