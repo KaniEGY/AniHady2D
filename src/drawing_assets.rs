@@ -2,6 +2,7 @@
 //! This is intentionally local/offline and never uploads user content.
 
 use serde::{Deserialize,Serialize};
+use crate::project::Stroke;
 use std::path::PathBuf;
 
 #[derive(Clone,Debug,Serialize,Deserialize,PartialEq)]
@@ -15,6 +16,11 @@ pub struct AutoAction {
     pub commands:Vec<String>,
 }
 #[derive(Clone,Debug,Serialize,Deserialize,PartialEq)]
+pub struct StrokeAsset {
+    pub name:String,
+    pub strokes:Vec<Stroke>,
+}
+#[derive(Clone,Debug,Serialize,Deserialize,PartialEq)]
 pub struct DrawingAssets {
     #[serde(default="default_quick_access")]
     pub quick_access:Vec<String>,
@@ -22,6 +28,8 @@ pub struct DrawingAssets {
     pub palettes:Vec<PaletteAsset>,
     #[serde(default="default_actions")]
     pub auto_actions:Vec<AutoAction>,
+    #[serde(default)]
+    pub stroke_assets:Vec<StrokeAsset>,
 }
 fn default_quick_access()->Vec<String>{
     vec![
@@ -59,6 +67,7 @@ impl Default for DrawingAssets {
         quick_access:default_quick_access(),
         palettes:default_palettes(),
         auto_actions:default_actions(),
+        stroke_assets:Vec::new(),
     }}
 }
 fn path()->Option<PathBuf>{
@@ -92,6 +101,12 @@ impl DrawingAssets {
         let name=name.trim();
         if name.is_empty()||commands.is_empty(){return false}
         self.auto_actions.push(AutoAction{name:name.to_owned(),commands});
+        true
+    }
+    pub fn push_stroke_asset(&mut self,name:String,strokes:Vec<Stroke>)->bool{
+        let name=name.trim();
+        if name.is_empty()||strokes.is_empty()||strokes.len()>2_000{return false}
+        self.stroke_assets.push(StrokeAsset{name:name.to_owned(),strokes});
         true
     }
 }
