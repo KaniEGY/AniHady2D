@@ -253,7 +253,7 @@ fn marker_has_self_overlap(points:&[egui::Pos2],width:f32)->bool {
     let min_travel=(width*1.35).clamp(10.0,180.0);
     let mut grid:HashMap<(i32,i32),Vec<(egui::Pos2,f32)>>=HashMap::new();
     let mut travel=0.0f32;
-    let mut previous=None;
+    let mut previous:Option<egui::Pos2>=None;
     let sample_step=(width*0.10).clamp(1.5,6.0);
     let mut last_inserted=None::<egui::Pos2>;
 
