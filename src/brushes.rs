@@ -220,7 +220,7 @@ struct MarkerRasterCache {
 
 fn marker_has_hairpin(points:&[egui::Pos2],width:f32)->bool {
     if points.len()<3 || !width.is_finite() || width<=0.0 {return false;}
-    let reach=(width*0.32).clamp(3.0,64.0);
+    let reach=(width*0.75).clamp(6.0,96.0);
     for i in 1..points.len()-1 {
         let center=points[i];
         let mut before=i-1;
