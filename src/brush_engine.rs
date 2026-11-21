@@ -74,9 +74,10 @@ pub fn visit_round_marks(stroke: &Stroke, mut paint: impl FnMut(RoundMark, f32))
                 };
                 let shaped_width=(width*preset_scale
                     *raster_tip_cross_scale(stroke.tip_shape)).max(0.5);
-                if varying && !has_risky_turn(&stroke.points) {
+                let smoothed=smooth_freehand_points(&stroke.points,shaped_width);
+                if varying && !has_risky_turn(&smoothed) {
                     let outline=crate::stroke_geometry::pressure_outline(
-                        &stroke.points,shaped_width);
+                        &smoothed,shaped_width);
                     if !outline.is_empty() {
                         paint(RoundMark::Outline(outline),flow);
                         continue;
@@ -88,16 +89,22 @@ pub fn visit_round_marks(stroke: &Stroke, mut paint: impl FnMut(RoundMark, f32))
                 continue;
             }
             if !stroke.is_vector && stroke.brush_preset==KritaBrushPreset::GPenInk && varying {
-                // Krita-style basic 2D ink: pressure changes size through
-                // overlapping opaque round dabs rather than one fragile
-                // self-intersecting polygon. This keeps sharp reversals clean.
                 let smoothed=smooth_krita_2d_points(&stroke.points,width);
-                visit_pressure_dabs(&smoothed,width,
+                if !has_risky_turn(&smoothed) {
+                    let outline=crate::stroke_geometry::pressure_outline(&smoothed,width);
+                    if !outline.is_empty() {
+                        paint(RoundMark::Outline(outline),flow);
+                        continue;
+                    }
+                }
+                // Hairpins are the only fallback that still needs round dabs.
+                visit_pressure_dabs_spaced(&smoothed,width,0.28,
                     |dab,_|paint(RoundMark::Dot(dab),flow));
                 continue;
             }
             if !stroke.is_vector && stroke.brush_preset == KritaBrushPreset::TaperedPen {
-                let tapered = taper_pressure_profile(&stroke.points);
+                let smoothed=smooth_freehand_points(&stroke.points,width);
+                let tapered = taper_pressure_profile(&smoothed);
                 if has_risky_turn(&tapered) {
                     // Filled pressure polygons can fold over themselves on hairpins.
                     // Fall back to pressure dabs only for that risky geometry so the
@@ -130,8 +137,9 @@ pub fn visit_round_marks(stroke: &Stroke, mut paint: impl FnMut(RoundMark, f32))
             if !stroke.is_vector && stroke.brush_preset == KritaBrushPreset::ChiselMarker {
                 // Paint Marker coverage once as one filled ribbon. This removes
                 // both repeated-stamp blocks and alpha-dark joints on curves.
+                let smoothed=smooth_freehand_points(&stroke.points,(width*0.68).max(0.5));
                 let outline=crate::stroke_geometry::constant_outline(
-                    &stroke.points,(width*0.68).max(0.5));
+                    &smoothed,(width*0.68).max(0.5));
                 if !outline.is_empty() {
                     paint(RoundMark::Outline(outline),flow);
                 } else {
@@ -140,7 +148,8 @@ pub fn visit_round_marks(stroke: &Stroke, mut paint: impl FnMut(RoundMark, f32))
                 continue;
             }
             if varying {
-                if has_risky_turn(&stroke.points) {
+                let smoothed=smooth_freehand_points(&stroke.points,width);
+                if has_risky_turn(&smoothed) {
                     // Ordinary translucent/soft brushes must never explode into
                     // a folded pressure polygon on a tight reversal. Preserve a
                     // continuous stroke for that rare geometry instead.
@@ -152,7 +161,7 @@ pub fn visit_round_marks(stroke: &Stroke, mut paint: impl FnMut(RoundMark, f32))
                     );
                     continue;
                 }
-                let outline = crate::stroke_geometry::pressure_outline(&stroke.points, width);
+                let outline = crate::stroke_geometry::pressure_outline(&smoothed, width);
                 if !outline.is_empty() {
                     paint(RoundMark::Outline(outline), flow);
                     continue;
@@ -210,22 +219,102 @@ fn corner_preserving_smooth(
     result
 }
 
-/// General freehand cleanup for round raster line brushes (G-Pen, watercolor,
-/// marker, airbrush and pencil). It is intentionally lighter than Smooth Ink.
+fn raster_curve_fit(
+    points:&[StrokePoint],
+    width:f32,
+    weight:f32,
+    passes:usize,
+    tolerance_scale:f32,
+)->Vec<StrokePoint>{
+    const MAX_SAMPLES:usize=24_000;
+    if points.len()<3 || points.len()>12_000 || !width.is_finite() || width<=0.0 {
+        return points.to_vec();
+    }
+    let nodes=corner_preserving_smooth(points,width,weight,passes,tolerance_scale);
+    if nodes.len()<3 {return nodes;}
+
+    let distance=|a:&StrokePoint,b:&StrokePoint|(b.x-a.x).hypot(b.y-a.y);
+    let hard_corner=|a:&StrokePoint,b:&StrokePoint,d:&StrokePoint|{
+        let u=(b.x-a.x,b.y-a.y);
+        let v=(d.x-b.x,d.y-b.y);
+        let denom=u.0.hypot(u.1)*v.0.hypot(v.1);
+        denom>0.0001 && (u.0*v.0+u.1*v.1)/denom<0.15
+    };
+    let tangent=|a:&StrokePoint,b:&StrokePoint,d:&StrokePoint,
+                 segment:(f32,f32),segment_len:f32|{
+        if hard_corner(a,b,d){return segment}
+        let total=distance(a,b)+distance(b,d);
+        if total<=0.0001{return segment}
+        let scale=segment_len/total;
+        ((d.x-a.x)*scale,(d.y-a.y)*scale)
+    };
+
+    // Similar to the vector renderer's Hermite fitting, but pressure stays a
+    // raster attribute and is interpolated independently. This gives raster ink
+    // a vector-like centerline without turning the saved stroke into vectors.
+    let spacing=(width*0.12).clamp(0.75,2.5);
+    let mut out=Vec::with_capacity((nodes.len()*3).min(MAX_SAMPLES));
+    out.push(nodes[0].clone());
+    for i in 0..nodes.len()-1 {
+        let a=if i>0 {&nodes[i-1]} else {&nodes[i]};
+        let b=&nodes[i];
+        let d=&nodes[i+1];
+        let e=if i+2<nodes.len(){&nodes[i+2]}else{d};
+        let len=distance(b,d);
+        if !len.is_finite() || len<=0.001 {continue}
+        let chord=(d.x-b.x,d.y-b.y);
+        let m0=tangent(a,b,d,chord,len);
+        let m1=tangent(b,d,e,chord,len);
+        let steps=((len/spacing).ceil() as usize).clamp(1,24);
+        for j in 1..=steps {
+            if out.len()>=MAX_SAMPLES {break}
+            if j==steps {
+                out.push(d.clone());
+                continue;
+            }
+            let t=j as f32/steps as f32;
+            let t2=t*t; let t3=t2*t;
+            let h0=2.0*t3-3.0*t2+1.0;
+            let h1=t3-2.0*t2+t;
+            let h2=-2.0*t3+3.0*t2;
+            let h3=t3-t2;
+            let margin=len*0.10;
+            let min_x=a.x.min(b.x).min(d.x).min(e.x)-margin;
+            let max_x=a.x.max(b.x).max(d.x).max(e.x)+margin;
+            let min_y=a.y.min(b.y).min(d.y).min(e.y)-margin;
+            let max_y=a.y.max(b.y).max(d.y).max(e.y)+margin;
+            out.push(StrokePoint{
+                x:(h0*b.x+h1*m0.0+h2*d.x+h3*m1.0).clamp(min_x,max_x),
+                y:(h0*b.y+h1*m0.1+h2*d.y+h3*m1.1).clamp(min_y,max_y),
+                pressure:b.pressure+(d.pressure-b.pressure)*t,
+            });
+        }
+        if out.len()>=MAX_SAMPLES {break}
+    }
+    if let Some(last)=nodes.last() {
+        if out.last().is_none_or(|p|(p.x-last.x).hypot(p.y-last.y)>0.01)
+            && out.len()<MAX_SAMPLES
+        {out.push(last.clone());}
+    }
+    out
+}
+
+/// General raster freehand centerline. The old implementation only averaged
+/// existing pointer samples, so long curved spans still rendered as visible
+/// straight facets. This one curve-fits and distance-resamples the centerline.
 pub(crate) fn smooth_freehand_points(points: &[StrokePoint], width: f32) -> Vec<StrokePoint> {
-    corner_preserving_smooth(points, width, 0.15, 2, 0.15)
+    raster_curve_fit(points,width,0.16,2,0.17)
 }
 
-/// Basic opaque 2D ink gets a little more cleanup than the general brush
-/// family, matching the stable round Basic-5 style artists expect from Krita
-/// without introducing the rubber-band lag of a heavy stabilizer.
+/// Basic opaque 2D ink gets a little more cleanup while preserving deliberate
+/// corners and real stylus pressure.
 pub(crate) fn smooth_krita_2d_points(points: &[StrokePoint], width: f32) -> Vec<StrokePoint> {
-    corner_preserving_smooth(points,width,0.18,2,0.18)
+    raster_curve_fit(points,width,0.18,2,0.19)
 }
 
-/// Smooth Ink deliberately uses a stronger version of the same safe filter.
+/// Smooth Ink deliberately uses the strongest safe raster curve fitting.
 pub(crate) fn smooth_ink_points(points: &[StrokePoint], width: f32) -> Vec<StrokePoint> {
-    corner_preserving_smooth(points, width, 0.20, 2, 0.20)
+    raster_curve_fit(points,width,0.21,3,0.22)
 }
 
 /// Detect turns likely to make a filled pressure outline self-intersect.
@@ -617,7 +706,7 @@ mod tests {
         assert_eq!(widths,vec![8.]);
     }
     #[test]
-    fn variable_pressure_gpen_uses_round_dabs_instead_of_fragile_outline() {
+    fn variable_pressure_gpen_prefers_one_continuous_fitted_outline() {
         let s=Stroke {
             points:vec![point(0.,0.,0.25),point(20.,1.,0.8),point(40.,0.,1.0)],
             color:[0,0,0,255],fill_color:None,base_width:10.,is_vector:false,
@@ -631,18 +720,22 @@ mod tests {
             RoundMark::Outline(_)=>outlines+=1,
             RoundMark::Line{..}=>{}
         });
-        assert!(dots>2);
-        assert_eq!(outlines,0);
+        assert_eq!(outlines,1);
+        assert_eq!(dots,0);
     }
 
     #[test]
     fn krita_2d_smoothing_reduces_micro_jitter_but_keeps_corner() {
         let jitter=vec![point(0.,0.,1.),point(10.,1.2,1.),point(20.,0.,1.)];
         let smooth=smooth_krita_2d_points(&jitter,10.);
-        assert!(smooth[1].y<jitter[1].y);
+        let center=smooth.iter().min_by(|a,b|
+            (a.x-10.).abs().total_cmp(&(b.x-10.).abs())).unwrap();
+        assert!(center.y<jitter[1].y);
         let corner=vec![point(0.,0.,1.),point(20.,0.,1.),point(20.,20.,1.)];
         let smooth=smooth_krita_2d_points(&corner,10.);
-        assert_eq!((smooth[1].x,smooth[1].y),(20.,0.));
+        assert!(smooth.iter().any(|p|(p.x-20.).abs()<0.001 && p.y.abs()<0.001));
+        assert_eq!((smooth.first().unwrap().x,smooth.first().unwrap().y),(0.,0.));
+        assert_eq!((smooth.last().unwrap().x,smooth.last().unwrap().y),(20.,20.));
     }
 
     #[test]
@@ -685,22 +778,28 @@ mod tests {
     }
 
     #[test]
-    fn meaningful_pressure_gpen_uses_clean_round_pressure_dabs() {
+    fn meaningful_pressure_gpen_keeps_curve_as_single_coverage_region() {
         let s=Stroke {
             points:vec![point(0.,0.,0.25),point(20.,0.,0.7),point(40.,5.,1.0)],
             color:[0,0,0,255],fill_color:None,base_width:8.,is_vector:false,
             brush_preset:KritaBrushPreset::GPenInk,opacity:1.,brush_texture_id:None,
             tip_shape:BrushTipShape::Round,
         };
-        let mut dots=0;
         let mut outlines=0;
-        visit_round_marks(&s,|mark,_|match mark {
-            RoundMark::Dot(_)=>dots+=1,
-            RoundMark::Outline(_)=>outlines+=1,
-            RoundMark::Line{..}=>{}
-        });
-        assert!(dots>2);
-        assert_eq!(outlines,0);
+        visit_round_marks(&s,|mark,_|if matches!(mark,RoundMark::Outline(_)){outlines+=1});
+        assert_eq!(outlines,1);
+    }
+
+    #[test]
+    fn raster_curve_fit_densifies_a_curve_without_moving_endpoints() {
+        let raw=[
+            point(0.,0.,1.),point(35.,8.,0.8),point(70.,35.,0.6),point(95.,80.,1.0)
+        ];
+        let smooth=smooth_freehand_points(&raw,10.);
+        assert!(smooth.len()>raw.len());
+        assert_eq!((smooth.first().unwrap().x,smooth.first().unwrap().y),(0.,0.));
+        assert_eq!((smooth.last().unwrap().x,smooth.last().unwrap().y),(95.,80.));
+        assert!(smooth.windows(2).all(|w|(w[1].x-w[0].x).hypot(w[1].y-w[0].y)<=4.0));
     }
 
     #[test]
@@ -735,21 +834,33 @@ mod tests {
     fn smooth_ink_keeps_intentional_sharp_corners() {
         let points=[point(0.,0.,1.),point(10.,0.,1.),point(10.,10.,1.)];
         let sample=smooth_ink_points(&points,8.);
-        assert_eq!(sample,points);
+        assert!(sample.len()>points.len());
+        assert!(sample.iter().any(|p|(p.x-10.).abs()<0.001 && p.y.abs()<0.001));
+        assert_eq!((sample.first().unwrap().x,sample.first().unwrap().y),(0.,0.));
+        assert_eq!((sample.last().unwrap().x,sample.last().unwrap().y),(10.,10.));
         let j=[point(0.,0.,1.),point(10.,1.,1.),point(20.,0.,1.)];
         let smooth=smooth_ink_points(&j,12.);
-        assert!(smooth[1].y<j[1].y);
+        let center=smooth.iter().min_by(|a,b|
+            (a.x-10.).abs().total_cmp(&(b.x-10.).abs())).unwrap();
+        assert!(center.y<j[1].y);
     }
     #[test]
     fn general_freehand_smoothing_reduces_micro_jitter_without_rounding_corner() {
         let jitter=[point(0.,0.,1.),point(8.,0.9,1.),point(16.,0.,1.),point(24.,0.8,1.),point(32.,0.,1.)];
         let smooth=smooth_freehand_points(&jitter,10.);
-        assert!(smooth[1].y<jitter[1].y);
-        assert!(smooth[3].y<jitter[3].y);
+        let near8=smooth.iter().min_by(|a,b|
+            (a.x-8.).abs().total_cmp(&(b.x-8.).abs())).unwrap();
+        let near24=smooth.iter().min_by(|a,b|
+            (a.x-24.).abs().total_cmp(&(b.x-24.).abs())).unwrap();
+        assert!(near8.y<jitter[1].y);
+        assert!(near24.y<jitter[3].y);
         assert_eq!(smooth.first(),jitter.first());
         assert_eq!(smooth.last(),jitter.last());
         let corner=[point(0.,0.,1.),point(20.,0.,1.),point(20.,20.,1.)];
-        assert_eq!(smooth_freehand_points(&corner,12.),corner);
+        let fitted=smooth_freehand_points(&corner,12.);
+        assert!(fitted.iter().any(|p|(p.x-20.).abs()<0.001 && p.y.abs()<0.001));
+        assert_eq!((fitted.first().unwrap().x,fitted.first().unwrap().y),(0.,0.));
+        assert_eq!((fitted.last().unwrap().x,fitted.last().unwrap().y),(20.,20.));
     }
 
     #[test]

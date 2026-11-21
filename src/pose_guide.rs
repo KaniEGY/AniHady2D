@@ -15,6 +15,44 @@ pub enum PoseJoint {
     LeftAnkle, RightAnkle,
 }
 
+#[derive(Clone,Copy,Debug,Serialize,Deserialize,PartialEq,Eq)]
+pub enum BodyPreset {
+    Classic,
+    Slim,
+    Standard,
+    Athletic,
+    Heavy,
+    Tall,
+    Short,
+    Feminine,
+    Cartoon,
+    Custom,
+}
+impl Default for BodyPreset {
+    fn default()->Self{Self::Classic}
+}
+pub const BODY_PRESETS:[BodyPreset;9]=[
+    BodyPreset::Classic,BodyPreset::Slim,BodyPreset::Standard,
+    BodyPreset::Athletic,BodyPreset::Heavy,BodyPreset::Tall,
+    BodyPreset::Short,BodyPreset::Feminine,BodyPreset::Cartoon,
+];
+impl BodyPreset {
+    pub fn labels(self)->(&'static str,&'static str){
+        match self {
+            Self::Classic=>("Classic","كلاسيك"),
+            Self::Slim=>("Slim","نحيف"),
+            Self::Standard=>("Standard","عادي"),
+            Self::Athletic=>("Athletic","رياضي"),
+            Self::Heavy=>("Heavy","ضخم"),
+            Self::Tall=>("Tall","طويل"),
+            Self::Short=>("Short","قصير"),
+            Self::Feminine=>("Feminine","أنثوي"),
+            Self::Cartoon=>("Cartoon","كرتوني"),
+            Self::Custom=>("Custom","مخصص"),
+        }
+    }
+}
+
 #[derive(Clone,Debug,Serialize,Deserialize,PartialEq)]
 #[serde(default)]
 pub struct PoseGuide {
@@ -26,6 +64,18 @@ pub struct PoseGuide {
     pub head_scale:f32,
     pub head_offset_x:f32,
     pub head_offset_y:f32,
+
+    // Body proportions are independent from pose angles. They make the guide
+    // useful for anatomy/blocking references instead of one fixed stick body.
+    pub body_preset:BodyPreset,
+    pub torso_length:f32,
+    pub shoulder_width:f32,
+    pub hip_width:f32,
+    pub upper_arm_length:f32,
+    pub forearm_length:f32,
+    pub thigh_length:f32,
+    pub shin_length:f32,
+
     pub torso_tilt_deg:f32,
     pub shoulder_deg:f32,
     pub hip_deg:f32,
@@ -42,11 +92,51 @@ impl Default for PoseGuide{
     fn default()->Self{Self{
         visible:false,x:0.5,y:0.55,scale:1.0,opacity:0.45,
         head_scale:1.0,head_offset_x:0.0,head_offset_y:0.0,
+        body_preset:BodyPreset::Classic,
+        torso_length:1.0,shoulder_width:1.0,hip_width:1.0,
+        upper_arm_length:1.0,forearm_length:1.0,
+        thigh_length:1.0,shin_length:1.0,
         torso_tilt_deg:0.0,shoulder_deg:0.0,hip_deg:0.0,
         left_arm_deg:125.0,right_arm_deg:55.0,
         left_forearm_deg:105.0,right_forearm_deg:75.0,left_leg_deg:110.0,
         right_leg_deg:70.0,left_shin_deg:95.0,right_shin_deg:85.0,
     }}
+}
+impl PoseGuide {
+    pub fn apply_body_preset(&mut self,preset:BodyPreset){
+        let (head,torso,shoulders,hips,upper,forearm,thigh,shin)=match preset {
+            BodyPreset::Classic=>(1.00,1.00,1.00,1.00,1.00,1.00,1.00,1.00),
+            BodyPreset::Slim=>(0.96,1.06,0.84,0.88,1.03,1.03,1.05,1.05),
+            BodyPreset::Standard=>(0.98,1.02,1.04,1.00,1.02,1.02,1.03,1.03),
+            BodyPreset::Athletic=>(0.92,1.04,1.26,0.94,1.06,1.06,1.07,1.07),
+            BodyPreset::Heavy=>(1.04,0.98,1.28,1.26,0.99,0.99,0.98,0.98),
+            BodyPreset::Tall=>(0.84,1.17,1.00,0.96,1.13,1.13,1.19,1.19),
+            BodyPreset::Short=>(1.14,0.88,1.02,1.03,0.89,0.89,0.86,0.86),
+            BodyPreset::Feminine=>(1.00,1.04,0.88,1.20,0.99,0.99,1.05,1.04),
+            BodyPreset::Cartoon=>(1.38,0.82,1.08,1.02,0.91,0.91,0.90,0.90),
+            BodyPreset::Custom=>{self.body_preset=BodyPreset::Custom;return},
+        };
+        self.body_preset=preset;
+        self.head_scale=head;
+        self.torso_length=torso;
+        self.shoulder_width=shoulders;
+        self.hip_width=hips;
+        self.upper_arm_length=upper;
+        self.forearm_length=forearm;
+        self.thigh_length=thigh;
+        self.shin_length=shin;
+    }
+
+    pub fn mark_custom(&mut self){self.body_preset=BodyPreset::Custom;}
+
+    pub fn reset_pose_angles(&mut self){
+        self.head_offset_x=0.0; self.head_offset_y=0.0;
+        self.torso_tilt_deg=0.0; self.shoulder_deg=0.0; self.hip_deg=0.0;
+        self.left_arm_deg=125.0; self.right_arm_deg=55.0;
+        self.left_forearm_deg=105.0; self.right_forearm_deg=75.0;
+        self.left_leg_deg=110.0; self.right_leg_deg=70.0;
+        self.left_shin_deg=95.0; self.right_shin_deg=85.0;
+    }
 }
 
 #[derive(Clone,Copy,Debug)]
@@ -129,25 +219,32 @@ fn solve_two_bone(
 fn layout(guide:&PoseGuide,canvas:(f32,f32))->PoseLayout{
     let base=canvas.0.min(canvas.1)*0.22*guide.scale.clamp(0.25,3.0);
     let root=egui::pos2(canvas.0*guide.x.clamp(0.0,1.0),canvas.1*guide.y.clamp(0.0,1.0));
-    let torso_dir=dir(-90.0+guide.torso_tilt_deg,base*0.55);
+    let torso_len=base*0.55*guide.torso_length.clamp(0.55,1.65);
+    let upper_len=base*0.34*guide.upper_arm_length.clamp(0.55,1.60);
+    let fore_len=base*0.31*guide.forearm_length.clamp(0.55,1.60);
+    let thigh_len=base*0.44*guide.thigh_length.clamp(0.55,1.70);
+    let shin_len=base*0.42*guide.shin_length.clamp(0.55,1.70);
+    let torso_dir=dir(-90.0+guide.torso_tilt_deg,torso_len);
     let chest=root+torso_dir;
     let head_anchor=chest+dir(-90.0+guide.torso_tilt_deg,base*0.22);
     let head=head_anchor+egui::vec2(
         guide.head_offset_x.clamp(-0.6,0.6)*base,
         guide.head_offset_y.clamp(-0.6,0.6)*base,
     );
-    let shoulder_half=dir(guide.shoulder_deg,base*0.22);
-    let hip_half=dir(guide.hip_deg,base*0.15);
+    let shoulder_half=dir(guide.shoulder_deg,
+        base*0.22*guide.shoulder_width.clamp(0.55,1.65));
+    let hip_half=dir(guide.hip_deg,
+        base*0.15*guide.hip_width.clamp(0.55,1.70));
     let ls=chest-shoulder_half; let rs=chest+shoulder_half;
     let lh=root-hip_half; let rh=root+hip_half;
-    let le=ls+dir(guide.left_arm_deg,base*0.34);
-    let re=rs+dir(guide.right_arm_deg,base*0.34);
-    let lw=le+dir(guide.left_forearm_deg,base*0.31);
-    let rw=re+dir(guide.right_forearm_deg,base*0.31);
-    let lk=lh+dir(guide.left_leg_deg,base*0.44);
-    let rk=rh+dir(guide.right_leg_deg,base*0.44);
-    let la=lk+dir(guide.left_shin_deg,base*0.42);
-    let ra=rk+dir(guide.right_shin_deg,base*0.42);
+    let le=ls+dir(guide.left_arm_deg,upper_len);
+    let re=rs+dir(guide.right_arm_deg,upper_len);
+    let lw=le+dir(guide.left_forearm_deg,fore_len);
+    let rw=re+dir(guide.right_forearm_deg,fore_len);
+    let lk=lh+dir(guide.left_leg_deg,thigh_len);
+    let rk=rh+dir(guide.right_leg_deg,thigh_len);
+    let la=lk+dir(guide.left_shin_deg,shin_len);
+    let ra=rk+dir(guide.right_shin_deg,shin_len);
     PoseLayout{base,root,chest,head,head_radius:base*0.105*guide.head_scale.clamp(0.45,2.0),
         ls,rs,lh,rh,le,re,lw,rw,lk,rk,la,ra}
 }
@@ -175,10 +272,8 @@ pub fn draw_active(
     line(g.ls,g.le);line(g.le,g.lw);line(g.rs,g.re);line(g.re,g.rw);
     line(g.lh,g.lk);line(g.lk,g.la);line(g.rh,g.rk);line(g.rk,g.ra);
 
-    // IMPORTANT: radius is a stage-space value. Convert an edge point through
-    // the same stage->screen transform as the center. Using g.head_radius
-    // directly as screen pixels caused the head to grow/shrink while zooming
-    // or when the pointer left the canvas.
+    // Radius is stored in stage units and transformed through the exact same
+    // stage->screen transform as the center, so zoom/pointer exit cannot resize it.
     let head_screen=to_screen(g.head);
     let head_edge=to_screen(g.head+egui::vec2(g.head_radius,0.0));
     let head_radius_px=head_screen.distance(head_edge).max(1.0);
@@ -219,6 +314,10 @@ pub fn drag_joint(
 ){
     if canvas.0<=0.0||canvas.1<=0.0{return}
     let g=layout(guide,canvas);
+    let upper_len=g.base*0.34*guide.upper_arm_length.clamp(0.55,1.60);
+    let fore_len=g.base*0.31*guide.forearm_length.clamp(0.55,1.60);
+    let thigh_len=g.base*0.44*guide.thigh_length.clamp(0.55,1.70);
+    let shin_len=g.base*0.42*guide.shin_length.clamp(0.55,1.70);
     match joint {
         PoseJoint::Root=>{
             guide.x=(stage_pos.x/canvas.0).clamp(0.0,1.0);
@@ -241,24 +340,24 @@ pub fn drag_joint(
         PoseJoint::RightElbow=>guide.right_arm_deg=norm_angle(angle_deg(g.rs,stage_pos)),
         PoseJoint::LeftWrist=>{
             let (upper,lower)=solve_two_bone(
-                g.ls,stage_pos,g.base*0.34,g.base*0.31,guide.left_arm_deg);
+                g.ls,stage_pos,upper_len,fore_len,guide.left_arm_deg);
             guide.left_arm_deg=upper;guide.left_forearm_deg=lower;
         }
         PoseJoint::RightWrist=>{
             let (upper,lower)=solve_two_bone(
-                g.rs,stage_pos,g.base*0.34,g.base*0.31,guide.right_arm_deg);
+                g.rs,stage_pos,upper_len,fore_len,guide.right_arm_deg);
             guide.right_arm_deg=upper;guide.right_forearm_deg=lower;
         }
         PoseJoint::LeftKnee=>guide.left_leg_deg=norm_angle(angle_deg(g.lh,stage_pos)),
         PoseJoint::RightKnee=>guide.right_leg_deg=norm_angle(angle_deg(g.rh,stage_pos)),
         PoseJoint::LeftAnkle=>{
             let (upper,lower)=solve_two_bone(
-                g.lh,stage_pos,g.base*0.44,g.base*0.42,guide.left_leg_deg);
+                g.lh,stage_pos,thigh_len,shin_len,guide.left_leg_deg);
             guide.left_leg_deg=upper;guide.left_shin_deg=lower;
         }
         PoseJoint::RightAnkle=>{
             let (upper,lower)=solve_two_bone(
-                g.rh,stage_pos,g.base*0.44,g.base*0.42,guide.right_leg_deg);
+                g.rh,stage_pos,thigh_len,shin_len,guide.right_leg_deg);
             guide.right_leg_deg=upper;guide.right_shin_deg=lower;
         }
     }
@@ -267,19 +366,38 @@ pub fn drag_joint(
 #[cfg(test)]
 mod tests{
     use super::*;
+
     #[test] fn default_pose_is_bounded(){
         let p=PoseGuide::default();
         assert!((0.0..=1.0).contains(&p.x));
         assert!((0.0..=1.0).contains(&p.y));
         assert!(p.scale>0.0);
         assert_eq!(p.head_scale,1.0);
+        assert_eq!(p.body_preset,BodyPreset::Classic);
     }
-    #[test] fn old_saved_pose_gets_new_head_defaults(){
+
+    #[test] fn old_saved_pose_gets_new_body_defaults(){
         let p:PoseGuide=serde_json::from_str(r#"{"visible":true,"x":0.5,"y":0.5,"scale":1.0,"opacity":0.5,"torso_tilt_deg":0.0,"shoulder_deg":0.0,"hip_deg":0.0,"left_arm_deg":125.0,"right_arm_deg":55.0,"left_forearm_deg":105.0,"right_forearm_deg":75.0,"left_leg_deg":110.0,"right_leg_deg":70.0,"left_shin_deg":95.0,"right_shin_deg":85.0}"#).unwrap();
         assert_eq!(p.head_scale,1.0);
+        assert_eq!(p.torso_length,1.0);
+        assert_eq!(p.shoulder_width,1.0);
     }
+
+    #[test] fn presets_change_real_body_proportions(){
+        let mut p=PoseGuide::default();
+        p.apply_body_preset(BodyPreset::Tall);
+        assert_eq!(p.body_preset,BodyPreset::Tall);
+        assert!(p.torso_length>1.0);
+        assert!(p.thigh_length>1.0);
+        assert!(p.head_scale<1.0);
+        p.apply_body_preset(BodyPreset::Cartoon);
+        assert!(p.head_scale>1.2);
+        assert!(p.torso_length<1.0);
+    }
+
     #[test] fn wrist_ik_moves_both_arm_segments(){
         let mut p=PoseGuide::default();
+        p.apply_body_preset(BodyPreset::Tall);
         let before_upper=p.left_arm_deg;
         let before_lower=p.left_forearm_deg;
         let g=layout(&p,(1000.0,800.0));
