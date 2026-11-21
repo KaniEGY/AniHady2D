@@ -124,7 +124,8 @@ pub fn accepted_extensions() -> &'static [&'static str] {
         "kpp", "bundle", "myb", "gbr", "gih", "vbr", "abr",
         "sut", "sutg", "blend", "brush", "brushset", "zip",
         "afbrushes", "brushpack",
-        "png", "jpg", "jpeg", "webp", "bmp",
+        "png", "jpg", "jpeg", "webp", "bmp", "tif", "tiff", "tga", "gif",
+        "pbm", "pgm", "ppm", "pnm", "pam",
     ]
 }
 
@@ -569,18 +570,20 @@ fn unit_noise(mut x:u32)->f32{
 pub fn import_file(path:&Path)->Result<Vec<ImportedBrushDraft>,String>{
     let ext=path.extension().and_then(|s|s.to_str()).unwrap_or("").to_ascii_lowercase();
     let direct=match ext.as_str() {
-        "png"|"jpg"|"jpeg"|"webp"|"bmp"=>return import_image(path),
+        ext if tip_image_format(ext).is_some()=>return import_image(path),
         "gbr"=>import_gbr_file(path),
         "gih"=>import_gih_file(path),
         "vbr"=>import_vbr_file(path),
         "abr"=>import_abr_file(path),
-        "kpp"=>import_kpp_file(path),
+        // A KPP's embedded PNG is its thumbnail. Preserve the resource
+        // error so the importer can ask for the actual missing tip.
+        "kpp"=>return import_kpp_file(path),
         "bundle"=>import_krita_bundle(path),
         "myb"=>import_myb_file(path),
         "sut"=>import_sut_file(path),
         "sutg"=>import_sutg_file(path),
         "blend"=>import_blend_file(path),
-        "brush"|"brushset"|"zip"=>import_zip_brush_pack(path),
+        "brush"|"brushset"|"zip"=>return import_zip_brush_pack(path),
         "afbrushes"|"brushpack"=>import_archive_or_embedded_image_pack(path,&ext),
         _=>import_file_by_magic(path,&ext),
     };
@@ -652,7 +655,8 @@ fn import_embedded_png_pack(path:&Path,label:&str)->Result<Vec<ImportedBrushDraf
 }
 
 fn import_image(path:&Path)->Result<Vec<ImportedBrushDraft>,String>{
-    let img=image::open(path).map_err(|e|e.to_string())?;
+    let img=image::ImageReader::open(path).and_then(|r|r.with_guessed_format())
+        .map_err(|e|e.to_string())?.decode().map_err(|e|e.to_string())?;
     let tip=tip_from_image(&img);
     Ok(vec![ImportedBrushDraft{
         suggested_name:path.file_stem().and_then(|s|s.to_str()).unwrap_or("Image Brush").to_owned(),
@@ -664,6 +668,14 @@ fn import_image(path:&Path)->Result<Vec<ImportedBrushDraft>,String>{
         render_mode:CustomBrushRenderMode::Stamp,
         auxiliary_resource_path:None,compatibility_note:String::new(),
     }])
+}
+
+fn tip_image_format(ext: &str) -> Option<ImageFormat> {
+    match ext {
+        "png" | "jpg" | "jpeg" | "webp" | "bmp" | "tif" | "tiff" | "tga" | "gif"
+        | "pbm" | "pgm" | "ppm" | "pnm" | "pam" => ImageFormat::from_extension(ext),
+        _ => None,
+    }
 }
 
 
@@ -717,8 +729,8 @@ fn import_vbr_file(path:&Path)->Result<Vec<ImportedBrushDraft>,String>{
 }
 
 fn import_zip_brush_pack(path:&Path)->Result<Vec<ImportedBrushDraft>,String>{
-    let bytes=fs::read(path).map_err(|e|e.to_string())?;
-    let mut zip=zip::ZipArchive::new(Cursor::new(bytes)).map_err(|e|format!("Brush archive: {e}"))?;
+    let file=fs::File::open(path).map_err(|e|e.to_string())?;
+    let mut zip=zip::ZipArchive::new(file).map_err(|e|format!("Brush archive: {e}"))?;
     let outer_ext=path.extension().and_then(|s|s.to_str()).unwrap_or("").to_ascii_lowercase();
     let procreate=outer_ext=="brush"||outer_ext=="brushset";
     let mut out=Vec::new();
@@ -728,15 +740,38 @@ fn import_zip_brush_pack(path:&Path)->Result<Vec<ImportedBrushDraft>,String>{
         if entry.is_dir(){continue}
         let entry_name=entry.name().replace('\\',"/");
         let lower=entry_name.to_ascii_lowercase();
-        let ext=Path::new(&entry_name).extension().and_then(|s|s.to_str())
+        if lower.split('/').any(|s|s=="__macosx" || s.starts_with('.')) { continue; }
+        let member=Path::new(&entry_name);
+        let ext=member.extension().and_then(|s|s.to_str())
             .unwrap_or("").to_ascii_lowercase();
+        let format=tip_image_format(&ext);
+        let is_shape = member.file_stem().and_then(|s|s.to_str())
+            .is_some_and(|s|s.eq_ignore_ascii_case("shape")) || lower.contains("/shape/") || lower.contains("brushshape");
+        if procreate && !(format.is_some() && is_shape) { continue; }
+        if format.is_none() && !matches!(ext.as_str(),"gbr"|"gih"|"vbr"|"abr"|"myb") { continue; }
+        const MAX_MEMBER_BYTES: u64 = 128 * 1024 * 1024;
+        if entry.size() > MAX_MEMBER_BYTES { continue; }
         let mut data=Vec::new();
-        entry.read_to_end(&mut data).map_err(|e|e.to_string())?;
-        let display_name=Path::new(&entry_name).parent()
-            .and_then(|p|p.file_name()).and_then(|s|s.to_str())
-            .filter(|s|!s.is_empty())
-            .unwrap_or_else(||Path::new(&entry_name).file_stem().and_then(|s|s.to_str()).unwrap_or("Brush"))
-            .to_owned();
+        entry.by_ref().take(MAX_MEMBER_BYTES + 1).read_to_end(&mut data).map_err(|e|e.to_string())?;
+        if data.len() as u64 > MAX_MEMBER_BYTES { continue; }
+        let display_name=if procreate {
+            member.parent().and_then(Path::file_name).or_else(||path.file_stem())
+        } else {member.file_stem()}.and_then(|s|s.to_str()).unwrap_or("Brush").to_owned();
+
+        if ext=="abr" || ext=="myb" {
+            let drafts = if ext=="abr" {
+                parse_abr_bytes(&data, member)
+            } else {
+                parse_myb_bytes(&data, member)
+            };
+            if let Ok(drafts) = drafts {
+                for mut draft in drafts.into_iter().take(MAX_IMPORT_BRUSHES-out.len()) {
+                    draft.source_path=path.to_path_buf();
+                    out.push(draft);
+                }
+            }
+            continue;
+        }
 
         if ext=="gbr" {
             if let Ok((name,tip,spacing,_))=parse_gbr(&data,0) {
@@ -774,14 +809,13 @@ fn import_zip_brush_pack(path:&Path)->Result<Vec<ImportedBrushDraft>,String>{
             continue;
         }
 
-        let image_ext=matches!(ext.as_str(),"png"|"jpg"|"jpeg"|"webp"|"bmp");
-        // Procreate packages contain previews and grain maps too. Shape.png is
-        // the actual brush-tip mask; never import every thumbnail as a brush.
-        let usable_image=image_ext && (!procreate || lower.ends_with("shape.png")
-            || lower.contains("/shape/") || lower.contains("brushshape"));
-        if usable_image {
-            if let Ok(img)=image::load_from_memory(&data) {
-                let tip=tip_from_image(&img);
+        if let Some(format)=format {
+            if let Ok(img)=image::load_from_memory_with_format(&data,format) {
+                let tip=if procreate {
+                    let mask=img.to_luma_alpha8();
+                    downsample_tip(TipMask { width:mask.width(), height:mask.height(),
+                        data:mask.pixels().map(|p|((u16::from(p[0])*u16::from(p[1])+127)/255) as u8).collect() })
+                } else {tip_from_image(&img)};
                 out.push(ImportedBrushDraft{
                     suggested_name:display_name,
                     source_format:if procreate {
@@ -801,14 +835,18 @@ fn import_zip_brush_pack(path:&Path)->Result<Vec<ImportedBrushDraft>,String>{
         }
     }
     if out.is_empty() {
-        Err("The brush archive contained no readable GBR/GIH/VBR or usable image/Procreate shape tips.".into())
+        Err("The brush archive contained no readable brush presets or image tips.".into())
     } else {Ok(out)}
 }
 
 fn import_abr_file(path:&Path)->Result<Vec<ImportedBrushDraft>,String>{
-    use brushkit_preview::{preview_abr,PreviewOptions,TipPreview};
     let bytes=fs::read(path).map_err(|e|e.to_string())?;
-    let set=preview_abr(&bytes,PreviewOptions{max_cell:MAX_TIP_SIDE})
+    parse_abr_bytes(&bytes,path)
+}
+
+fn parse_abr_bytes(bytes:&[u8],path:&Path)->Result<Vec<ImportedBrushDraft>,String>{
+    use brushkit_preview::{preview_abr,PreviewOptions,TipPreview};
+    let set=preview_abr(bytes,PreviewOptions{max_cell:MAX_TIP_SIDE})
         .map_err(|e|format!("ABR: {e}"))?;
     let mut out=Vec::new();
     for entry in set.entries.into_iter().take(MAX_IMPORT_BRUSHES) {
@@ -1248,9 +1286,13 @@ fn import_krita_bundle(path:&Path)->Result<Vec<ImportedBrushDraft>,String>{
 }
 
 fn import_myb_file(path:&Path)->Result<Vec<ImportedBrushDraft>,String>{
-    let text=fs::read_to_string(path).map_err(|e|e.to_string())?;
-    let v:serde_json::Value=serde_json::from_str(&text).map_err(|e|format!("MyPaint .myb: {e}"))?;
-    let settings=v.get("settings").unwrap_or(&serde_json::Value::Null);
+    let bytes=fs::read(path).map_err(|e|e.to_string())?;
+    parse_myb_bytes(&bytes,path)
+}
+
+fn parse_myb_bytes(bytes:&[u8],path:&Path)->Result<Vec<ImportedBrushDraft>,String>{
+    let v:serde_json::Value=serde_json::from_slice(bytes).map_err(|e|format!("MyPaint .myb: {e}"))?;
+    let settings=v.get("settings").filter(|s|s.is_object()).ok_or("MyPaint preset is missing its settings")?;
     let setting=|name:&str|settings.get(name);
     let base=|name:&str,default:f32|setting(name).and_then(|x|x.get("base_value"))
         .and_then(|x|x.as_f64()).map(|x|x as f32).unwrap_or(default);
@@ -1725,9 +1767,8 @@ fn tips_from_resource(filename:&str,data:&[u8])->Vec<TipMask>{
         "gbr"=>parse_gbr(data,0).ok().map(|x|vec![x.1]).unwrap_or_default(),
         "gih"=>parse_gih_bytes(data,Path::new(filename)).ok()
             .and_then(|v|v.into_iter().next()).map(|d|d.tips).unwrap_or_default(),
-        "png"|"jpg"|"jpeg"|"webp"|"bmp"=>image::load_from_memory(data)
-            .ok().map(|i|vec![tip_from_image(&i)]).unwrap_or_default(),
-        _=>Vec::new(),
+        _=>tip_image_format(&ext).and_then(|format|image::load_from_memory_with_format(data,format).ok())
+            .map(|i|vec![tip_from_image(&i)]).unwrap_or_default(),
     }
 }
 
@@ -1971,6 +2012,96 @@ mod tests {
         for ext in ["kpp","bundle","myb","gbr","gih","vbr","abr","sut","sutg","blend","brush","brushset","zip","afbrushes","brushpack"] {
             assert!(accepted_extensions().contains(&ext),"{ext}");
         }
+    }
+
+    fn temp_brush_path(ext: &str) -> PathBuf {
+        let stamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+        std::env::temp_dir().join(format!("stick-import-{}-{stamp}.{ext}", std::process::id()))
+    }
+
+    fn archive_fixture(ext: &str, members: &[(&str, &[u8])]) -> PathBuf {
+        use std::io::Write;
+        let path = temp_brush_path(ext);
+        let mut zip = zip::ZipWriter::new(fs::File::create(&path).unwrap());
+        for &(name, bytes) in members {
+            zip.start_file(name, zip::write::SimpleFileOptions::default()).unwrap();
+            zip.write_all(bytes).unwrap();
+        }
+        zip.finish().unwrap();
+        path
+    }
+
+    #[test]
+    fn mixed_zip_preserves_abr_myb_and_named_image_tips() {
+        // One legacy sampled ABR tip, 2 by 2 pixels at 8-bit depth.
+        let mut record = vec![0; 4+2+1+8]; // misc, spacing, antialias and short bounds (v1)
+        for bound in [0i32, 0, 2, 2] { record.extend(bound.to_be_bytes()); }
+        record.extend(8u16.to_be_bytes());
+        record.extend([0, 0, 64, 128, 255]); // raw compression and four mask pixels
+        let mut abr = vec![0, 1, 0, 1, 0, 2]; // version, count, sampled entry
+        abr.extend((record.len() as u32).to_be_bytes());
+        abr.extend(record);
+        let myb = br#"{"settings":{"radius_logarithmic":{"base_value":1.5}}}"#;
+        let gray = b"P5\n2 1\n255\n\0\xff";
+        let file = archive_fixture("zip", &[
+            ("Presets/Ink.ABR", &abr), ("Presets/Soft.MYB", myb),
+            ("Tips/Thin.PGM", gray), ("__MACOSX/Tips/._Thin.PGM", gray),
+            ("Tips/Wide.PGM", gray), ("Presets/Bad.MYB", b"{}"),
+        ]);
+        let brushes = import_file(&file).unwrap();
+        fs::remove_file(&file).unwrap();
+        assert_eq!(brushes.len(), 4);
+        assert!(brushes.iter().all(|b| b.source_path == file));
+        assert!(brushes[0].source_format.contains(".abr"));
+        assert!(!brushes[0].tips[0].data.is_empty());
+        assert_eq!(brushes[1].suggested_name, "Soft");
+        assert!((brushes[1].default_size - 2.0 * 1.5f32.exp()).abs() < 0.001);
+        assert_eq!(brushes[2].suggested_name, "Thin");
+        assert_eq!(brushes[2].tips[0].data, [255, 0]);
+        assert_eq!(brushes[3].suggested_name, "Wide");
+    }
+
+    #[test]
+    fn procreate_uses_the_shape_mask_without_importing_previews_or_grain() {
+        let img = DynamicImage::ImageLuma8(GrayImage::from_raw(3, 1, vec![0, 96, 255]).unwrap());
+        let mut png = Cursor::new(Vec::new());
+        img.write_to(&mut png, ImageFormat::Png).unwrap();
+        let bytes = png.get_ref().as_slice();
+        let file = archive_fixture("brushset", &[
+            ("Ink/QuickLook/Thumbnail.png", bytes), ("Ink/Grain.png", bytes), ("Ink/Shape.png", bytes),
+        ]);
+        let brushes = import_file(&file).unwrap();
+        fs::remove_file(file).unwrap();
+        assert_eq!(brushes.len(), 1);
+        assert_eq!(brushes[0].suggested_name, "Ink");
+        assert_eq!(brushes[0].tips[0].data, [0, 96, 255]);
+    }
+
+    #[test]
+    fn additional_image_types_work_as_files_and_packed_tips() {
+        let pixels = image::RgbImage::from_raw(2, 1, vec![0,0,0, 255,255,255]).unwrap();
+        for ext in ["tif", "tiff", "tga", "gif"] {
+            assert!(accepted_extensions().contains(&ext));
+            let mut bytes = Cursor::new(Vec::new());
+            DynamicImage::ImageRgb8(pixels.clone()).write_to(&mut bytes, tip_image_format(ext).unwrap()).unwrap();
+            let single = temp_brush_path(ext);
+            fs::write(&single, bytes.get_ref()).unwrap();
+            let packed = archive_fixture("zip", &[(&format!("Tips/Test.{ext}"), bytes.get_ref())]);
+            for source in [single, packed] {
+                let drafts = import_file(&source).unwrap();
+                fs::remove_file(source).unwrap();
+                assert_eq!(drafts[0].tips[0].data, [255,0], "{ext}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_krita_thumbnail_alone_is_never_installed_as_a_brush() {
+        let path = temp_brush_path("kpp");
+        DynamicImage::new_luma8(16, 16).save_with_format(&path, ImageFormat::Png).unwrap();
+        let result = import_file(&path);
+        fs::remove_file(path).unwrap();
+        assert!(result.is_err());
     }
 
     #[test]

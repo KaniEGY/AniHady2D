@@ -375,6 +375,41 @@ mod viewport_tests {
     }
 
     #[test]
+    fn live_marker_draws_each_pass_with_a_clear_gap() {
+        let ctx = egui::Context::default();
+        let result = ctx.run(egui::RawInput::default(), |ctx| {
+            let painter = ctx.layer_painter(egui::LayerId::background());
+            for points in [
+                &[(10., 12.), (90., 12.)][..],
+                &[(90., 24.), (10., 24.)],
+                &[(10., 40.), (90., 40.), (90., 54.), (10., 54.)],
+            ] {
+                let mut s = stroke(points);
+                s.brush_preset = KritaBrushPreset::ChiselMarker;
+                s.base_width = 12.0;
+                s.opacity = 0.4;
+                draw_stroke_pro(&painter, &s, None, 1.0, 1.0, 0.0, 0.0, &|p| p);
+            }
+        });
+        let shapes = ctx.tessellate(result.shapes, result.pixels_per_point);
+        let covered = |p: egui::Pos2| shapes.iter().any(|shape| {
+            let egui::epaint::Primitive::Mesh(mesh) = &shape.primitive else { return false };
+            mesh.indices.chunks_exact(3).any(|ix| {
+                let vertex = |i: usize| mesh.vertices[ix[i] as usize].pos;
+                let (a,b,c) = (vertex(0), vertex(1), vertex(2));
+                let side = |u: egui::Pos2, v: egui::Pos2| (v-u).rot90().dot(p-u);
+                let signs = [side(a,b), side(b,c), side(c,a)];
+                let area = (b-a).rot90().dot(c-a).abs();
+                area > 0.0001 && (signs.iter().all(|&s| s >= 0.0) || signs.iter().all(|&s| s <= 0.0))
+            })
+        });
+        for x in [19.5, 40.5, 62.5] {
+            for y in [12., 24., 40., 54.] { assert!(covered(egui::pos2(x, y))); }
+            for y in [18., 32., 47.] { assert!(!covered(egui::pos2(x, y))); }
+        }
+    }
+
+    #[test]
     fn ordinary_gpen_round_tip_remains_round_cap_eligible() {
         let s = stroke(&[(0.0,0.0),(20.0,0.0)]);
         assert_eq!(s.brush_preset, KritaBrushPreset::GPenInk);

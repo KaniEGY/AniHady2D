@@ -3348,10 +3348,8 @@ impl StickApp {
                         ui.separator();
 
                         ui.horizontal_wrapped(|ui|{
-                            ui.checkbox(&mut self.pose_guide.visible,
-                                tr(lang,"Show on canvas","إظهار على الكانفا"));
-                            ui.checkbox(&mut self.pose_edit_mode,
-                                tr(lang,"Direct joint editing","تحريك المفاصل مباشرة"));
+                            self.pose_visibility_checkbox(ui, tr(lang,"Show on canvas","إظهار على الكانفا"));
+                            self.pose_edit_checkbox(ui, tr(lang,"Direct joint editing","تحريك المفاصل مباشرة"));
                         });
                         ui.add(egui::Slider::new(&mut self.pose_guide.scale,0.25..=3.0)
                             .text(tr(lang,"Overall size","الحجم العام")));
@@ -3522,10 +3520,8 @@ impl StickApp {
             let mut open=true;
             egui::Window::new(tr(lang,"Pose Reference","مرجع الوضعية"))
                 .open(&mut open).default_width(330.0).show(ctx,|ui|{
-                    ui.checkbox(&mut self.pose_guide.visible,
-                        tr(lang,"Show guide on canvas","اظهر المرجع على الكانفا"));
-                    ui.checkbox(&mut self.pose_edit_mode,
-                        tr(lang,"Direct joint editing","تحريك المفاصل مباشرة"));
+                    self.pose_visibility_checkbox(ui, tr(lang,"Show guide on canvas","اظهر المرجع على الكانفا"));
+                    self.pose_edit_checkbox(ui, tr(lang,"Direct joint editing","تحريك المفاصل مباشرة"));
                     ui.add(egui::Slider::new(&mut self.pose_guide.scale,0.25..=3.0)
                         .text(tr(lang,"Scale","الحجم")));
                     ui.add(egui::Slider::new(&mut self.pose_guide.head_scale,0.45..=2.0)
@@ -3701,6 +3697,93 @@ impl StickApp {
             _ => return None,
         };
         Some(((value-min)/(max-min)*100.0).clamp(0.0,100.0))
+    }
+
+    fn toggle_pose_rig(&mut self) {
+        let show = !self.pose_guide.visible;
+        self.pose_guide.visible = show;
+        self.pose_edit_mode = show;
+        self.pose_drag_joint = None;
+    }
+
+    fn pose_visibility_checkbox(&mut self, ui: &mut egui::Ui, label: String) {
+        if ui.checkbox(&mut self.pose_guide.visible, label).changed() && !self.pose_guide.visible {
+            self.pose_edit_mode = false;
+            self.pose_drag_joint = None;
+        }
+    }
+
+    fn pose_edit_checkbox(&mut self, ui: &mut egui::Ui, label: String) {
+        if ui.checkbox(&mut self.pose_edit_mode, label).changed() {
+            if self.pose_edit_mode {
+                self.pose_guide.visible = true;
+            }
+            self.pose_drag_joint = None;
+        }
+    }
+
+    fn append_freehand_sample(&mut self, raw: egui::Pos2, previous_raw: Option<egui::Pos2>,
+                              pressure: f32, stabilization: f32) {
+        let filtered = self.stabilized_cursor.map_or(raw, |previous| {
+            let (x, y) = stroke_geometry::adaptive_stabilized_xy(
+                (previous.x, previous.y), previous_raw.map(|p| (p.x, p.y)),
+                (raw.x, raw.y), stabilization);
+            egui::pos2(x, y)
+        });
+        let position = self.current_stroke.as_ref().and_then(|s| s.points.last())
+            .map_or(filtered, |p| self.snap_drawing_point(egui::pos2(p.x, p.y), filtered));
+        self.stabilized_cursor = Some(position);
+        let point = StrokePoint { x: position.x, y: position.y, pressure };
+        if let Some(stroke) = &mut self.current_stroke {
+            if stroke.points.len() < 20_000 && stroke.points.last()
+                .is_none_or(|p| (p.x - point.x).hypot(p.y - point.y) >= 1.5) {
+                stroke.points.push(point);
+            }
+            return;
+        }
+        self.save_undo_state();
+        let vector = self.active_tool_ui == ActiveToolUI::VectorPen;
+        self.current_stroke = Some(Stroke {
+            points: vec![point], color: self.brush_color, fill_color: None, is_vector: vector,
+            base_width: if vector { self.vector_pen_size } else { self.brush_size },
+            opacity: if vector { self.vector_pen_opacity } else { self.brush_opacity },
+            brush_preset: if vector { KritaBrushPreset::SmoothInk } else { self.active_krita_brush },
+            brush_texture_id: if vector { None } else {
+                self.active_custom_brush.as_ref().map(|id| format!("custom:{id}"))
+            },
+            tip_shape: if vector { self.vector_pen_cap } else { self.brush_tip_shape },
+        });
+    }
+
+    fn finish_freehand_stroke(&mut self, endpoint: Option<egui::Pos2>, now_time: f64) {
+        self.stabilized_cursor = None;
+        let Some(mut stroke) = self.current_stroke.take() else { return };
+        if let (Some(raw), Some(last)) = (endpoint.filter(|_| !stroke.is_vector), stroke.points.last()) {
+            let end = self.snap_drawing_point(egui::pos2(last.x, last.y), raw);
+            if (last.x - end.x).hypot(last.y - end.y) > 0.75 {
+                stroke.points.push(StrokePoint { x: end.x, y: end.y, pressure: last.pressure });
+            }
+        }
+        let lang = self.config.lang;
+        let smart_shape=if self.config.smart_shape_enabled {
+            drawing_power::recognize_smart_shape(&stroke.points)
+        } else {None};
+        if let Some(recognized)=smart_shape {
+            stroke.points=recognized.points;
+            self.status_message=match recognized.kind {
+                drawing_power::SmartShapeKind::Line=>tr(lang,"Smart Shape: line","شكل ذكي: خط"),
+                drawing_power::SmartShapeKind::Ellipse=>tr(lang,"Smart Shape: ellipse","شكل ذكي: دائرة/بيضاوي"),
+                drawing_power::SmartShapeKind::Rectangle=>tr(lang,"Smart Shape: rectangle","شكل ذكي: مستطيل"),
+                drawing_power::SmartShapeKind::Triangle=>tr(lang,"Smart Shape: triangle","شكل ذكي: مثلث"),
+            };
+        } else if stroke.is_vector {
+            // Vector Pen input keeps editable nodes, but remove
+            // high-frequency mouse/tablet zig-zag before reducing
+            // node count. Geometric shapes use a separate path.
+            vector_path::smooth_freehand_nodes(&mut stroke.points,0.58);
+            stroke.simplify_vector_nodes(self.vector_tolerance);
+        }
+        self.commit_stroke_with_symmetry(stroke, now_time);
     }
 
     fn commit_stroke_with_symmetry(&mut self, stroke: Stroke, now_time: f64) {
@@ -5416,7 +5499,8 @@ impl StickApp {
                                         "Choose the required Krita brush tip",
                                         "اختار ملف سن فرشة Krita المطلوب"))
                                     .set_file_name(&required)
-                                    .add_filter("Krita brush tip",&["gih","gbr","png","jpg","jpeg","webp","bmp"])
+                                    .add_filter("Krita brush tip",&["gih","gbr","png","jpg","jpeg","webp","bmp",
+                                        "tif","tiff","tga","gif","pbm","pgm","ppm","pnm","pam"])
                                     .add_filter("All files",&["*"])
                                     .pick_file();
                                 if let Some(resource)=selected {
@@ -5964,11 +6048,6 @@ impl eframe::App for StickApp {
             is_hold_shortcut_active(i,&self.config.size_gesture_key));
         let opacity_gesture_down=ctx.input(|i|
             is_hold_shortcut_active(i,&self.config.opacity_gesture_key));
-
-        // Keep every pointer move delivered in this frame. Reading only
-        // interact_pos() drops intermediate pen/mouse samples on busy frames.
-        let pointer_samples=ctx.input(|i| input_sampling::primary_pointer_samples(
-            &i.events,pointer_pressed,pointer_down,pointer_pos));
 
         // Best-effort tablet pressure delivered by egui Touch events.
         // A pressure-capable pen that reports zero/missing pressure on lift
@@ -7624,22 +7703,20 @@ impl eframe::App for StickApp {
                         }
                     let (pose_rect,pose_response)=ui.allocate_exact_size(
                         egui::vec2(36.0,28.0),egui::Sense::click());
+                    if pose_response.clicked() {
+                        self.toggle_pose_rig();
+                    }
                     ui.painter().rect_filled(pose_rect,6.0,
-                        if self.pose_edit_mode {egui::Color32::from_rgb(65,58,28)}
+                        if self.pose_guide.visible {egui::Color32::from_rgb(65,58,28)}
                         else if pose_response.hovered(){egui::Color32::from_rgb(55,73,84)}
                         else{egui::Color32::from_rgb(40,46,52)});
-                    draw_pose_rig_icon(ui.painter(),pose_rect.shrink(3.0),self.pose_edit_mode);
+                    draw_pose_rig_icon(ui.painter(),pose_rect.shrink(3.0),self.pose_guide.visible);
                     let pose_response=pose_response.on_hover_text(tr(lang,
-                        "Pose Rig — drag joints directly on the canvas",
-                        "هيكل الوضعية — اسحب المفاصل مباشرة على الكانفا"));
-                    if pose_response.clicked() {
-                        self.pose_edit_mode=!self.pose_edit_mode;
-                        self.pose_guide.visible=self.pose_edit_mode || self.pose_guide.visible;
-                        if !self.pose_edit_mode {self.pose_drag_joint=None;}
-                    }
+                        "Click to show and move the rig. Click again to hide it.",
+                        "اضغط عشان تظهر الهيكل وتحرّك مفاصله. اضغط تاني عشان تخفيه."));
                     pose_response.context_menu(|ui|{
                         ui.strong(tr(lang,"Pose Rig","هيكل الوضعية"));
-                        ui.checkbox(&mut self.pose_guide.visible,tr(lang,"Visible","ظاهر"));
+                        self.pose_visibility_checkbox(ui, tr(lang,"Visible","ظاهر"));
                         ui.add(egui::Slider::new(&mut self.pose_guide.scale,0.25..=3.0)
                             .text(tr(lang,"Body scale","حجم الجسم")));
                         ui.add(egui::Slider::new(&mut self.pose_guide.head_scale,0.45..=2.0)
@@ -9592,11 +9669,10 @@ impl eframe::App for StickApp {
             // this origin gate Brush/Eraser/Sculpt used to start on the canvas
             // halfway through a gesture that actually began on the timeline.
             let press_origin = primary_press_pos.or(pointer_pos.filter(|_| pointer_pressed));
-            let press_started_on_canvas = press_origin.is_some_and(|press| {
-                canvas_rect.contains(press)
-                    && ctx.layer_id_at(press).is_some_and(|layer| layer == ui.layer_id())
-                    && !any_modal_open
-            });
+            let canvas_layer = ui.layer_id();
+            let on_canvas = |pos| canvas_rect.contains(pos) && ctx.layer_id_at(pos) == Some(canvas_layer);
+            let press_started_on_canvas = !any_modal_open && press_origin.is_some_and(on_canvas);
+            let continued_contact = self.canvas_primary_capture && self.last_pointer_pos.is_some();
             self.canvas_primary_capture = update_canvas_primary_capture(
                 self.canvas_primary_capture, pointer_pressed, pointer_down, press_started_on_canvas);
 
@@ -9989,15 +10065,10 @@ impl eframe::App for StickApp {
                 }
             }
 
-            if self.pose_guide.visible {
-                pose_guide::draw_active(&painter,&self.pose_guide,(stage_w,stage_h),&to_screen,
-                    if self.pose_edit_mode {self.pose_drag_joint}else{None});
-            }
-
             if self.pose_edit_mode && self.pose_guide.visible && !any_modal_open
                 && self.canvas_quick_menu.is_none() {
-                if pointer_pressed && is_over_canvas {
-                    if let Some(pos)=pointer_pos {
+                if pointer_pressed {
+                    if let Some(pos)=press_origin.filter(|_| press_started_on_canvas) {
                         self.pose_drag_joint=pose_guide::hit_test_joint(
                             &self.pose_guide,(stage_w,stage_h),to_stage(pos),
                             (15.0/scale.max(0.05)).max(2.0));
@@ -10009,8 +10080,8 @@ impl eframe::App for StickApp {
                         ctx.request_repaint();
                     }
                 }
-                if pointer_released {self.pose_drag_joint=None;}
             }
+            if !pointer_down { self.pose_drag_joint = None; }
 
             let can_use_tool = self.active_tool_ui == ActiveToolUI::Eyedropper || !self.is_active_layer_locked();
 
@@ -10050,6 +10121,43 @@ impl eframe::App for StickApp {
             }
 
             let opacity_gesture=opacity_gesture_down && self.active_tool_opacity().is_some();
+            let freehand = matches!(self.active_tool_ui, ActiveToolUI::Brush | ActiveToolUI::VectorPen);
+            if freehand || self.current_stroke.is_some() {
+                let contacts = ctx.input(|i| input_sampling::primary_contacts(
+                    &i.events, continued_contact || self.current_stroke.is_some(), pointer_down, pointer_pos));
+                let enabled = freehand && can_use_tool && !any_modal_open && !space_down
+                    && !size_gesture_down && !opacity_gesture && self.canvas_quick_menu.is_none()
+                    && !self.pose_edit_mode;
+                let vector = self.active_tool_ui == ActiveToolUI::VectorPen;
+                let strength = if vector { self.vector_stabilizer_strength } else { self.stabilizer_strength };
+                let stabilization = (if pressure_available { strength } else { strength * 0.45 })
+                    .clamp(0.0, if vector { 0.70 } else { 0.75 });
+                let pressure = if vector { 1.0 } else { drawing_pressure };
+                let mut captured = continued_contact;
+                let mut previous = self.last_pointer_pos.map(to_stage);
+                for contact in contacts {
+                    if let Some(start) = contact.press {
+                        captured = on_canvas(start) && !any_modal_open;
+                        previous = None;
+                        self.stabilized_cursor = None;
+                    }
+                    if enabled && captured && pressure > 0.001 {
+                        for &pos in &contact.samples {
+                            if on_canvas(pos) {
+                                let point = to_stage(pos);
+                                self.append_freehand_sample(point, previous, pressure, stabilization);
+                                previous = Some(point);
+                            }
+                        }
+                    }
+                    if contact.finished {
+                        let endpoint = contact.samples.last().copied()
+                            .filter(|p| pressure > 0.001 && on_canvas(*p)).map(to_stage);
+                        self.finish_freehand_stroke(endpoint, now_time);
+                        captured = false;
+                    }
+                }
+            }
             if !space_down && !size_gesture_down && !opacity_gesture
                 && self.canvas_quick_menu.is_none()
                 && !self.pose_edit_mode
@@ -10278,107 +10386,6 @@ impl eframe::App for StickApp {
                                             }
                                         }
                                     }
-                                }
-                            }
-                        }
-                        ActiveToolUI::VectorPen if pointer_down => {
-                            // Mouse input has no pressure jitter to smooth and
-                            // should track the hand almost immediately. Keep
-                            // the full user stabilizer for pressure-capable pens.
-                            let stab = (if pressure_available {
-                                self.vector_stabilizer_strength
-                            } else {
-                                self.vector_stabilizer_strength * 0.45
-                            }).clamp(0.0, 0.70);
-                            let mut raw_previous=self.last_pointer_pos.map(|p|to_stage(p));
-                            for sample_screen in pointer_samples.iter().copied()
-                                .filter(|sample|canvas_rect.contains(*sample)) {
-                                let sample=to_stage(sample_screen);
-                                let smooth_raw=self.stabilized_cursor.map_or(sample,|previous|{
-                                    let (x,y)=stroke_geometry::adaptive_stabilized_xy(
-                                        (previous.x,previous.y),
-                                        raw_previous.map(|p|(p.x,p.y)),
-                                        (sample.x,sample.y),stab);
-                                    egui::pos2(x,y)
-                                });
-                                let smooth=self.current_stroke.as_ref()
-                                    .and_then(|stroke|stroke.points.last())
-                                    .map(|p|self.snap_drawing_point(egui::pos2(p.x,p.y),smooth_raw))
-                                    .unwrap_or(smooth_raw);
-                                self.stabilized_cursor=Some(smooth);
-                                if let Some(stroke)=&mut self.current_stroke {
-                                    if let Some(last)=stroke.points.last() {
-                                        if stroke.points.len()<20_000
-                                            && (last.x-smooth.x).hypot(last.y-smooth.y)>=1.5 {
-                                            stroke.points.push(StrokePoint{
-                                                x:smooth.x,y:smooth.y,pressure:1.0
-                                            });
-                                        }
-                                    }
-                                } else {
-                                    self.save_undo_state();
-                                    self.current_stroke=Some(Stroke{
-                                        points:vec![StrokePoint{x:smooth.x,y:smooth.y,pressure:1.0}],
-                                        color:self.brush_color,fill_color:None,
-                                        base_width:self.vector_pen_size,is_vector:true,
-                                        brush_preset:KritaBrushPreset::SmoothInk,
-                                        opacity:self.vector_pen_opacity,brush_texture_id:None,
-                                        tip_shape:self.vector_pen_cap
-                                    });
-                                }
-                                raw_previous=Some(sample);
-                            }
-                        }
-                        ActiveToolUI::Brush if pointer_down => {
-                            let stab=(if pressure_available {
-                                self.stabilizer_strength
-                            } else {
-                                self.stabilizer_strength * 0.45
-                            }).clamp(0.0,0.75);
-                            let mut raw_previous=self.last_pointer_pos.map(|p|to_stage(p));
-                            // Zero pressure after a real pressure-capable sample
-                            // means lift-off. Do not turn it into a full-width dab.
-                            if drawing_pressure>0.001 {
-                                for sample_screen in pointer_samples.iter().copied()
-                                    .filter(|sample|canvas_rect.contains(*sample)) {
-                                    let sample=to_stage(sample_screen);
-                                    let virt_raw=self.stabilized_cursor.map_or(sample,|previous|{
-                                        let (x,y)=stroke_geometry::adaptive_stabilized_xy(
-                                            (previous.x,previous.y),
-                                            raw_previous.map(|p|(p.x,p.y)),
-                                            (sample.x,sample.y),stab);
-                                        egui::pos2(x,y)
-                                    });
-                                    let virt=self.current_stroke.as_ref()
-                                        .and_then(|stroke|stroke.points.last())
-                                        .map(|p|self.snap_drawing_point(egui::pos2(p.x,p.y),virt_raw))
-                                        .unwrap_or(virt_raw);
-                                    self.stabilized_cursor=Some(virt);
-                                    if let Some(stroke)=&mut self.current_stroke {
-                                        if let Some(last)=stroke.points.last() {
-                                            if stroke.points.len()<20_000
-                                                && (last.x-virt.x).hypot(last.y-virt.y)>=1.5 {
-                                                stroke.points.push(StrokePoint{
-                                                    x:virt.x,y:virt.y,pressure:drawing_pressure
-                                                });
-                                            }
-                                        }
-                                    } else {
-                                        self.save_undo_state();
-                                        self.current_stroke=Some(Stroke{
-                                            points:vec![StrokePoint{
-                                                x:virt.x,y:virt.y,pressure:drawing_pressure
-                                            }],
-                                            color:self.brush_color,fill_color:None,
-                                            base_width:self.brush_size,is_vector:false,
-                                            brush_preset:self.active_krita_brush,
-                                            opacity:self.brush_opacity,
-                                            brush_texture_id:self.active_custom_brush.as_ref()
-                                                .map(|id|format!("custom:{id}")),
-                                            tip_shape:self.brush_tip_shape
-                                        });
-                                    }
-                                    raw_previous=Some(sample);
                                 }
                             }
                         }
@@ -10636,7 +10643,6 @@ impl eframe::App for StickApp {
 
             if pointer_released {
                 self.vector_axis_drag=None;
-                self.stabilized_cursor = None;
                 if let (Some(start),Some(end))=(
                     self.vector_marquee_start.take(),self.vector_marquee_current.take()){
                     let rect=egui::Rect::from_two_pos(start,end);
@@ -10711,45 +10717,6 @@ impl eframe::App for StickApp {
                         }
                         self.commit_stroke_with_symmetry(shape, now_time);
                     }
-                }
-                if let Some(mut stroke) = self.current_stroke.take() {
-                    // Keep the actual pointer-up endpoint so stabilized brush
-                    // strokes don't visibly stop short or leave a tiny loop gap.
-                    if !stroke.is_vector && drawing_pressure>0.001 {
-                        if let Some(pointer) = pointer_pos.filter(|p| canvas_rect.contains(*p)) {
-                            let raw_last=to_stage(pointer);
-                            let last_stage=stroke.points.last()
-                                .map(|p|self.snap_drawing_point(egui::pos2(p.x,p.y),raw_last))
-                                .unwrap_or(raw_last);
-                            if stroke.points.last().is_some_and(|p|
-                                (p.x-last_stage.x).hypot(p.y-last_stage.y)>0.75) {
-                                let pressure=stroke.points.last()
-                                    .map(|p|p.pressure).unwrap_or(1.0);
-                                stroke.points.push(StrokePoint{
-                                    x:last_stage.x,y:last_stage.y,pressure
-                                });
-                            }
-                        }
-                    }
-                    let smart_shape=if self.config.smart_shape_enabled {
-                        drawing_power::recognize_smart_shape(&stroke.points)
-                    } else {None};
-                    if let Some(recognized)=smart_shape {
-                        stroke.points=recognized.points;
-                        self.status_message=match recognized.kind {
-                            drawing_power::SmartShapeKind::Line=>tr(lang,"Smart Shape: line","شكل ذكي: خط"),
-                            drawing_power::SmartShapeKind::Ellipse=>tr(lang,"Smart Shape: ellipse","شكل ذكي: دائرة/بيضاوي"),
-                            drawing_power::SmartShapeKind::Rectangle=>tr(lang,"Smart Shape: rectangle","شكل ذكي: مستطيل"),
-                            drawing_power::SmartShapeKind::Triangle=>tr(lang,"Smart Shape: triangle","شكل ذكي: مثلث"),
-                        };
-                    } else if stroke.is_vector {
-                        // Vector Pen input keeps editable nodes, but remove
-                        // high-frequency mouse/tablet zig-zag before reducing
-                        // node count. Geometric shapes use a separate path.
-                        vector_path::smooth_freehand_nodes(&mut stroke.points,0.58);
-                        stroke.simplify_vector_nodes(self.vector_tolerance);
-                    }
-                    self.commit_stroke_with_symmetry(stroke, now_time);
                 }
             }
 
@@ -11085,6 +11052,11 @@ impl eframe::App for StickApp {
                     draw_stroke_pro(&painter, &preview, None, 1.0, scale, 0.0, 0.0, &to_screen);
                 }
             }
+            if self.pose_guide.visible {
+                pose_guide::draw_active(&paper_painter,&self.pose_guide,(stage_w,stage_h),&to_screen,
+                    if self.pose_edit_mode {self.pose_drag_joint}else{None});
+            }
+
             // Display chrome only, intentionally excluded from all exports.
             canvas_appearance::draw_chrome(&painter,stage_w,stage_h,scale,
                 &to_screen,&self.config.canvas_appearance);
@@ -11393,6 +11365,22 @@ mod tool_discovery_tests {
         let min=(60.0_f32/100.0).clamp(0.60,1.80);
         let max=(180.0_f32/100.0).clamp(0.60,1.80);
         assert_eq!((min,max),(0.60,1.80));
+    }
+
+    #[test]
+    fn rig_toggle_preserves_pose_and_releases_the_drawing_tools() {
+        let mut app = StickApp::new(&egui::Context::default());
+        app.toggle_pose_rig();
+        assert!(app.pose_guide.visible && app.pose_edit_mode);
+        app.pose_drag_joint = Some(pose_guide::PoseJoint::Root);
+        pose_guide::drag_joint(&mut app.pose_guide, pose_guide::PoseJoint::Root,
+            (400.0, 400.0), egui::pos2(140.0, 240.0));
+        let moved = (app.pose_guide.x, app.pose_guide.y);
+        assert_ne!(moved, (0.5, 0.55));
+        app.toggle_pose_rig();
+        assert!(!app.pose_guide.visible && !app.pose_edit_mode && app.pose_drag_joint.is_none());
+        app.toggle_pose_rig();
+        assert_eq!((app.pose_guide.x, app.pose_guide.y), moved);
     }
 
     #[test]

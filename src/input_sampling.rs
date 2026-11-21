@@ -39,21 +39,31 @@ fn bounded_evenly(mut points: Vec<egui::Pos2>, limit: usize) -> Vec<egui::Pos2> 
     out
 }
 
-/// Collect the primary-pointer path that belongs to this frame.
-///
-/// On the press frame, hover moves before the button-down are deliberately
-/// ignored. On later frames, all pointer moves are accepted until release.
-/// The current pointer is appended as a fallback for backends that coalesce
-/// events before egui sees them.
-pub fn primary_pointer_samples(
+#[derive(Default)]
+pub struct PointerContact {
+    pub press: Option<egui::Pos2>,
+    pub samples: Vec<egui::Pos2>,
+    pub finished: bool,
+}
+
+impl PointerContact {
+    fn finish(mut self, finished: bool, out: &mut Vec<Self>) {
+        self.samples = bounded_evenly(self.samples, MAX_POINTER_SAMPLES_PER_FRAME);
+        self.finished = finished;
+        out.push(self);
+    }
+}
+
+/// A busy UI frame can contain the lift of one stroke and the press of another.
+/// Keep the release coordinate with its own contact, even when a hover follows.
+pub fn primary_contacts(
     events: &[egui::Event],
-    primary_pressed: bool,
+    continued: bool,
     primary_down: bool,
     current: Option<egui::Pos2>,
-) -> Vec<egui::Pos2> {
-    let mut accepting=!primary_pressed;
+) -> Vec<PointerContact> {
+    let mut contact = continued.then(PointerContact::default);
     let mut out=Vec::new();
-
     for event in events {
         match event {
             egui::Event::PointerButton {
@@ -62,29 +72,45 @@ pub fn primary_pointer_samples(
                 pressed: true,
                 ..
             } => {
-                accepting=true;
-                push_distinct(&mut out,*pos);
+                if let Some(prior) = contact.take() {
+                    prior.finish(true, &mut out);
+                }
+                let mut next = PointerContact { press: Some(*pos), ..Default::default() };
+                push_distinct(&mut next.samples, *pos);
+                contact = Some(next);
             }
-            egui::Event::PointerMoved(pos) if accepting => {
-                push_distinct(&mut out,*pos);
+            egui::Event::PointerMoved(pos) => {
+                if let Some(active) = &mut contact {
+                    push_distinct(&mut active.samples, *pos);
+                }
             }
             egui::Event::PointerButton {
                 pos,
                 button: egui::PointerButton::Primary,
                 pressed: false,
                 ..
-            } if accepting => {
-                push_distinct(&mut out,*pos);
-                accepting=false;
+            } => {
+                if let Some(mut active) = contact.take() {
+                    push_distinct(&mut active.samples, *pos);
+                    active.finish(true, &mut out);
+                }
+            }
+            egui::Event::PointerGone => {
+                if let Some(active) = contact.take() {
+                    active.finish(true, &mut out);
+                }
             }
             _=>{}
         }
     }
 
-    if (primary_down || primary_pressed) && current.is_some() {
-        push_distinct(&mut out,current.unwrap());
+    if let Some(mut active) = contact {
+        if let Some(pos) = current.filter(|_| primary_down) {
+            push_distinct(&mut active.samples, pos);
+        }
+        active.finish(!primary_down, &mut out);
     }
-    bounded_evenly(out,MAX_POINTER_SAMPLES_PER_FRAME)
+    out
 }
 
 #[cfg(test)]
@@ -110,7 +136,7 @@ mod tests {
             button(p(10.,10.),true),
             egui::Event::PointerMoved(p(20.,10.)),
         ];
-        let samples=primary_pointer_samples(&events,true,true,Some(p(25.,10.)));
+        let samples=primary_contacts(&events,false,true,Some(p(25.,10.))).remove(0).samples;
         assert_eq!(samples.first().copied(),Some(p(10.,10.)));
         assert_eq!(samples.last().copied(),Some(p(25.,10.)));
         assert!(!samples.contains(&p(2.,2.)));
@@ -124,7 +150,7 @@ mod tests {
             egui::Event::PointerMoved(p(30.,1.)),
         ];
         assert_eq!(
-            primary_pointer_samples(&events,false,true,Some(p(40.,2.))),
+            primary_contacts(&events,true,true,Some(p(40.,2.))).remove(0).samples,
             vec![p(10.,0.),p(20.,1.),p(30.,1.),p(40.,2.)]
         );
     }
@@ -133,7 +159,7 @@ mod tests {
     fn backlog_is_bounded_but_preserves_first_and_last_samples() {
         let events:Vec<_>=(0..500)
             .map(|i|egui::Event::PointerMoved(p(i as f32,0.0))).collect();
-        let samples=primary_pointer_samples(&events,false,true,Some(p(500.,0.)));
+        let samples=primary_contacts(&events,true,true,Some(p(500.,0.))).remove(0).samples;
         assert!(samples.len()<=MAX_POINTER_SAMPLES_PER_FRAME);
         assert_eq!(samples.first().copied(),Some(p(0.,0.)));
         assert_eq!(samples.last().copied(),Some(p(500.,0.)));
@@ -146,7 +172,23 @@ mod tests {
             egui::Event::PointerMoved(p(10.01,10.01)),
             egui::Event::PointerMoved(p(f32::NAN,2.)),
         ];
-        let samples=primary_pointer_samples(&events,false,true,Some(p(20.,20.)));
+        let samples=primary_contacts(&events,true,true,Some(p(20.,20.))).remove(0).samples;
         assert_eq!(samples,vec![p(10.,10.),p(20.,20.)]);
+    }
+
+    #[test]
+    fn two_contacts_in_one_frame_ignore_the_hover_between_and_after_them() {
+        let events = [
+            egui::Event::PointerMoved(p(20.,10.)), button(p(40.,10.), false),
+            egui::Event::PointerMoved(p(70.,30.)), button(p(10.,20.), true),
+            egui::Event::PointerMoved(p(20.,20.)), button(p(40.,20.), false),
+            egui::Event::PointerMoved(p(90.,50.)),
+        ];
+        let contacts = primary_contacts(&events, true, false, Some(p(90.,50.)));
+        assert_eq!(contacts.len(), 2);
+        assert!(contacts.iter().all(|c| c.finished));
+        assert_eq!(contacts[0].samples, [p(20.,10.), p(40.,10.)]);
+        assert_eq!(contacts[1].press, Some(p(10.,20.)));
+        assert_eq!(contacts[1].samples, [p(10.,20.), p(20.,20.), p(40.,20.)]);
     }
 }
