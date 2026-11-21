@@ -4,6 +4,13 @@
 
 ## English (US)
 
+### Final wide-marker overlap fix
+- Fixed the remaining dark triangle/star artifacts on wide translucent Marker curves.
+- Marker bodies are now built as one concave outline and triangulated once, instead of overlapping translucent segment quads.
+- Dense fitted marker paths are lightly distance-decimated before tessellation to keep very large marker sizes stable without changing the drawn shape.
+- Endpoint caps remain outside the marker body, so transparency stays even from start to finish.
+
+
 ### Marker cleanup & faster pose rig controls
 - Removed the legacy Drawing Assets library UI. **Drawing Assets / المكتبة** now stays focused on the Body Reference Studio.
 - The Pose Rig popup now puts **Visible**, **Move joints**, and **Front/Back** together for fast switching while drawing.
@@ -367,6 +374,13 @@
 - Added an unsaved-work guard to avoid restarting with an unfinished project.
 
 ## العربية (المصري)
+
+### إصلاح نهائي لتداخل الماركر العريض
+- اتحلت مشكلة المثلثات/النجوم السودا اللي كانت لسه بتظهر على انحناءات الماركر الشفاف والعريض.
+- جسم الماركر بقى بيتبني كحد خارجي واحد ويتم تقسيمه لمثلثات مرة واحدة، بدل قطع شفافة متداخلة فوق بعض.
+- المسارات الكثيفة جدًا بتتخفف حسابيًا بشكل بسيط قبل الرندر عشان أحجام الماركر الكبيرة تفضل ثابتة من غير ما شكل الخط يتغير.
+- نهايات الماركر فضلت خارج جسم الخط، فدرجة الشفافية تبقى متساوية من البداية للنهاية.
+
 
 ### تنظيف الماركر وتحكم أسرع في هيكل الوضعية
 - اتشالت واجهة **مكتبة الرسم القديمة** نهائيًا، وزر المكتبة بقى مخصص لمرجع الجسم والوضعية.
