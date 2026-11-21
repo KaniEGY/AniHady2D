@@ -239,15 +239,100 @@ fn marker_has_hairpin(points:&[egui::Pos2],width:f32)->bool {
     false
 }
 
-fn paint_marker_hairpin_raster(
+/// Detect loops/retracing without O(n^2) segment-pair scanning. Marker samples
+/// that return within roughly half a nib width after travelling more than a nib
+/// width are routed to the safe raster path. That covers circles, spirals,
+/// retraced strokes and dense scribbles that cannot be represented by one
+/// simple outline polygon.
+fn marker_has_self_overlap(points:&[egui::Pos2],width:f32)->bool {
+    if points.len()<6 || !width.is_finite() || width<=0.0 {return false;}
+    use std::collections::HashMap;
+    let cell=(width*0.55).clamp(4.0,96.0);
+    let threshold=(width*0.48).clamp(2.5,80.0);
+    let threshold_sq=threshold*threshold;
+    let min_travel=(width*1.35).clamp(10.0,180.0);
+    let mut grid:HashMap<(i32,i32),Vec<(egui::Pos2,f32)>>=HashMap::new();
+    let mut travel=0.0f32;
+    let mut previous:Option<egui::Pos2>=None;
+    let sample_step=(width*0.10).clamp(1.5,6.0);
+    let mut last_inserted=None::<egui::Pos2>;
+
+    for &p in points {
+        if !p.x.is_finite() || !p.y.is_finite(){continue;}
+        if let Some(prev)=previous {
+            let d=prev.distance(p);
+            if d.is_finite(){travel+=d.max(0.0);}
+        }
+        previous=Some(p);
+        if last_inserted.is_some_and(|q|q.distance(p)<sample_step){continue;}
+
+        let gx=(p.x/cell).floor() as i32;
+        let gy=(p.y/cell).floor() as i32;
+        for dx in -1..=1 {
+            for dy in -1..=1 {
+                if let Some(bucket)=grid.get(&(gx+dx,gy+dy)) {
+                    if bucket.iter().any(|(q,old_travel)|
+                        travel-*old_travel>min_travel && q.distance_sq(p)<threshold_sq)
+                    {
+                        return true;
+                    }
+                }
+            }
+        }
+        grid.entry((gx,gy)).or_default().push((p,travel));
+        last_inserted=Some(p);
+    }
+    false
+}
+
+fn marker_needs_safe_raster(points:&[egui::Pos2],width:f32)->bool {
+    points.len()>4_000
+        || marker_has_hairpin(points,width)
+        || marker_has_self_overlap(points,width)
+}
+
+/// Cheap live marker preview. While the pointer is down we deliberately avoid
+/// tessellating or rasterizing the entire growing stroke every frame. The final
+/// committed stroke is rendered by the accurate marker pipeline after release.
+pub fn draw_marker_live_preview<F:Fn(egui::Pos2)->egui::Pos2>(
+    painter:&egui::Painter,
+    stroke:&Stroke,
+    scale:f32,
+    to_screen:&F,
+){
+    if stroke.points.is_empty(){return;}
+    let max_points=700usize;
+    let stride=((stroke.points.len()+max_points-1)/max_points).max(1);
+    let mut pts=Vec::with_capacity(stroke.points.len().min(max_points)+1);
+    for (i,p) in stroke.points.iter().enumerate() {
+        if i%stride==0 {
+            pts.push(to_screen(egui::pos2(p.x,p.y)));
+        }
+    }
+    if let Some(last)=stroke.points.last() {
+        let p=to_screen(egui::pos2(last.x,last.y));
+        if pts.last().is_none_or(|q|q.distance_sq(p)>0.01){pts.push(p);}
+    }
+    if pts.len()==1 {
+        pts.push(pts[0]+egui::vec2(0.01,0.0));
+    }
+    let alpha=((stroke.color[3] as f32)*stroke.opacity.clamp(0.0,1.0)) as u8;
+    if alpha==0{return;}
+    let ink=egui::Color32::from_rgba_unmultiplied(
+        stroke.color[0],stroke.color[1],stroke.color[2],alpha);
+    let width=(stroke.base_width*0.68*scale).max(0.5);
+    painter.add(egui::Shape::line(pts,egui::Stroke::new(width,ink)));
+}
+
+fn paint_marker_safe_raster(
     painter:&egui::Painter,
     points:&[egui::Pos2],
     width:f32,
     color:egui::Color32,
 )->bool {
-    if !marker_has_hairpin(points,width) || points.len()<2 || color.a()==0 {return false;}
+    if points.len()<2 || color.a()==0 || !width.is_finite() || width<=0.0 {return false;}
 
-    let ppp=painter.ctx().pixels_per_point().clamp(1.0,2.0);
+    let native_ppp=painter.ctx().pixels_per_point().clamp(1.0,2.0);
     let margin=(width*0.65+3.0).max(4.0);
     let mut min=egui::pos2(f32::INFINITY,f32::INFINITY);
     let mut max=egui::pos2(f32::NEG_INFINITY,f32::NEG_INFINITY);
@@ -263,9 +348,16 @@ fn paint_marker_hairpin_raster(
     bounds=bounds.intersect(painter.clip_rect());
     if !bounds.is_positive(){return false;}
 
+    // Hard memory budget: never let one marker preview allocate a giant
+    // Pixmap + RGBA staging buffer + GPU texture. Downsample large strokes
+    // rather than risking an out-of-memory process exit.
+    const MAX_RASTER_PIXELS:f32=1_200_000.0;
+    let point_area=(bounds.width().max(1.0)*bounds.height().max(1.0)).max(1.0);
+    let budget_ppp=(MAX_RASTER_PIXELS/point_area).sqrt();
+    let ppp=native_ppp.min(budget_ppp).clamp(0.22,native_ppp);
     let pw=(bounds.width()*ppp).ceil().max(1.0) as u32;
     let ph=(bounds.height()*ppp).ceil().max(1.0) as u32;
-    if pw>4096 || ph>4096 || (pw as u64)*(ph as u64)>8_000_000 {return false;}
+    if pw>3072 || ph>3072 || (pw as u64)*(ph as u64)>1_300_000 {return false;}
 
     use std::hash::{Hash,Hasher};
     let mut hasher=std::collections::hash_map::DefaultHasher::new();
@@ -279,7 +371,7 @@ fn paint_marker_hairpin_raster(
         x.hash(&mut hasher); y.hash(&mut hasher);
     }
     let key=hasher.finish();
-    let cache_id=egui::Id::new("stick_marker_hairpin_raster_cache");
+    let cache_id=egui::Id::new("stick_marker_safe_raster_cache");
     let mut cache=painter.ctx().data(|d|
         d.get_temp::<MarkerRasterCache>(cache_id).unwrap_or_default());
 
@@ -324,7 +416,7 @@ fn paint_marker_hairpin_raster(
     }
     let image=egui::ColorImage::from_rgba_unmultiplied([pw as usize,ph as usize],&rgba);
     let texture=painter.ctx().load_texture(
-        format!("stick_marker_hairpin_{key:016x}"),
+        format!("stick_marker_safe_{key:016x}"),
         image,
         egui::TextureOptions::LINEAR,
     );
@@ -337,8 +429,8 @@ fn paint_marker_hairpin_raster(
     );
 
     cache.entries.push(MarkerRasterCacheEntry{key,texture,size});
-    if cache.entries.len()>48 {
-        let remove=cache.entries.len()-48;
+    if cache.entries.len()>16 {
+        let remove=cache.entries.len()-16;
         cache.entries.drain(0..remove);
     }
     painter.ctx().data_mut(|d|d.insert_temp(cache_id,cache));
@@ -549,15 +641,28 @@ pub fn draw_stroke_pro<F: Fn(egui::Pos2) -> egui::Pos2>(
             screen_pts.get_or_insert_with(project_points).clone()
         };
         if !stroke.is_vector && stroke.brush_preset == KritaBrushPreset::ChiselMarker {
-            // Normal curves use the fast single-outline mesh. Tight 180-degree
-            // returns use an opaque coverage raster that receives marker alpha
-            // only once, eliminating self-overlap triangles completely.
-            let body_painted=paint_marker_hairpin_raster(
-                painter,&points,width*scale,ink
-            ) || marker_strip_mesh(&points,width*scale,ink).is_some_and(|mesh|{
-                painter.add(egui::Shape::mesh(mesh));
-                true
-            });
+            let marker_width=width*scale;
+            let safe=marker_needs_safe_raster(&points,marker_width);
+            // Loops, spirals, retracing and hairpins are never sent through
+            // the outline triangulator: a self-intersecting polygon can bridge
+            // interior areas and look exactly like Bucket Fill.
+            let body_painted=if safe {
+                if paint_marker_safe_raster(painter,&points,marker_width,ink) {
+                    true
+                } else {
+                    // Allocation/budget fallback: an open polyline can darken at
+                    // crossings but cannot fill an enclosed region or allocate
+                    // a huge raster texture.
+                    painter.add(egui::Shape::line(
+                        points.clone(),egui::Stroke::new(marker_width,ink)));
+                    true
+                }
+            } else {
+                marker_strip_mesh(&points,marker_width,ink).is_some_and(|mesh|{
+                    painter.add(egui::Shape::mesh(mesh));
+                    true
+                })
+            };
             if body_painted {
                 if points.len() >= 2 {
                     for (endpoint, interior) in [
@@ -698,6 +803,31 @@ mod viewport_tests {
         }
         poly_area=poly_area.abs()*0.5;
         assert!((tri_area-poly_area).abs() < 0.1, "triangles must not overlap");
+    }
+
+    #[test]
+    fn marker_detects_loop_retrace_for_safe_raster() {
+        let mut pts=Vec::new();
+        for lap in 0..2 {
+            for i in 0..64 {
+                let a=(i as f32/64.0)*std::f32::consts::TAU;
+                let r=45.0+lap as f32*2.0;
+                pts.push(egui::pos2(100.0+a.cos()*r,100.0+a.sin()*r));
+            }
+        }
+        assert!(marker_has_self_overlap(&pts,24.0));
+        assert!(marker_needs_safe_raster(&pts,24.0));
+    }
+
+    #[test]
+    fn marker_simple_arc_stays_on_fast_path() {
+        let pts=[
+            egui::pos2(0.0,0.0),egui::pos2(20.0,2.0),
+            egui::pos2(40.0,8.0),egui::pos2(60.0,18.0),
+            egui::pos2(80.0,34.0),
+        ];
+        assert!(!marker_has_self_overlap(&pts,18.0));
+        assert!(!marker_needs_safe_raster(&pts,18.0));
     }
 
     #[test]

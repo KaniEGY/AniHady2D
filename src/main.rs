@@ -41,7 +41,7 @@ mod drawing_assets;
 mod pose_guide;
 
 use arabic_reshaper::arabic_reshape;
-use brushes::{draw_brush_preset_icon, draw_stroke_pro};
+use brushes::{draw_brush_preset_icon, draw_marker_live_preview, draw_stroke_pro};
 use stylus::TouchPressureTracker;
 use eframe::egui;
 use exporter::{ImageExportFormat, VideoExportFormat};
@@ -3668,7 +3668,15 @@ impl StickApp {
         self.stabilized_cursor = Some(position);
         let point = StrokePoint { x: position.x, y: position.y, pressure };
         if let Some(stroke) = &mut self.current_stroke {
-            if stroke.points.len() < 20_000 && stroke.points.last()
+            // Marker strokes are rendered from a smoothed centerline and do not
+            // benefit from tens of thousands of raw pointer events. Keeping a
+            // tighter raw-point ceiling prevents pathological scribbles from
+            // ballooning CPU/RAM work after release while preserving the full
+            // visible path length.
+            let point_cap=if !stroke.is_vector
+                && stroke.brush_preset==KritaBrushPreset::ChiselMarker
+            {10_000}else{20_000};
+            if stroke.points.len() < point_cap && stroke.points.last()
                 .is_none_or(|p| (p.x - point.x).hypot(p.y - point.y) >= 1.5) {
                 stroke.points.push(point);
             }
@@ -10989,7 +10997,15 @@ impl eframe::App for StickApp {
             }
             if let Some(stroke) = &self.current_stroke {
                 for preview in self.symmetry_strokes(stroke.clone()) {
-                    draw_stroke_pro(&painter, &preview, None, 1.0, scale, 0.0, 0.0, &to_screen);
+                    if !preview.is_vector
+                        && preview.brush_preset == KritaBrushPreset::ChiselMarker
+                    {
+                        // Live marker input must stay cheap even for long loops:
+                        // never rebuild raster textures or concave meshes every frame.
+                        draw_marker_live_preview(&painter,&preview,scale,&to_screen);
+                    } else {
+                        draw_stroke_pro(&painter, &preview, None, 1.0, scale, 0.0, 0.0, &to_screen);
+                    }
                 }
             }
             if let (Some(p0), Some(p1)) = (self.shape_drag_start, self.shape_drag_current) {
