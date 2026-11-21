@@ -210,11 +210,40 @@ fn marker_strip_mesh(points: &[egui::Pos2], width: f32, color: egui::Color32) ->
     if points.len() < 2 || !width.is_finite() || width <= 0.0 || color.a() == 0 {
         return None;
     }
-    let mut clean = Vec::with_capacity(points.len());
-    for &p in points {
+
+    // The previous marker renderer emitted one quad per centerline segment.
+    // With a wide translucent nib, neighbouring quads overlap on curves because
+    // the fitted centerline is sampled much more densely than the marker width.
+    // Alpha blending then paints those overlap wedges several times, creating
+    // the black triangles visible on the canvas.
+    //
+    // Build one *outline polygon* for the whole marker body and triangulate that
+    // polygon once instead. Earcut handles concave bends without painting the
+    // same join area repeatedly.
+    let min_step = (width * 0.055).clamp(0.75, 6.0);
+    let min_step_sq = min_step * min_step;
+    let mut clean = Vec::with_capacity(points.len().min(10_000));
+    for (index, &p) in points.iter().enumerate() {
         if !p.x.is_finite() || !p.y.is_finite() { continue; }
-        if clean.last().is_none_or(|q: &egui::Pos2| q.distance_sq(p) > 0.01) {
-            clean.push(p);
+        let is_last = index + 1 == points.len();
+        if clean.is_empty()
+            || is_last
+            || clean.last().is_none_or(|q: &egui::Pos2| q.distance_sq(p) >= min_step_sq)
+        {
+            if clean.last().is_none_or(|q: &egui::Pos2| q.distance_sq(p) > 0.01) {
+                clean.push(p);
+            }
+        }
+        // fill_render caps polygons at 20k vertices; the marker outline contains
+        // two vertices per centerline point.
+        if clean.len() >= 9_500 { break; }
+    }
+    if let Some(&last) = points.last() {
+        if last.x.is_finite() && last.y.is_finite()
+            && clean.last().is_none_or(|q| q.distance_sq(last) > 0.01)
+            && clean.len() < 9_500
+        {
+            clean.push(last);
         }
     }
     if clean.len() < 2 { return None; }
@@ -225,6 +254,7 @@ fn marker_strip_mesh(points: &[egui::Pos2], width: f32, color: egui::Color32) ->
         let len = d.length();
         if len > 0.0001 { d / len } else { egui::vec2(1.0, 0.0) }
     };
+
     let mut left = Vec::with_capacity(clean.len());
     let mut right = Vec::with_capacity(clean.len());
     for i in 0..clean.len() {
@@ -232,41 +262,35 @@ fn marker_strip_mesh(points: &[egui::Pos2], width: f32, color: egui::Color32) ->
         let next = if i + 1 == clean.len() { prev } else { dir(clean[i], clean[i + 1]) };
         let prev_n = egui::vec2(-prev.y, prev.x);
         let next_n = egui::vec2(-next.y, next.x);
-        let turn = prev.dot(next);
+
         let (normal, miter) = if i == 0 {
             (next_n, 1.0)
         } else if i + 1 == clean.len() {
             (prev_n, 1.0)
-        } else if turn < -0.70 {
-            (next_n, 1.0)
         } else {
-            let sum = prev_n + next_n;
-            let n = if sum.length_sq() > 0.0001 { sum.normalized() } else { next_n };
-            let denom = n.dot(next_n).abs().max(0.20);
-            (n, (1.0 / denom).min(1.35))
+            let dot = prev.dot(next).clamp(-1.0, 1.0);
+            if dot < -0.72 {
+                // A near reversal cannot support a wide miter without folding.
+                // Keep a bounded bevel-like cross section instead.
+                (next_n, 1.0)
+            } else {
+                let sum = prev_n + next_n;
+                let n = if sum.length_sq() > 0.0001 { sum.normalized() } else { next_n };
+                let denom = n.dot(next_n).abs().max(0.20);
+                (n, (1.0 / denom).min(1.30))
+            }
         };
+
         let off = normal * (radius * miter);
         left.push(clean[i] + off);
         right.push(clean[i] - off);
     }
 
-    let mut mesh = egui::Mesh::default();
-    for i in 0..clean.len() {
-        mesh.vertices.push(egui::epaint::Vertex {
-            pos: left[i], uv: egui::epaint::WHITE_UV, color,
-        });
-        mesh.vertices.push(egui::epaint::Vertex {
-            pos: right[i], uv: egui::epaint::WHITE_UV, color,
-        });
-    }
-    for i in 0..clean.len() - 1 {
-        let a = (i * 2) as u32;
-        let b = a + 1;
-        let c = a + 2;
-        let d = a + 3;
-        mesh.indices.extend_from_slice(&[a, b, c, b, d, c]);
-    }
-    Some(mesh)
+    let mut outline = Vec::with_capacity(clean.len() * 2);
+    outline.extend(left);
+    outline.extend(right.into_iter().rev());
+
+    crate::fill_render::solid_polygon_mesh(&outline, color)
 }
 
 pub fn draw_stroke_pro<F: Fn(egui::Pos2) -> egui::Pos2>(
@@ -497,18 +521,39 @@ mod viewport_tests {
     }
 
     #[test]
-    fn marker_strip_uses_one_shared_surface_without_join_dabs() {
+    fn marker_body_is_triangulated_as_one_concave_surface() {
         let color = egui::Color32::from_rgba_unmultiplied(20,30,40,100);
+        // Deliberately use a very wide marker over tightly spaced bends. The
+        // old per-segment quad strip overlapped itself here and darkened joins.
         let points = [
-            egui::pos2(0.0,0.0), egui::pos2(30.0,2.0),
-            egui::pos2(55.0,18.0), egui::pos2(80.0,20.0),
+            egui::pos2(0.0,0.0), egui::pos2(5.0,0.0),
+            egui::pos2(5.0,5.0), egui::pos2(10.0,5.0),
+            egui::pos2(15.0,9.0),
         ];
-        let mesh = marker_strip_mesh(&points, 18.0, color).expect("marker strip");
-        assert_eq!(mesh.vertices.len(), points.len() * 2);
-        assert_eq!(mesh.indices.len(), (points.len() - 1) * 6);
+        let mesh = marker_strip_mesh(&points, 20.0, color).expect("marker body");
+        assert!(mesh.vertices.len() >= 6);
+        assert_eq!(mesh.indices.len() % 3, 0);
         assert!(mesh.vertices.iter().all(|v|
             v.pos.x.is_finite() && v.pos.y.is_finite() && v.color == color));
         assert!(mesh.indices.iter().all(|&i| (i as usize) < mesh.vertices.len()));
+
+        // Earcut triangulates one polygon. Interior triangles may share edges,
+        // but their total area must equal the polygon area rather than the
+        // inflated area produced by overlapping per-segment quads.
+        let tri_area:f32=mesh.indices.chunks_exact(3).map(|ix|{
+            let a=mesh.vertices[ix[0] as usize].pos;
+            let b=mesh.vertices[ix[1] as usize].pos;
+            let c=mesh.vertices[ix[2] as usize].pos;
+            ((b-a).rot90().dot(c-a)).abs()*0.5
+        }).sum();
+        let mut poly_area=0.0f32;
+        for i in 0..mesh.vertices.len() {
+            let a=mesh.vertices[i].pos;
+            let b=mesh.vertices[(i+1)%mesh.vertices.len()].pos;
+            poly_area += a.x*b.y-a.y*b.x;
+        }
+        poly_area=poly_area.abs()*0.5;
+        assert!((tri_area-poly_area).abs() < 0.1, "triangles must not overlap");
     }
 
     #[test]
