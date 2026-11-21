@@ -4,6 +4,14 @@
 
 ## English (US)
 
+### Body Reference Studio & smooth raster curves
+- **Drawing Assets** now opens directly into a dedicated **Body Reference Studio**. The previous palettes/reusable drawings/Auto Actions page is still available through **Old Library**.
+- Added body-shape presets: **Classic, Slim, Standard, Athletic, Heavy, Tall, Short, Feminine and Cartoon**. Presets change real shoulder/hip/torso/arm/leg/head proportions rather than only renaming the same stick figure.
+- Body proportions can be fine-tuned manually; the pose rig's two-bone IK uses the edited arm/leg lengths.
+- Normal raster brushes now use bounded Hermite curve fitting and distance resampling at render time, keeping project points raster/editable while removing visible angular facets.
+- Variable-pressure 2D Pen prefers one continuous anti-aliased pressure outline on normal curves instead of a chain of visible dabs; tight hairpins keep a safe fallback.
+- Built-in textured raster brushes now place their stamps on the fitted centerline with denser per-brush spacing, reducing the comb/ribbed square-stamp look on curved strokes while preserving texture and pressure.
+
 ### Bugs fixed
 - Tool cursor icons now use the same hotspot as the real click coordinate. Selection arrow tip, Lasso loop, Eyedropper nib and centered transform/vector/tool cursors no longer render down/right from the actual pointer.
 - Added customizable canvas-view shortcuts: **V** mirrors the canvas left/right and **F** flips it top/bottom. Both are available in Settings → Shortcuts and the shortcut help window; Reset Shortcuts restores V/F.
@@ -346,6 +354,14 @@
 - Added an unsaved-work guard to avoid restarting with an unfinished project.
 
 ## العربية (المصري)
+
+### مرجع الجسم وتنعيم الفرش الراستر
+- زر **المكتبة** بيفتح دلوقتي مباشرة نافذة **مرجع الجسم** بدل الزحمة القديمة. المكتبة القديمة لسه موجودة من زر **المكتبة القديمة** عشان تقدر ترجع للباليتات والرسومات والأوامر التلقائية.
+- اتضافت أشكال جسم حقيقية: **كلاسيك، نحيف، عادي، رياضي، ضخم، طويل، قصير، أنثوي، وكرتوني**. كل اختيار بيغيّر نسب الكتفين والحوض والجذع والذراعين والرجلين والرأس فعلًا.
+- تقدر تعدّل نسب الجسم يدويًا، والـIK بتاع اليدين والرجلين بيحسب الأطوال الجديدة بدل ما يفضل مربوط بجسم ثابت.
+- الفرش الراستر العادية بقت تعمل **Curve Fitting + Resampling** للمسار وقت الرسم/العرض، فالكيرفات تبقى ناعمة زي إحساس الفيكتور لكن الخط يفضل Raster ومش بيتحوّل لفيكتور.
+- قلم 2D مع ضغط القلم بيفضل يستخدم تغطية متصلة وناعمة في المنحنيات الطبيعية بدل سلسلة دابات تبان كمربعات/درجات، ومع اللفات الحادة جدًا فيه fallback آمن.
+- الفرش ذات التكتشر بقت تحط الـstamps على نفس المنحنى المتنعم وبـSpacing أكثف لكل نوع، فشكل الشرائح/المشط اللي كان بيبان في الكيرفات يقل جدًا مع الحفاظ على خامة الفرشة والضغط.
 
 ### المشاكل اللي اتصلحت
 - أيقونات الأدوات بقت مرتبطة بنفس **Hotspot الضغط الحقيقي**: سن سهم التحديد، مركز اللاسو، سن القطارة، ومركز أدوات التحويل/الفيكتور بقوا في نفس مكان الكليك بدل الإزاحة القديمة لتحت ويمين.
