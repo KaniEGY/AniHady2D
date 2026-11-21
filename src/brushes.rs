@@ -330,7 +330,7 @@ fn paint_marker_safe_raster(
     width:f32,
     color:egui::Color32,
 )->bool {
-    if !marker_needs_safe_raster(points,width) || points.len()<2 || color.a()==0 {return false;}
+    if points.len()<2 || color.a()==0 || !width.is_finite() || width<=0.0 {return false;}
 
     let native_ppp=painter.ctx().pixels_per_point().clamp(1.0,2.0);
     let margin=(width*0.65+3.0).max(4.0);
