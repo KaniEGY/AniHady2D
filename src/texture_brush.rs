@@ -201,18 +201,18 @@ impl TextureBrush {
         // brush diameter for smooth media. Our old universal 24%-diameter
         // spacing exposed individual stamps on pencils/chalk/dry media.
         match self {
-            Self::Airbrush => 0.20,
-            Self::Watercolor => 0.28,
-            Self::Sketch => 0.26,
-            Self::Graphite => 0.22,
-            Self::Dry => 0.24,
-            Self::Chalk => 0.24,
-            Self::Charcoal => 0.22,
-            Self::Pastel => 0.22,
-            Self::Calligraphy => 0.18,
-            Self::SoftSketch => 0.24,
-            Self::SketchBrush => 0.20,
-            Self::Marker => 0.18,
+            Self::Airbrush => 0.12,
+            Self::Watercolor => 0.16,
+            Self::Sketch => 0.13,
+            Self::Graphite => 0.11,
+            Self::Dry => 0.14,
+            Self::Chalk => 0.14,
+            Self::Charcoal => 0.12,
+            Self::Pastel => 0.13,
+            Self::Calligraphy => 0.10,
+            Self::SoftSketch => 0.12,
+            Self::SketchBrush => 0.11,
+            Self::Marker => 0.10,
         }
     }
 
@@ -246,8 +246,18 @@ impl TextureBrush {
         let (wide,tall)=(tip_wide*preset_wide,tip_tall*preset_tall);
         let mut ordinal = 0u32;
         let mut remembered_dir: Option<[f32;2]> = None;
+        // Texture is still raster, but its stamp centers must follow the same
+        // fitted freehand centerline as normal ink. Sampling raw pointer chords
+        // made elongated tips look like little horizontal/vertical bars on a curve.
+        let smoothed=crate::brush_engine::smooth_freehand_points(
+            &stroke.points,stroke.base_width);
+        let centerline: &[crate::project::StrokePoint]=if smoothed.len()>=2 {
+            &smoothed
+        } else {
+            &stroke.points
+        };
         visit_pressure_dabs_spaced(
-            &stroke.points,
+            centerline,
             stroke.base_width,
             self.spacing_radius_ratio(),
             |dab, [dx, dy]| {
@@ -461,8 +471,26 @@ mod tests {
             TextureBrush::Charcoal,TextureBrush::Pastel,TextureBrush::Calligraphy,
             TextureBrush::SoftSketch,
         ] {
-            assert!(brush.spacing_radius_ratio() < 0.30);
+            assert!(brush.spacing_radius_ratio() <= 0.16);
         }
+    }
+
+    #[test]
+    fn textured_curve_sampling_uses_fitted_raster_centerline(){
+        let stroke=Stroke{
+            points:vec![
+                crate::project::StrokePoint{x:0.,y:0.,pressure:1.},
+                crate::project::StrokePoint{x:30.,y:2.,pressure:1.},
+                crate::project::StrokePoint{x:55.,y:28.,pressure:1.},
+                crate::project::StrokePoint{x:60.,y:70.,pressure:1.},
+            ],
+            color:[0,0,0,255],fill_color:None,base_width:12.,
+            is_vector:false,brush_preset:KritaBrushPreset::GraphitePencil,
+            opacity:1.,brush_texture_id:None,tip_shape:BrushTipShape::Round,
+        };
+        let mut count=0usize;
+        TextureBrush::Graphite.stamps(&stroke,|_|count+=1);
+        assert!(count>30,"curve should receive dense texture stamps, got {count}");
     }
 
     #[test]
