@@ -3668,7 +3668,15 @@ impl StickApp {
         self.stabilized_cursor = Some(position);
         let point = StrokePoint { x: position.x, y: position.y, pressure };
         if let Some(stroke) = &mut self.current_stroke {
-            if stroke.points.len() < 20_000 && stroke.points.last()
+            // Marker strokes are rendered from a smoothed centerline and do not
+            // benefit from tens of thousands of raw pointer events. Keeping a
+            // tighter raw-point ceiling prevents pathological scribbles from
+            // ballooning CPU/RAM work after release while preserving the full
+            // visible path length.
+            let point_cap=if !stroke.is_vector
+                && stroke.brush_preset==KritaBrushPreset::ChiselMarker
+            {10_000}else{20_000};
+            if stroke.points.len() < point_cap && stroke.points.last()
                 .is_none_or(|p| (p.x - point.x).hypot(p.y - point.y) >= 1.5) {
                 stroke.points.push(point);
             }
