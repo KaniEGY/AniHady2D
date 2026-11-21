@@ -128,6 +128,15 @@ impl PoseGuide {
     }
 
     pub fn mark_custom(&mut self){self.body_preset=BodyPreset::Custom;}
+
+    pub fn reset_pose_angles(&mut self){
+        self.head_offset_x=0.0; self.head_offset_y=0.0;
+        self.torso_tilt_deg=0.0; self.shoulder_deg=0.0; self.hip_deg=0.0;
+        self.left_arm_deg=125.0; self.right_arm_deg=55.0;
+        self.left_forearm_deg=105.0; self.right_forearm_deg=75.0;
+        self.left_leg_deg=110.0; self.right_leg_deg=70.0;
+        self.left_shin_deg=95.0; self.right_shin_deg=85.0;
+    }
 }
 
 #[derive(Clone,Copy,Debug)]
