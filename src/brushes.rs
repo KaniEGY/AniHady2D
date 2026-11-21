@@ -247,7 +247,7 @@ fn paint_marker_hairpin_raster(
 )->bool {
     if !marker_has_hairpin(points,width) || points.len()<2 || color.a()==0 {return false;}
 
-    let ppp=painter.pixels_per_point().clamp(1.0,2.0);
+    let ppp=painter.ctx().pixels_per_point().clamp(1.0,2.0);
     let margin=(width*0.65+3.0).max(4.0);
     let mut min=egui::pos2(f32::INFINITY,f32::INFINITY);
     let mut max=egui::pos2(f32::NEG_INFINITY,f32::NEG_INFINITY);
