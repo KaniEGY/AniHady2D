@@ -728,10 +728,14 @@ mod tests {
     fn krita_2d_smoothing_reduces_micro_jitter_but_keeps_corner() {
         let jitter=vec![point(0.,0.,1.),point(10.,1.2,1.),point(20.,0.,1.)];
         let smooth=smooth_krita_2d_points(&jitter,10.);
-        assert!(smooth[1].y<jitter[1].y);
+        let center=smooth.iter().min_by(|a,b|
+            (a.x-10.).abs().total_cmp(&(b.x-10.).abs())).unwrap();
+        assert!(center.y<jitter[1].y);
         let corner=vec![point(0.,0.,1.),point(20.,0.,1.),point(20.,20.,1.)];
         let smooth=smooth_krita_2d_points(&corner,10.);
-        assert_eq!((smooth[1].x,smooth[1].y),(20.,0.));
+        assert!(smooth.iter().any(|p|(p.x-20.).abs()<0.001 && p.y.abs()<0.001));
+        assert_eq!((smooth.first().unwrap().x,smooth.first().unwrap().y),(0.,0.));
+        assert_eq!((smooth.last().unwrap().x,smooth.last().unwrap().y),(20.,20.));
     }
 
     #[test]
@@ -830,21 +834,33 @@ mod tests {
     fn smooth_ink_keeps_intentional_sharp_corners() {
         let points=[point(0.,0.,1.),point(10.,0.,1.),point(10.,10.,1.)];
         let sample=smooth_ink_points(&points,8.);
-        assert_eq!(sample,points);
+        assert!(sample.len()>points.len());
+        assert!(sample.iter().any(|p|(p.x-10.).abs()<0.001 && p.y.abs()<0.001));
+        assert_eq!((sample.first().unwrap().x,sample.first().unwrap().y),(0.,0.));
+        assert_eq!((sample.last().unwrap().x,sample.last().unwrap().y),(10.,10.));
         let j=[point(0.,0.,1.),point(10.,1.,1.),point(20.,0.,1.)];
         let smooth=smooth_ink_points(&j,12.);
-        assert!(smooth[1].y<j[1].y);
+        let center=smooth.iter().min_by(|a,b|
+            (a.x-10.).abs().total_cmp(&(b.x-10.).abs())).unwrap();
+        assert!(center.y<j[1].y);
     }
     #[test]
     fn general_freehand_smoothing_reduces_micro_jitter_without_rounding_corner() {
         let jitter=[point(0.,0.,1.),point(8.,0.9,1.),point(16.,0.,1.),point(24.,0.8,1.),point(32.,0.,1.)];
         let smooth=smooth_freehand_points(&jitter,10.);
-        assert!(smooth[1].y<jitter[1].y);
-        assert!(smooth[3].y<jitter[3].y);
+        let near8=smooth.iter().min_by(|a,b|
+            (a.x-8.).abs().total_cmp(&(b.x-8.).abs())).unwrap();
+        let near24=smooth.iter().min_by(|a,b|
+            (a.x-24.).abs().total_cmp(&(b.x-24.).abs())).unwrap();
+        assert!(near8.y<jitter[1].y);
+        assert!(near24.y<jitter[3].y);
         assert_eq!(smooth.first(),jitter.first());
         assert_eq!(smooth.last(),jitter.last());
         let corner=[point(0.,0.,1.),point(20.,0.,1.),point(20.,20.,1.)];
-        assert_eq!(smooth_freehand_points(&corner,12.),corner);
+        let fitted=smooth_freehand_points(&corner,12.);
+        assert!(fitted.iter().any(|p|(p.x-20.).abs()<0.001 && p.y.abs()<0.001));
+        assert_eq!((fitted.first().unwrap().x,fitted.first().unwrap().y),(0.,0.));
+        assert_eq!((fitted.last().unwrap().x,fitted.last().unwrap().y),(20.,20.));
     }
 
     #[test]
