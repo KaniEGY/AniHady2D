@@ -206,6 +206,69 @@ fn may_touch_clip<F: Fn(egui::Pos2) -> egui::Pos2>(
 /// مصيّر الفرش الاحترافي:
 /// - يرسم الألوان المائية والماركر والبخاخ كمسار واحد متصل (PathShape) بدون دوائر متداخلة أو نقاط متقطعة
 /// - يزيل الذيل المدبب من G-Pen وقلم الفيكتور
+fn marker_strip_mesh(points: &[egui::Pos2], width: f32, color: egui::Color32) -> Option<egui::Mesh> {
+    if points.len() < 2 || !width.is_finite() || width <= 0.0 || color.a() == 0 {
+        return None;
+    }
+    let mut clean = Vec::with_capacity(points.len());
+    for &p in points {
+        if !p.x.is_finite() || !p.y.is_finite() { continue; }
+        if clean.last().is_none_or(|q: &egui::Pos2| q.distance_sq(p) > 0.01) {
+            clean.push(p);
+        }
+    }
+    if clean.len() < 2 { return None; }
+
+    let radius = (width * 0.5).max(0.25);
+    let dir = |a: egui::Pos2, b: egui::Pos2| {
+        let d = b - a;
+        let len = d.length();
+        if len > 0.0001 { d / len } else { egui::vec2(1.0, 0.0) }
+    };
+    let mut left = Vec::with_capacity(clean.len());
+    let mut right = Vec::with_capacity(clean.len());
+    for i in 0..clean.len() {
+        let prev = if i == 0 { dir(clean[0], clean[1]) } else { dir(clean[i - 1], clean[i]) };
+        let next = if i + 1 == clean.len() { prev } else { dir(clean[i], clean[i + 1]) };
+        let prev_n = egui::vec2(-prev.y, prev.x);
+        let next_n = egui::vec2(-next.y, next.x);
+        let turn = prev.dot(next);
+        let (normal, miter) = if i == 0 {
+            (next_n, 1.0)
+        } else if i + 1 == clean.len() {
+            (prev_n, 1.0)
+        } else if turn < -0.70 {
+            (next_n, 1.0)
+        } else {
+            let sum = prev_n + next_n;
+            let n = if sum.length_sq() > 0.0001 { sum.normalized() } else { next_n };
+            let denom = n.dot(next_n).abs().max(0.20);
+            (n, (1.0 / denom).min(1.35))
+        };
+        let off = normal * (radius * miter);
+        left.push(clean[i] + off);
+        right.push(clean[i] - off);
+    }
+
+    let mut mesh = egui::Mesh::default();
+    for i in 0..clean.len() {
+        mesh.vertices.push(egui::epaint::Vertex {
+            pos: left[i], uv: egui::epaint::WHITE_UV, color,
+        });
+        mesh.vertices.push(egui::epaint::Vertex {
+            pos: right[i], uv: egui::epaint::WHITE_UV, color,
+        });
+    }
+    for i in 0..clean.len() - 1 {
+        let a = (i * 2) as u32;
+        let b = a + 1;
+        let c = a + 2;
+        let d = a + 3;
+        mesh.indices.extend_from_slice(&[a, b, c, b, d, c]);
+    }
+    Some(mesh)
+}
+
 pub fn draw_stroke_pro<F: Fn(egui::Pos2) -> egui::Pos2>(
     painter: &egui::Painter,
     stroke: &Stroke,
@@ -322,14 +385,38 @@ pub fn draw_stroke_pro<F: Fn(egui::Pos2) -> egui::Pos2>(
         } else {
             screen_pts.get_or_insert_with(project_points).clone()
         };
+        if !stroke.is_vector && stroke.brush_preset == KritaBrushPreset::ChiselMarker {
+            // A wide translucent egui polyline can overlap its join triangles,
+            // making dark wedges at sampled points. This shared-vertex strip
+            // gives the marker a single coverage surface across every join.
+            if let Some(mesh) = marker_strip_mesh(&points, width * scale, ink) {
+                painter.add(egui::Shape::mesh(mesh));
+                if points.len() >= 2 {
+                    for (endpoint, interior) in [
+                        (points[0], points[1]),
+                        (points[points.len()-1], points[points.len()-2]),
+                    ] {
+                        let cap = crate::brush_engine::raster_tip_cap_polygon(
+                            (endpoint.x, endpoint.y), (interior.x, interior.y),
+                            width * scale, stroke.tip_shape,
+                        );
+                        if cap.len() >= 3 {
+                            painter.add(egui::Shape::convex_polygon(
+                                cap.into_iter().map(|(x,y)| egui::pos2(x,y)).collect(),
+                                ink, egui::Stroke::NONE,
+                            ));
+                        }
+                    }
+                }
+                return;
+            }
+        }
+
         painter.add(egui::Shape::line(points.clone(), egui::Stroke::new(width * scale, ink)));
-        // A translucent Marker used to receive two full circles over the line
-        // body, darkening half of each endpoint. Raster tips now use *outside*
-        // half-caps only, so no area is alpha-blended twice. Vector behavior is
-        // intentionally left unchanged.
+        // Non-round raster tips use outside half-caps so endpoints do not get
+        // a second translucent coat.
         if !stroke.is_vector && points.len() >= 2
-            && (stroke.tip_shape != BrushTipShape::Round
-                || stroke.brush_preset == KritaBrushPreset::ChiselMarker)
+            && stroke.tip_shape != BrushTipShape::Round
         {
             let pairs=[
                 (points[0],points[1]),
@@ -407,6 +494,21 @@ mod viewport_tests {
             for y in [12., 24., 40., 54.] { assert!(covered(egui::pos2(x, y))); }
             for y in [18., 32., 47.] { assert!(!covered(egui::pos2(x, y))); }
         }
+    }
+
+    #[test]
+    fn marker_strip_uses_one_shared_surface_without_join_dabs() {
+        let color = egui::Color32::from_rgba_unmultiplied(20,30,40,100);
+        let points = [
+            egui::pos2(0.0,0.0), egui::pos2(30.0,2.0),
+            egui::pos2(55.0,18.0), egui::pos2(80.0,20.0),
+        ];
+        let mesh = marker_strip_mesh(&points, 18.0, color).expect("marker strip");
+        assert_eq!(mesh.vertices.len(), points.len() * 2);
+        assert_eq!(mesh.indices.len(), (points.len() - 1) * 6);
+        assert!(mesh.vertices.iter().all(|v|
+            v.pos.x.is_finite() && v.pos.y.is_finite() && v.color == color));
+        assert!(mesh.indices.iter().all(|&i| (i as usize) < mesh.vertices.len()));
     }
 
     #[test]
