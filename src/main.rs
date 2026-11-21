@@ -1921,6 +1921,7 @@ struct StickApp {
     show_command_palette: bool,
     command_search: String,
     show_assets_library: bool,
+    assets_library_body_mode: bool,
     show_pose_guide: bool,
     drawing_assets: drawing_assets::DrawingAssets,
     pose_guide: pose_guide::PoseGuide,
@@ -2142,6 +2143,7 @@ impl StickApp {
             show_command_palette: false,
             command_search: String::new(),
             show_assets_library: false,
+            assets_library_body_mode: true,
             show_pose_guide: false,
             drawing_assets: drawing_assets::DrawingAssets::load(),
             pose_guide: pose_guide::PoseGuide::default(),
@@ -3326,61 +3328,175 @@ impl StickApp {
             let mut picked_color=None;
             let mut add_color_to=None;
             let mut action_to_run=None;
-            let mut open_pose=false;
-            egui::Window::new(tr(lang,"Drawing Assets","مكتبة الرسم"))
-                .open(&mut open).default_width(430.0).show(ctx,|ui|{
-                    ui.label(tr(lang,
-                        "Local palettes, reusable drawings and Auto Actions. Imported brushes stay in the Brush tool.",
-                        "باليتات ورسومات قابلة لإعادة الاستخدام وأوامر تلقائية. الفرش المستوردة موجودة داخل أداة الفرشة."));
-                    if ui.add_enabled(!self.selected_stroke_indices.is_empty(),
-                        egui::Button::new(tr(lang,
-                            "Save selected drawing as Asset","احفظ الرسم المحدد في المكتبة"))).clicked()
-                    {
-                        add_color_to=Some(usize::MAX);
-                    }
-                    ui.separator();
-                    if !self.drawing_assets.stroke_assets.is_empty() {
-                        ui.strong(tr(lang,"Reusable Drawing Assets","رسومات محفوظة"));
-                        for (index,asset) in self.drawing_assets.stroke_assets.iter().enumerate() {
-                            if ui.button(format!("＋ {}  ·  {} {}",
-                                asset.name,asset.strokes.len(),tr(lang,"strokes","خطوط"))).clicked()
-                            {
-                                action_to_run=Some(usize::MAX-index);
+            let title=if self.assets_library_body_mode {
+                tr(lang,"Body Reference Studio","مرجع الجسم")
+            } else {
+                tr(lang,"Drawing Assets","مكتبة الرسم")
+            };
+            egui::Window::new(title)
+                .open(&mut open).default_width(470.0).show(ctx,|ui|{
+                    if self.assets_library_body_mode {
+                        ui.horizontal(|ui|{
+                            if ui.button(tr(lang,"← Old Library","← المكتبة القديمة")).clicked(){
+                                self.assets_library_body_mode=false;
                             }
+                            ui.strong(tr(lang,"Body / Pose Reference","مرجع الجسم والوضعية"));
+                        });
+                        ui.label(tr(lang,
+                            "Use a body preset, then drag joints directly on the canvas or fine-tune the proportions here.",
+                            "اختار شكل جسم، وبعدها اسحب المفاصل مباشرة على الكانفا أو ظبط النسب من هنا."));
+                        ui.separator();
+
+                        ui.horizontal_wrapped(|ui|{
+                            ui.checkbox(&mut self.pose_guide.visible,
+                                tr(lang,"Show on canvas","إظهار على الكانفا"));
+                            ui.checkbox(&mut self.pose_edit_mode,
+                                tr(lang,"Direct joint editing","تحريك المفاصل مباشرة"));
+                        });
+                        ui.add(egui::Slider::new(&mut self.pose_guide.scale,0.25..=3.0)
+                            .text(tr(lang,"Overall size","الحجم العام")));
+                        if ui.add(egui::Slider::new(&mut self.pose_guide.head_scale,0.45..=2.0)
+                            .text(tr(lang,"Head size","حجم الرأس"))).changed()
+                        {self.pose_guide.mark_custom();}
+                        ui.add(egui::Slider::new(&mut self.pose_guide.opacity,0.05..=1.0)
+                            .text(tr(lang,"Opacity","الشفافية")));
+                        ui.horizontal(|ui|{
+                            ui.label(tr(lang,"Position","المكان"));
+                            ui.add(egui::DragValue::new(&mut self.pose_guide.x).range(0.0..=1.0)
+                                .speed(0.01).prefix("X "));
+                            ui.add(egui::DragValue::new(&mut self.pose_guide.y).range(0.0..=1.0)
+                                .speed(0.01).prefix("Y "));
+                        });
+
+                        ui.separator();
+                        ui.strong(tr(lang,"Body Shapes","أشكال الجسم"));
+                        let mut chosen=None;
+                        ui.horizontal_wrapped(|ui|{
+                            for preset in pose_guide::BODY_PRESETS {
+                                let (en,ar)=preset.labels();
+                                if ui.selectable_label(
+                                    self.pose_guide.body_preset==preset,tr(lang,en,ar)
+                                ).clicked(){chosen=Some(preset);}
+                            }
+                        });
+                        if let Some(preset)=chosen {
+                            self.pose_guide.apply_body_preset(preset);
+                            self.pose_guide.visible=true;
+                        }
+
+                        ui.separator();
+                        ui.strong(tr(lang,"Body Proportions","نِسَب الجسم"));
+                        let mut body_changed=false;
+                        body_changed|=ui.add(egui::Slider::new(
+                            &mut self.pose_guide.torso_length,0.55..=1.65)
+                            .text(tr(lang,"Torso length","طول الجذع"))).changed();
+                        body_changed|=ui.add(egui::Slider::new(
+                            &mut self.pose_guide.shoulder_width,0.55..=1.65)
+                            .text(tr(lang,"Shoulder width","عرض الكتفين"))).changed();
+                        body_changed|=ui.add(egui::Slider::new(
+                            &mut self.pose_guide.hip_width,0.55..=1.70)
+                            .text(tr(lang,"Hip width","عرض الحوض"))).changed();
+                        body_changed|=ui.add(egui::Slider::new(
+                            &mut self.pose_guide.upper_arm_length,0.55..=1.60)
+                            .text(tr(lang,"Upper arm length","طول الذراع"))).changed();
+                        body_changed|=ui.add(egui::Slider::new(
+                            &mut self.pose_guide.forearm_length,0.55..=1.60)
+                            .text(tr(lang,"Forearm length","طول الساعد"))).changed();
+                        body_changed|=ui.add(egui::Slider::new(
+                            &mut self.pose_guide.thigh_length,0.55..=1.70)
+                            .text(tr(lang,"Thigh length","طول الفخذ"))).changed();
+                        body_changed|=ui.add(egui::Slider::new(
+                            &mut self.pose_guide.shin_length,0.55..=1.70)
+                            .text(tr(lang,"Shin length","طول الساق"))).changed();
+                        if body_changed {self.pose_guide.mark_custom();}
+
+                        ui.collapsing(tr(lang,"Pose angles","زوايا الوضعية"),|ui|{
+                            for (label,value) in [
+                                (tr(lang,"Torso","الجذع"),&mut self.pose_guide.torso_tilt_deg),
+                                (tr(lang,"Left upper arm","الذراع الشمال"),&mut self.pose_guide.left_arm_deg),
+                                (tr(lang,"Right upper arm","الذراع اليمين"),&mut self.pose_guide.right_arm_deg),
+                                (tr(lang,"Left forearm","الساعد الشمال"),&mut self.pose_guide.left_forearm_deg),
+                                (tr(lang,"Right forearm","الساعد اليمين"),&mut self.pose_guide.right_forearm_deg),
+                                (tr(lang,"Left thigh","الفخذ الشمال"),&mut self.pose_guide.left_leg_deg),
+                                (tr(lang,"Right thigh","الفخذ اليمين"),&mut self.pose_guide.right_leg_deg),
+                                (tr(lang,"Left shin","الساق الشمال"),&mut self.pose_guide.left_shin_deg),
+                                (tr(lang,"Right shin","الساق اليمين"),&mut self.pose_guide.right_shin_deg),
+                            ] {
+                                ui.add(egui::Slider::new(value,-180.0..=180.0).text(label));
+                            }
+                        });
+
+                        ui.horizontal_wrapped(|ui|{
+                            if ui.button(tr(lang,"Reset pose","إعادة الوضعية")).clicked(){
+                                self.pose_guide.reset_pose_angles();
+                                self.pose_guide.visible=true;
+                                self.pose_drag_joint=None;
+                            }
+                            if ui.button(tr(lang,"Classic body","الجسم الكلاسيكي")).clicked(){
+                                self.pose_guide.apply_body_preset(pose_guide::BodyPreset::Classic);
+                            }
+                            if ui.button(tr(lang,"Center","توسيط")).clicked(){
+                                self.pose_guide.x=0.5;self.pose_guide.y=0.55;
+                            }
+                        });
+                        ui.small(tr(lang,
+                            "The guide is editor-only and never appears in export.",
+                            "المرجع للمساعدة في الرسم فقط ومش بيظهر في التصدير."));
+                    } else {
+                        ui.horizontal(|ui|{
+                            if ui.button(tr(lang,"Body Reference →","مرجع الجسم →")).clicked(){
+                                self.assets_library_body_mode=true;
+                                self.pose_guide.visible=true;
+                            }
+                            ui.strong(tr(lang,"Legacy drawing library","مكتبة الرسم القديمة"));
+                        });
+                        ui.label(tr(lang,
+                            "Palettes, reusable drawings and Auto Actions.",
+                            "باليتات ورسومات محفوظة وأوامر تلقائية."));
+                        if ui.add_enabled(!self.selected_stroke_indices.is_empty(),
+                            egui::Button::new(tr(lang,
+                                "Save selected drawing as Asset","احفظ الرسم المحدد في المكتبة"))).clicked()
+                        {
+                            add_color_to=Some(usize::MAX);
                         }
                         ui.separator();
-                    }
-                    for (pi,palette) in self.drawing_assets.palettes.iter().enumerate() {
-                        ui.horizontal(|ui|{
-                            ui.strong(&palette.name);
-                            if ui.small_button("+")
-                                .on_hover_text(tr(lang,"Add current color","ضيف اللون الحالي")).clicked()
-                            {add_color_to=Some(pi);}
-                        });
-                        ui.horizontal_wrapped(|ui|{
-                            for color in &palette.colors {
-                                let c=egui::Color32::from_rgba_unmultiplied(
-                                    color[0],color[1],color[2],color[3]);
-                                let (rect,response)=ui.allocate_exact_size(
-                                    egui::vec2(25.0,25.0),egui::Sense::click());
-                                ui.painter().rect_filled(rect,4.0,c);
-                                ui.painter().rect_stroke(rect,4.0,
-                                    egui::Stroke::new(1.0,egui::Color32::from_gray(120)));
-                                if response.clicked(){picked_color=Some(*color);}
+                        if !self.drawing_assets.stroke_assets.is_empty() {
+                            ui.strong(tr(lang,"Reusable Drawing Assets","رسومات محفوظة"));
+                            for (index,asset) in self.drawing_assets.stroke_assets.iter().enumerate() {
+                                if ui.button(format!("＋ {}  ·  {} {}",
+                                    asset.name,asset.strokes.len(),tr(lang,"strokes","خطوط"))).clicked()
+                                {action_to_run=Some(usize::MAX-index);}
                             }
-                        });
-                        ui.add_space(5.0);
-                    }
-                    ui.separator();
-                    ui.strong(tr(lang,"Auto Actions","الأوامر التلقائية"));
-                    for (index,action) in self.drawing_assets.auto_actions.iter().enumerate(){
-                        if ui.button(format!("▶ {}  ·  {} {}",action.name,
-                            action.commands.len(),tr(lang,"steps","خطوات"))).clicked()
-                        {action_to_run=Some(index);}
-                    }
-                    ui.separator();
-                    if ui.button(tr(lang,"Pose Reference Guide","مرجع وضعية الجسم")).clicked(){
-                        open_pose=true;
+                            ui.separator();
+                        }
+                        for (pi,palette) in self.drawing_assets.palettes.iter().enumerate() {
+                            ui.horizontal(|ui|{
+                                ui.strong(&palette.name);
+                                if ui.small_button("+")
+                                    .on_hover_text(tr(lang,"Add current color","ضيف اللون الحالي")).clicked()
+                                {add_color_to=Some(pi);}
+                            });
+                            ui.horizontal_wrapped(|ui|{
+                                for color in &palette.colors {
+                                    let c=egui::Color32::from_rgba_unmultiplied(
+                                        color[0],color[1],color[2],color[3]);
+                                    let (rect,response)=ui.allocate_exact_size(
+                                        egui::vec2(25.0,25.0),egui::Sense::click());
+                                    ui.painter().rect_filled(rect,4.0,c);
+                                    ui.painter().rect_stroke(rect,4.0,
+                                        egui::Stroke::new(1.0,egui::Color32::from_gray(120)));
+                                    if response.clicked(){picked_color=Some(*color);}
+                                }
+                            });
+                            ui.add_space(5.0);
+                        }
+                        ui.separator();
+                        ui.strong(tr(lang,"Auto Actions","الأوامر التلقائية"));
+                        for (index,action) in self.drawing_assets.auto_actions.iter().enumerate(){
+                            if ui.button(format!("▶ {}  ·  {} {}",action.name,
+                                action.commands.len(),tr(lang,"steps","خطوات"))).clicked()
+                            {action_to_run=Some(index);}
+                        }
                     }
                 });
             self.show_assets_library=open;
@@ -3399,10 +3515,6 @@ impl StickApp {
                     let asset_index=usize::MAX-index;
                     self.insert_drawing_asset(asset_index);
                 }
-            }
-            if open_pose {
-                self.show_pose_guide=true;
-                self.pose_guide.visible=true;
             }
         }
 
@@ -7505,7 +7617,11 @@ impl eframe::App for StickApp {
                         .on_hover_text(tr(lang,"Quick Access / Commands","الوصول السريع / الأوامر"))
                         .clicked(){self.show_command_palette=true;}
                     if ui.small_button(tr(lang,"Assets","المكتبة"))
-                        .clicked(){self.show_assets_library=true;}
+                        .clicked(){
+                            self.show_assets_library=true;
+                            self.assets_library_body_mode=true;
+                            self.pose_guide.visible=true;
+                        }
                     let (pose_rect,pose_response)=ui.allocate_exact_size(
                         egui::vec2(36.0,28.0),egui::Sense::click());
                     ui.painter().rect_filled(pose_rect,6.0,
@@ -7538,7 +7654,10 @@ impl eframe::App for StickApp {
                             ui.close_menu();
                         }
                         if ui.button(tr(lang,"Advanced rig settings","إعدادات الهيكل")).clicked(){
-                            self.show_pose_guide=true;ui.close_menu();
+                            self.show_assets_library=true;
+                            self.assets_library_body_mode=true;
+                            self.pose_guide.visible=true;
+                            ui.close_menu();
                         }
                     });
                 });
