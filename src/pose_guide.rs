@@ -57,6 +57,8 @@ impl BodyPreset {
 #[serde(default)]
 pub struct PoseGuide {
     pub visible:bool,
+    /// True draws the editor-only rig over artwork; false keeps it behind artwork.
+    pub in_front:bool,
     pub x:f32,
     pub y:f32,
     pub scale:f32,
@@ -90,7 +92,7 @@ pub struct PoseGuide {
 }
 impl Default for PoseGuide{
     fn default()->Self{Self{
-        visible:false,x:0.5,y:0.55,scale:1.0,opacity:0.45,
+        visible:false,in_front:true,x:0.5,y:0.55,scale:1.0,opacity:0.45,
         head_scale:1.0,head_offset_x:0.0,head_offset_y:0.0,
         body_preset:BodyPreset::Classic,
         torso_length:1.0,shoulder_width:1.0,hip_width:1.0,

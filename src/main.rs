@@ -1921,7 +1921,6 @@ struct StickApp {
     show_command_palette: bool,
     command_search: String,
     show_assets_library: bool,
-    assets_library_body_mode: bool,
     show_pose_guide: bool,
     drawing_assets: drawing_assets::DrawingAssets,
     pose_guide: pose_guide::PoseGuide,
@@ -2143,7 +2142,6 @@ impl StickApp {
             show_command_palette: false,
             command_search: String::new(),
             show_assets_library: false,
-            assets_library_body_mode: true,
             show_pose_guide: false,
             drawing_assets: drawing_assets::DrawingAssets::load(),
             pose_guide: pose_guide::PoseGuide::default(),
@@ -3325,31 +3323,28 @@ impl StickApp {
 
         if self.show_assets_library {
             let mut open=true;
-            let mut picked_color=None;
-            let mut add_color_to=None;
-            let mut action_to_run=None;
-            let title=if self.assets_library_body_mode {
-                tr(lang,"Body Reference Studio","مرجع الجسم")
-            } else {
-                tr(lang,"Drawing Assets","مكتبة الرسم")
-            };
-            egui::Window::new(title)
+            egui::Window::new(tr(lang,"Body Reference Studio","مرجع الجسم"))
                 .open(&mut open).default_width(470.0).show(ctx,|ui|{
-                    if self.assets_library_body_mode {
-                        ui.horizontal(|ui|{
-                            if ui.button(tr(lang,"← Old Library","← المكتبة القديمة")).clicked(){
-                                self.assets_library_body_mode=false;
-                            }
-                            ui.strong(tr(lang,"Body / Pose Reference","مرجع الجسم والوضعية"));
-                        });
+                        ui.strong(tr(lang,"Body / Pose Reference","مرجع الجسم والوضعية"));
                         ui.label(tr(lang,
                             "Use a body preset, then drag joints directly on the canvas or fine-tune the proportions here.",
                             "اختار شكل جسم، وبعدها اسحب المفاصل مباشرة على الكانفا أو ظبط النسب من هنا."));
                         ui.separator();
 
                         ui.horizontal_wrapped(|ui|{
-                            self.pose_visibility_checkbox(ui, tr(lang,"Show on canvas","إظهار على الكانفا"));
-                            self.pose_edit_checkbox(ui, tr(lang,"Direct joint editing","تحريك المفاصل مباشرة"));
+                            self.pose_visibility_checkbox(ui, tr(lang,"Visible","ظاهر"));
+                            self.pose_edit_checkbox(ui, tr(lang,"Move joints","تحريك المفاصل"));
+                            let depth_label=if self.pose_guide.in_front {
+                                tr(lang,"Front","أمام")
+                            } else {
+                                tr(lang,"Back","خلف")
+                            };
+                            if ui.button(depth_label).on_hover_text(tr(lang,
+                                "Front: the rig stays over your drawing. Back: your drawing appears over the rig.",
+                                "أمام: الهيكل فوق الرسم. خلف: الرسم بيظهر فوق الهيكل."
+                            )).clicked() {
+                                self.pose_guide.in_front=!self.pose_guide.in_front;
+                            }
                         });
                         ui.add(egui::Slider::new(&mut self.pose_guide.scale,0.25..=3.0)
                             .text(tr(lang,"Overall size","الحجم العام")));
@@ -3440,88 +3435,26 @@ impl StickApp {
                         ui.small(tr(lang,
                             "The guide is editor-only and never appears in export.",
                             "المرجع للمساعدة في الرسم فقط ومش بيظهر في التصدير."));
-                    } else {
-                        ui.horizontal(|ui|{
-                            if ui.button(tr(lang,"Body Reference →","مرجع الجسم →")).clicked(){
-                                self.assets_library_body_mode=true;
-                                self.pose_guide.visible=true;
-                            }
-                            ui.strong(tr(lang,"Legacy drawing library","مكتبة الرسم القديمة"));
-                        });
-                        ui.label(tr(lang,
-                            "Palettes, reusable drawings and Auto Actions.",
-                            "باليتات ورسومات محفوظة وأوامر تلقائية."));
-                        if ui.add_enabled(!self.selected_stroke_indices.is_empty(),
-                            egui::Button::new(tr(lang,
-                                "Save selected drawing as Asset","احفظ الرسم المحدد في المكتبة"))).clicked()
-                        {
-                            add_color_to=Some(usize::MAX);
-                        }
-                        ui.separator();
-                        if !self.drawing_assets.stroke_assets.is_empty() {
-                            ui.strong(tr(lang,"Reusable Drawing Assets","رسومات محفوظة"));
-                            for (index,asset) in self.drawing_assets.stroke_assets.iter().enumerate() {
-                                if ui.button(format!("＋ {}  ·  {} {}",
-                                    asset.name,asset.strokes.len(),tr(lang,"strokes","خطوط"))).clicked()
-                                {action_to_run=Some(usize::MAX-index);}
-                            }
-                            ui.separator();
-                        }
-                        for (pi,palette) in self.drawing_assets.palettes.iter().enumerate() {
-                            ui.horizontal(|ui|{
-                                ui.strong(&palette.name);
-                                if ui.small_button("+")
-                                    .on_hover_text(tr(lang,"Add current color","ضيف اللون الحالي")).clicked()
-                                {add_color_to=Some(pi);}
-                            });
-                            ui.horizontal_wrapped(|ui|{
-                                for color in &palette.colors {
-                                    let c=egui::Color32::from_rgba_unmultiplied(
-                                        color[0],color[1],color[2],color[3]);
-                                    let (rect,response)=ui.allocate_exact_size(
-                                        egui::vec2(25.0,25.0),egui::Sense::click());
-                                    ui.painter().rect_filled(rect,4.0,c);
-                                    ui.painter().rect_stroke(rect,4.0,
-                                        egui::Stroke::new(1.0,egui::Color32::from_gray(120)));
-                                    if response.clicked(){picked_color=Some(*color);}
-                                }
-                            });
-                            ui.add_space(5.0);
-                        }
-                        ui.separator();
-                        ui.strong(tr(lang,"Auto Actions","الأوامر التلقائية"));
-                        for (index,action) in self.drawing_assets.auto_actions.iter().enumerate(){
-                            if ui.button(format!("▶ {}  ·  {} {}",action.name,
-                                action.commands.len(),tr(lang,"steps","خطوات"))).clicked()
-                            {action_to_run=Some(index);}
-                        }
-                    }
                 });
             self.show_assets_library=open;
-            if let Some(color)=picked_color {self.brush_color=color;}
-            if let Some(index)=add_color_to {
-                if index==usize::MAX {
-                    self.save_selected_as_drawing_asset();
-                } else if self.drawing_assets.add_color_to_palette(index,self.brush_color) {
-                    let _=self.drawing_assets.save();
-                }
-            }
-            if let Some(index)=action_to_run {
-                if index<=self.drawing_assets.auto_actions.len().saturating_sub(1) {
-                    self.run_auto_action(index);
-                } else {
-                    let asset_index=usize::MAX-index;
-                    self.insert_drawing_asset(asset_index);
-                }
-            }
         }
 
         if self.show_pose_guide {
             let mut open=true;
             egui::Window::new(tr(lang,"Pose Reference","مرجع الوضعية"))
                 .open(&mut open).default_width(330.0).show(ctx,|ui|{
-                    self.pose_visibility_checkbox(ui, tr(lang,"Show guide on canvas","اظهر المرجع على الكانفا"));
-                    self.pose_edit_checkbox(ui, tr(lang,"Direct joint editing","تحريك المفاصل مباشرة"));
+                    ui.horizontal_wrapped(|ui|{
+                        self.pose_visibility_checkbox(ui, tr(lang,"Visible","ظاهر"));
+                        self.pose_edit_checkbox(ui, tr(lang,"Move joints","تحريك المفاصل"));
+                        let depth_label=if self.pose_guide.in_front {
+                            tr(lang,"Front","أمام")
+                        } else {
+                            tr(lang,"Back","خلف")
+                        };
+                        if ui.button(depth_label).clicked() {
+                            self.pose_guide.in_front=!self.pose_guide.in_front;
+                        }
+                    });
                     ui.add(egui::Slider::new(&mut self.pose_guide.scale,0.25..=3.0)
                         .text(tr(lang,"Scale","الحجم")));
                     ui.add(egui::Slider::new(&mut self.pose_guide.head_scale,0.45..=2.0)
@@ -7698,7 +7631,6 @@ impl eframe::App for StickApp {
                     if ui.small_button(tr(lang,"Assets","المكتبة"))
                         .clicked(){
                             self.show_assets_library=true;
-                            self.assets_library_body_mode=true;
                             self.pose_guide.visible=true;
                         }
                     let (pose_rect,pose_response)=ui.allocate_exact_size(
@@ -7716,7 +7648,21 @@ impl eframe::App for StickApp {
                         "اضغط عشان تظهر الهيكل وتحرّك مفاصله. اضغط تاني عشان تخفيه."));
                     pose_response.context_menu(|ui|{
                         ui.strong(tr(lang,"Pose Rig","هيكل الوضعية"));
-                        self.pose_visibility_checkbox(ui, tr(lang,"Visible","ظاهر"));
+                        ui.horizontal_wrapped(|ui|{
+                            self.pose_visibility_checkbox(ui, tr(lang,"Visible","ظاهر"));
+                            self.pose_edit_checkbox(ui, tr(lang,"Move joints","تحريك المفاصل"));
+                            let depth_label=if self.pose_guide.in_front {
+                                tr(lang,"Front","أمام")
+                            } else {
+                                tr(lang,"Back","خلف")
+                            };
+                            if ui.button(depth_label).on_hover_text(tr(lang,
+                                "Front: rig over drawing. Back: drawing over rig.",
+                                "أمام: الهيكل فوق الرسم. خلف: الرسم فوق الهيكل."
+                            )).clicked() {
+                                self.pose_guide.in_front=!self.pose_guide.in_front;
+                            }
+                        });
                         ui.add(egui::Slider::new(&mut self.pose_guide.scale,0.25..=3.0)
                             .text(tr(lang,"Body scale","حجم الجسم")));
                         ui.add(egui::Slider::new(&mut self.pose_guide.head_scale,0.45..=2.0)
@@ -7732,7 +7678,6 @@ impl eframe::App for StickApp {
                         }
                         if ui.button(tr(lang,"Advanced rig settings","إعدادات الهيكل")).clicked(){
                             self.show_assets_library=true;
-                            self.assets_library_body_mode=true;
                             self.pose_guide.visible=true;
                             ui.close_menu();
                         }
@@ -10784,6 +10729,11 @@ impl eframe::App for StickApp {
                 }
             }
 
+            if self.pose_guide.visible && !self.pose_guide.in_front {
+                pose_guide::draw_active(&paper_painter,&self.pose_guide,(stage_w,stage_h),&to_screen,
+                    if self.pose_edit_mode {self.pose_drag_joint}else{None});
+            }
+
             let mut canvas_media_select: Option<(usize,usize)> = None;
             let mut canvas_media_action: Option<(usize,usize,bool)> = None; // true=duplicate
             for (layer_index,layer) in self.project.layers.iter().enumerate().rev() {
@@ -11052,7 +11002,7 @@ impl eframe::App for StickApp {
                     draw_stroke_pro(&painter, &preview, None, 1.0, scale, 0.0, 0.0, &to_screen);
                 }
             }
-            if self.pose_guide.visible {
+            if self.pose_guide.visible && self.pose_guide.in_front {
                 pose_guide::draw_active(&paper_painter,&self.pose_guide,(stage_w,stage_h),&to_screen,
                     if self.pose_edit_mode {self.pose_drag_joint}else{None});
             }

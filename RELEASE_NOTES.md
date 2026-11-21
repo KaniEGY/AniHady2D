@@ -4,6 +4,13 @@
 
 ## English (US)
 
+### Marker cleanup & faster pose rig controls
+- Removed the legacy Drawing Assets library UI. **Drawing Assets / المكتبة** now stays focused on the Body Reference Studio.
+- The Pose Rig popup now puts **Visible**, **Move joints**, and **Front/Back** together for fast switching while drawing.
+- **Front** keeps the rig over the artwork; **Back** lets new and existing artwork render over the rig. The rig remains editor-only and is never exported.
+- The translucent Marker now uses one shared-vertex strip instead of overlapping wide-line join triangles, removing the dark/black wedges that appeared at sampled points and bends.
+
+
 ### Pose rig, marker and brush import
 - Click the skeleton icon to show the rig and drag its joints. Click again to hide it and resume drawing. Reopening it keeps the pose.
 - The marker follows an open path. Separate strokes keep their own pen-up positions, including when a quick lift and press arrive in the same frame.
@@ -360,6 +367,13 @@
 - Added an unsaved-work guard to avoid restarting with an unfinished project.
 
 ## العربية (المصري)
+
+### تنظيف الماركر وتحكم أسرع في هيكل الوضعية
+- اتشالت واجهة **مكتبة الرسم القديمة** نهائيًا، وزر المكتبة بقى مخصص لمرجع الجسم والوضعية.
+- قائمة **هيكل الوضعية** بقى فيها **ظاهر** و**تحريك المفاصل** و**أمام/خلف** جنب بعض عشان تقدر تبدّل بسرعة أثناء الرسم.
+- وضع **أمام** بيخلي الهيكل فوق الرسم؛ وضع **خلف** بيخلي الرسم يظهر فوق الهيكل. الهيكل للمساعدة فقط ومش بيدخل في التصدير.
+- الماركر الشفاف بقى بيتبني كشريط واحد مشترك بدل مثلثات الـjoins المتراكبة، وده يمنع العلامات/المثلثات السودا اللي كانت بتظهر على نقاط المسار والانحناءات.
+
 
 ### الهيكل والماركر واستيراد الفرش
 - اضغط أيقونة الهيكل عشان يظهر وتقدر تسحب مفاصله. الضغطة التانية بتخفيه وبترجّعك للرسم، ولما تفتحه تاني هتلاقي آخر وضعية زي ما سيبتها.
