@@ -818,6 +818,35 @@ mod layer_opacity_tests {
     }
 
     #[test]
+    fn marker_preserves_clear_pixels_between_parallel_and_return_passes() {
+        let mut project = project_with_solid_dab(1.0);
+        project.width = 104;
+        project.height = 68;
+        let strokes = &mut project.layers[0].keyframes.get_mut(&1).unwrap().strokes;
+        let mut marker = strokes.pop().unwrap();
+        marker.brush_preset = KritaBrushPreset::ChiselMarker;
+        marker.base_width = 12.0;
+        marker.opacity = 0.4;
+        for path in [
+            &[(12.,12.), (92.,12.)][..],
+            &[(92.,25.), (12.,25.)],
+            &[(12.,42.), (92.,42.), (92.,57.), (12.,57.)],
+        ] {
+            marker.points = path.iter().map(|&(x,y)| StrokePoint { x, y, pressure: 1.0 }).collect();
+            strokes.push(marker.clone());
+        }
+        let image = render_frame_pixmap(&project, 1, true, [0;4]);
+        for x in 18..80 {
+            for y in [12,25,42,57] {
+                assert!((98..=106).contains(&image.pixel(x,y).unwrap().alpha()));
+            }
+            for y in [18,33,49] {
+                assert_eq!(image.pixel(x,y).unwrap().alpha(), 0, "gap at {x},{y}");
+            }
+        }
+    }
+
+    #[test]
     fn textured_brushes_keep_fast_strokes_and_survive_project_roundtrip() {
         use crate::persistence::{atomic_save, migration, sniff};
         let mut previous_pixels = Vec::new();

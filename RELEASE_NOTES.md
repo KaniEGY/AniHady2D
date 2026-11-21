@@ -4,6 +4,12 @@
 
 ## English (US)
 
+### Pose rig, marker and brush import
+- Click the skeleton icon to show the rig and drag its joints. Click again to hide it and resume drawing. Reopening it keeps the pose.
+- The marker follows an open path. Separate strokes keep their own pen-up positions, including when a quick lift and press arrive in the same frame.
+- Import TIFF, TGA, GIF (first frame) and Netpbm image tips, or open a ZIP containing ABR, MyPaint and image brushes. Individual image files keep their own names inside packs.
+- Procreate imports read the shape mask. Krita presets with a missing tip now ask for the resource instead of loading the preview as a brush.
+
 ### Body Reference Studio & smooth raster curves
 - **Drawing Assets** now opens directly into a dedicated **Body Reference Studio**. The previous palettes/reusable drawings/Auto Actions page is still available through **Old Library**.
 - Added body-shape presets: **Classic, Slim, Standard, Athletic, Heavy, Tall, Short, Feminine and Cartoon**. Presets change real shoulder/hip/torso/arm/leg/head proportions rather than only renaming the same stick figure.
@@ -354,6 +360,12 @@
 - Added an unsaved-work guard to avoid restarting with an unfinished project.
 
 ## العربية (المصري)
+
+### الهيكل والماركر واستيراد الفرش
+- اضغط أيقونة الهيكل عشان يظهر وتقدر تسحب مفاصله. الضغطة التانية بتخفيه وبترجّعك للرسم، ولما تفتحه تاني هتلاقي آخر وضعية زي ما سيبتها.
+- الماركر بيتبع مسار القلم وبيسيب الفراغ بين الخطوط. وكل خط بينتهي عند مكان رفع القلم، حتى لو بدأت الخط اللي بعده بسرعة.
+- تقدر تستورد صور سنون الفرش بصيغ TIFF وTGA وGIF (أول فريم) وNetpbm، وتفتح حزمة ZIP فيها فرش ABR أو MyPaint أو صور. كل صورة بتحتفظ باسمها جوّه الحزمة.
+- استيراد Procreate بيقرأ شكل سن الفرشة. ولو فرشة Krita ناقصها ملف السن، البرنامج بيطلب منك تحدده.
 
 ### مرجع الجسم وتنعيم الفرش الراستر
 - زر **المكتبة** بيفتح دلوقتي مباشرة نافذة **مرجع الجسم** بدل الزحمة القديمة. المكتبة القديمة لسه موجودة من زر **المكتبة القديمة** عشان تقدر ترجع للباليتات والرسومات والأوامر التلقائية.

@@ -125,7 +125,7 @@ fn normalized(dx: f32, dy: f32) -> (f32, f32) {
 /// A single outline with round ends and pressure-varying width. A bounded
 /// miter join prevents long spikes at acute angles. Both the canvas and
 /// tiny-skia exporter fill exactly this polygon.
-fn stroke_outline(points: &[StrokePoint], width: f32, pressure_aware: bool) -> Vec<(f32, f32)> {
+pub fn pressure_outline(points: &[StrokePoint], width: f32) -> Vec<(f32, f32)> {
     let samples = prepared_points(points, width);
     if samples.len() < 2 { return Vec::new(); }
     let n = samples.len();
@@ -150,11 +150,7 @@ fn stroke_outline(points: &[StrokePoint], width: f32, pressure_aware: bool) -> V
             let denom = (sum.0 * n1x + sum.1 * n1y).abs();
             (sum.0, sum.1, (1.0 / denom.max(0.01)).min(1.5))
         };
-        let pressure = if pressure_aware {
-            center.pressure.clamp(0.05, 2.0)
-        } else {
-            1.0
-        };
+        let pressure = center.pressure.clamp(0.05, 2.0);
         let radius = (width * 0.5 * pressure).clamp(0.25, 512.0);
         radii.push(radius);
         let offset = radius * miter;
@@ -192,33 +188,10 @@ fn stroke_outline(points: &[StrokePoint], width: f32, pressure_aware: bool) -> V
 }
 
 
-/// A single pressure-aware filled outline. Coverage is painted once, so
-/// translucent strokes cannot darken at input-segment joins.
-pub fn pressure_outline(points: &[StrokePoint], width: f32) -> Vec<(f32, f32)> {
-    stroke_outline(points,width,true)
-}
-
-/// A single constant-width filled outline. Used by Marker/highlighter media
-/// where stylus pressure must not change width or create overlap seams.
-pub fn constant_outline(points: &[StrokePoint], width: f32) -> Vec<(f32, f32)> {
-    stroke_outline(points,width,false)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     fn p(x:f32,y:f32,pressure:f32)->StrokePoint { StrokePoint{x,y,pressure} }
-
-    #[test]
-    fn constant_outline_ignores_pressure_but_stays_continuous() {
-        let nodes=[p(0.,0.,0.20),p(50.,0.,1.80),p(100.,0.,0.35)];
-        let result=constant_outline(&nodes,20.);
-        assert!(!result.is_empty());
-        let ys:Vec<f32>=result.iter()
-            .filter(|(x,_)|*x>=0.0 && *x<=100.0)
-            .map(|(_,y)|y.abs()).collect();
-        assert!(ys.iter().all(|y|*y<=10.05));
-    }
 
     #[test]
     fn pressure_changes_width_without_dark_overlapping_dabs() {
