@@ -41,7 +41,7 @@ mod drawing_assets;
 mod pose_guide;
 
 use arabic_reshaper::arabic_reshape;
-use brushes::{draw_brush_preset_icon, draw_stroke_pro};
+use brushes::{draw_brush_preset_icon, draw_marker_live_preview, draw_stroke_pro};
 use stylus::TouchPressureTracker;
 use eframe::egui;
 use exporter::{ImageExportFormat, VideoExportFormat};
@@ -10989,7 +10989,15 @@ impl eframe::App for StickApp {
             }
             if let Some(stroke) = &self.current_stroke {
                 for preview in self.symmetry_strokes(stroke.clone()) {
-                    draw_stroke_pro(&painter, &preview, None, 1.0, scale, 0.0, 0.0, &to_screen);
+                    if !preview.is_vector
+                        && preview.brush_preset == KritaBrushPreset::ChiselMarker
+                    {
+                        // Live marker input must stay cheap even for long loops:
+                        // never rebuild raster textures or concave meshes every frame.
+                        draw_marker_live_preview(&painter,&preview,scale,&to_screen);
+                    } else {
+                        draw_stroke_pro(&painter, &preview, None, 1.0, scale, 0.0, 0.0, &to_screen);
+                    }
                 }
             }
             if let (Some(p0), Some(p1)) = (self.shape_drag_start, self.shape_drag_current) {
